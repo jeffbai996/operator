@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.1-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.5.0-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -23,6 +23,32 @@ A live **browser / computer-use agent cockpit**. Watch a real Chrome (or desktop
 > **MIT licensed** — free to use, modify, and distribute. See [`LICENSE`](LICENSE).
 
 ---
+
+## Quickstart
+
+```bash
+git clone https://github.com/jeffbai996/operator
+cd operator
+pip install -r requirements.txt
+cp .env.example .env          # optional — defaults are fine
+
+# launch the browser the agent drives (logged-in, separate profile):
+bash browse/chrome-attach.sh  # sign into your sites in the window it opens, once
+
+python app.py                 # open http://127.0.0.1:5005
+```
+
+**Agent runtime — bring your own subscription** (no metered API key, the cheap path):
+- **Claude** — install the `claude` CLI and `claude login` (creds in `~/.claude`)
+- **GPT** — install the `codex` CLI and sign in (creds in `~/.codex`)
+
+Operator detects whichever you have and drives the browser with it. An API-key
+fallback is documented in `.env.example`, but driving a browser over the API is
+expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
+
+> **Status:** the UI + manual steering + browser attach work today. Full hands-off
+> computer-use (the agent driving end-to-end) lands at **v1.0.0**; we're on `0.5.x`
+> until then.
 
 ## What it does
 
@@ -55,6 +81,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.5.0** — runtime documented + generalized: drivers are now generic `claude` (Claude Code) + `gpt` (codex), both BYO-subscription / no metered key; config via env; added `.env.example` + a Quickstart. (Hands-off computer-use lands at v1.0.0; on 0.5.x until then.)
 
 **v0.4.1** — vendored a cross-platform Chrome harness (`browse/chrome-attach.sh` launches/attaches a debug Chrome with a separate automation profile on macOS / Linux / Windows / WSL; `browse/playwright-mcp.sh` wires the Playwright MCP to it). Code paths now resolve `browse/` relative to the package.
 

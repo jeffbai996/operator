@@ -7,7 +7,7 @@ SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTI
 stream-json output live: assistant text → the operator chat, browser tool calls
 → the action trail. No Discord, no live-session dependency, no spam.
 
-Only host personas that can drive: claude-a + claude-b.
+Drivers run a logged-in CLI (claude / codex) headless — no metered API key.
 """
 from __future__ import annotations
 
@@ -39,26 +39,26 @@ _BROWSER_MANDATE = (
     " browse and base the answer ONLY on the pages you visited. Do NOT say you"
     " can't browse — you can. Cite the pages you actually visited."
 )
+# The drivers Operator can run. Both are BYO-subscription: each shells out to a
+# logged-in CLI (no metered API key) -- the primary, cheapest path:
+#   claude -> Claude Code  (reads ~/.claude credentials; install the `claude` CLI + `claude login`)
+#   gpt    -> OpenAI codex (reads ~/.codex credentials; install the `codex` CLI + sign in)
+# Config dirs are overridable via CLAUDE_CONFIG_DIR / CODEX_HOME. To use the metered
+# API fallback instead, set a key in .env (see .env.example).
 AGENT_BOTS = {
-    "claude-a": {"label": "claude-a", "runtime": "claude",
-               "config_dir": os.path.expanduser("~/.claude"),
-               "cwd": os.path.expanduser("~/agents/claude-a"),
-               "persona": "You are Claude-A — West-coast, direct, dry." + _BROWSER_MANDATE},
-    "claude-b": {"label": "claude-b", "runtime": "claude",
-              "config_dir": os.path.expanduser("~/.config/claude-b"),
-              "cwd": os.path.expanduser("~"),
-              "persona": "You are claude-b — bilingual, efficient." + _BROWSER_MANDATE},
-    # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
-    # ~/.codex/config.toml already wires the same playwright MCP wrapper.
+    "claude": {"label": "claude", "runtime": "claude",
+               "config_dir": os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+               "cwd": os.path.expanduser("~"),
+               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     "gpt": {"label": "gpt", "runtime": "codex",
-            "config_dir": os.path.expanduser("~/.codex"),
+            "config_dir": os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
             "cwd": os.path.expanduser("~"),
-            "persona": "You are GPT — concise, capable." + _BROWSER_MANDATE},
+            "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
 }
 
 _BROWSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse")
 # MCP config that gives the agent the Playwright tools, attached to :9222 Chrome
-# via the same stdio wrapper the bots use (cdp-endpoint --ensure inside it).
+# via the stdio wrapper in browse/playwright-mcp.sh.
 _MCP_CONFIG = {
     "mcpServers": {
         "playwright": {"command": "bash", "args": [os.path.join(_BROWSE, "playwright-mcp.sh")]}
@@ -281,7 +281,7 @@ class AgentRunner:
         self.ended_ts: float = 0.0
         self._cur_session: str = ''       # session id captured this run
         # SHARED conversation transcript across ALL bots (runtime-agnostic) so the
-        # convo survives switching claude-a↔claude-b↔gpt. [{role:'user'|'assistant', text}]
+        # convo survives switching claude↔claude↔gpt. [{role:'user'|'assistant', text}]
         # Persisted to disk so it ALSO survives a server restart (the store/Flask
         # process bounces on every deploy — without this the convo evaporated).
         self._state_path = os.path.join(
