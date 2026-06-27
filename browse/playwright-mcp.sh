@@ -17,7 +17,7 @@ if (command -v curl >/dev/null && curl -sf "http://127.0.0.1:${PORT}/json/versio
 fi
 
 if [ -n "$EP" ]; then
-  exec npx -y @playwright/mcp@latest --output-dir "$OUT" --viewport-size "$VIEWPORT" --cdp-endpoint "$EP"
+  exec npx -y @playwright/mcp@latest --caps vision --output-dir "$OUT" --viewport-size "$VIEWPORT" --cdp-endpoint "$EP"
 fi
 # no logged-in Chrome up → let the MCP launch its own (fresh) browser
-exec npx -y @playwright/mcp@latest --output-dir "$OUT" --viewport-size "$VIEWPORT" --headless
+exec npx -y @playwright/mcp@latest --caps vision --output-dir "$OUT" --viewport-size "$VIEWPORT" --headless
