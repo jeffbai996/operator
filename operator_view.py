@@ -25,7 +25,7 @@ from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
 
 CDP_URL = "http://127.0.0.1:9222"
-FRAME_INTERVAL = 0.08      # ~12fps — snappier feed, still light
+FRAME_INTERVAL = 0.066     # ~15fps (Jeff's pick)
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
 
