@@ -25,7 +25,7 @@ from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
 
 CDP_URL = "http://127.0.0.1:9222"
-FRAME_INTERVAL = 0.066     # ~15fps — middle ground (20 stalled the CDP grab, 12 was fine); dedup keeps a static page ~0.5fps
+FRAME_INTERVAL = 0.1       # ~10fps; eager CDP-session rebind keeps it stable, dedup keeps a static page ~0.5fps
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
 
