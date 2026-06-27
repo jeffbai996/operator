@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.6-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.5.7-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -81,6 +81,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.5.7** — **Finish-up hand-back**: after Operator hands control to you (Take control), the Manual-mode panel shows a *Finish up* pill — tap it to optionally leave a note and hand control back, resuming the agent where it left off. Plus clickable browse-URL links in the trace, coordinate-click coords shown, back/forward no longer stalls the live feed, a rebuilt collapse caret, rounder button pills, and trace/output font tuning.
 
 **v0.5.6** — hand-off polish: a turn ending in a *Take control* hand-off no longer also emits a redundant done/"no summary" line under the card; the card's status dot is now traffic-light yellow; SVG collapse caret; trace checkmark aligned to the rule; one error card per failed turn; held arrow keys scroll continuously (server-side key auto-repeat); refresh no longer re-appends the last messages; the ×N repeat badge is a centered circular pill; desktop chat-input text bumped a touch.
 
