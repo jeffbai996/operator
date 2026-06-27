@@ -1,9 +1,9 @@
 {% extends "_base.html" %}
-{% block title %}operator — host-app{% endblock %}
+{% block title %}Operator{% endblock %}
 {% block content %}
 <style>
   /* ── Operator-style page: left conversation/steer rail + right live browser,
-     a live action-status line, and a full-window mode that hides the host-app
+     a live action-status line, and a full-window mode that hides the host app
      header (Jeff 2026-06-26). Dark squad tokens for cohesion. ── */
   .op { --op-code-bg: #0c0e13; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
@@ -473,7 +473,7 @@
   .op-sheet-handle { display: none; }
 
   @media (max-width: 820px) {
-    /* ── MOBILE: keep the host-app header (owner still navigates back to it);
+    /* ── MOBILE: keep the host app header (owner still navigates back to it);
        the headerless full-viewport is reserved for the ⤢ fullscreen toggle (op-full).
        Here we only (a) hard-clamp horizontal overflow so the wide nav row can't leak
        a scroll / bezel-bleed, and (b) strip the container's max-width/padding so the
@@ -951,7 +951,7 @@
   const STATUS = "{{ url_for('operator.operator_status') }}";
   const STEER  = "{{ url_for('operator.operator_steer') }}";
 
-  // ── full-window toggle (hides host-app header) ──
+  // ── full-window toggle (hides host app header) ──
   // ── drag-to-resize the chat rail (desktop). Current width is the floor; drag
   //    right to grow the chat, capped so the browser keeps a usable width. ──
   (function(){

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Operator{% endblock %}</title>
+  <style>
+    /* minimal token set the operator UI reads (its own <style> overrides most) */
+    :root, [data-theme="dark"] {
+      --bg: #0b0e13; --bg-2: #12151c; --bg-3: #1a1f29; --bg-4: #222937;
+      --fg: #e6e9ef; --fg-2: #aeb6c2; --muted: #6b7585;
+      --border: rgba(255,255,255,.08); --border-2: rgba(255,255,255,.14);
+      --accent: #b8c0cc; --bad: #f0556a;
+    }
+    [data-theme="light"] {
+      --bg: #eef1f5; --bg-2: #e4e8ee; --bg-3: #dde2e9; --bg-4: #d3d9e2;
+      --fg: #1b2430; --fg-2: #3a424d; --muted: #5a6573;
+      --border: rgba(0,0,0,.10); --border-2: rgba(0,0,0,.16);
+      --accent: #4a5160; --bad: #d33;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--fg);
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 12px 16px; }
+    header.site { display: flex; align-items: center; gap: 0.9rem; padding: 0.4rem 0;
+      flex-wrap: wrap; }
+    header.site .brand { font-weight: 800; font-size: 1.2rem; color: var(--fg);
+      text-decoration: none; }
+    header.site a { color: var(--muted); text-decoration: none; font-weight: 500; }
+    header.site .theme-toggle { margin-left: auto; background: none; border: none;
+      color: var(--muted); cursor: pointer; font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+  <header class="site">
+    <a class="brand" href="/">Operator</a>
+    <button class="theme-toggle" title="theme" onclick="
+      (function(){var t=document.documentElement.getAttribute('data-theme');
+       var n=t==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);
+       try{localStorage.setItem('operator-theme',n);}catch(e){}})();">◐</button>
+  </header>
+  <div class="wrap"><main>{% block content %}{% endblock %}</main></div>
+  <script>
+    try { var t = localStorage.getItem('operator-theme');
+      if (t) document.documentElement.setAttribute('data-theme', t); } catch(e){}
+  </script>
+</body>
+</html>
