@@ -188,11 +188,33 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
     label = _ACTION_LABELS.get(bare, bare.replace("browser_", "").replace("_", " ").capitalize())
     detail = ""
     if isinstance(args, dict):
-        for k in ("element", "url", "text", "value", "key", "selector", "query", "ref"):
-            v = args.get(k)
-            if isinstance(v, str) and v.strip():
-                detail = v.strip()[:120]
-                break
+        # coordinate-mouse tools (browser_mouse_*_xy): surface the click/drag coords
+        # so the trace shows WHERE it clicked, e.g. "Clicking (420, 315)" or a drag.
+        if "_xy" in bare or bare in ("browser_mouse_down", "browser_mouse_up", "browser_mouse_move"):
+            def _num(*keys):
+                for k in keys:
+                    v = args.get(k)
+                    if isinstance(v, (int, float)):
+                        return int(round(v))
+                return None
+            x = _num("x", "startX", "fromX", "x1"); y = _num("y", "startY", "fromY", "y1")
+            x2 = _num("endX", "toX", "x2"); y2 = _num("endY", "toY", "y2")
+            if x is not None and y is not None:
+                detail = f"({x}, {y})"
+                if x2 is not None and y2 is not None:
+                    detail += f" \u2192 ({x2}, {y2})"
+        if not detail:
+            # prefer a HUMAN description (element/text) over the opaque Playwright
+            # ref (e.g. "e16") — drop a bare ref, it means nothing to the viewer.
+            for k in ("element", "text", "value", "url", "key", "selector", "query"):
+                v = args.get(k)
+                if isinstance(v, str) and v.strip():
+                    detail = v.strip()[:120]
+                    break
+            if not detail:
+                rv = args.get("ref")
+                if isinstance(rv, str) and rv.strip() and not _re.fullmatch(r"[a-z]?\d+|e\d+|s\d+|f\d+", rv.strip()):
+                    detail = rv.strip()[:120]
         if not detail and ("width" in args or "height" in args):   # screenshot → resolution
             w, h = args.get("width"), args.get("height")
             if isinstance(w, (int, float)) and isinstance(h, (int, float)):

@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.5-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.5.6-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -81,6 +81,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.5.6** — hand-off polish: a turn ending in a *Take control* hand-off no longer also emits a redundant done/"no summary" line under the card; the card's status dot is now traffic-light yellow; SVG collapse caret; trace checkmark aligned to the rule; one error card per failed turn; held arrow keys scroll continuously (server-side key auto-repeat); refresh no longer re-appends the last messages; the ×N repeat badge is a centered circular pill; desktop chat-input text bumped a touch.
 
 **v0.5.5** — **Take control** hand-off: when the agent hits a human-only gate (captcha, 2FA/OTP, a password login, a payment or “are you sure?” confirm) it now surfaces a *Take control* card in the chat instead of brute-forcing it; one click stops the agent, drops a “Took control” notice, and hands you the wheel in manual mode. **Verify-after-action**: the agent is directed to re-check the page after each consequential action (screenshot/snapshot → confirm it did what it intended → self-correct) so games and multi-step flows are more reliable. **Running plan**: it keeps a numbered plan + progress ledger across steps so long tasks don’t drift. **Trace polish**: consecutive identical actions coalesce into an animated ×N badge instead of flooding the trace with duplicate lines.
 

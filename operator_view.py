@@ -571,11 +571,14 @@ class _Streamer:
                            "bottom": 100000}.get(val, 600)
                     await p.mouse.wheel(0, amt)
             elif kind == "back":
-                await p.go_back(timeout=15000)
+                # wait_until="commit" returns once nav commits (not full load), so we don't
+                # hold the io-lock for up to 15s and starve the grab loop (that froze/broke
+                # the feed on back/forward). The feed then streams the new page as it loads.
+                await p.go_back(wait_until="commit", timeout=8000)
             elif kind == "forward":
-                await p.go_forward(timeout=15000)
+                await p.go_forward(wait_until="commit", timeout=8000)
             elif kind == "reload":
-                await p.reload(timeout=20000)
+                await p.reload(wait_until="commit", timeout=8000)
             elif kind in ("mousedown_at", "mouseup_at"):  # press-and-hold (captchas)
                 dims = await self._viewport_dims(p)
                 x = float(action.get("x", 0)) * dims["w"]
