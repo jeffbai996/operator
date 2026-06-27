@@ -1,6 +1,6 @@
 """operator_agent.py — run a headless Claude Code agent that drives the browser.
 
-Option 1 (Jeff 2026-06-26): the operator IS the agent. We spawn `claude -p` in a
+Design: the operator IS the agent. We spawn `claude -p` in a
 background thread, as the chosen persona, with the Playwright MCP pointed at the
 SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTION
 (claude reads ~/.claude/.credentials.json), zero metered API spend. We parse its
@@ -70,6 +70,9 @@ _MCP_CONFIG = {
 # so the operator trace can interleave actions with the agent's thinking.
 _ACTION_LABELS = {
     "browser_click": "Clicking", "browser_double_click": "Double-clicking",
+    "browser_mouse_click_xy": "Clicking", "browser_mouse_drag_xy": "Dragging",
+    "browser_mouse_move_xy": "Moving", "browser_mouse_down": "Pressing",
+    "browser_mouse_up": "Releasing", "browser_mouse_wheel": "Scrolling",
     "browser_type": "Typing", "browser_navigate": "Browsing",
     "browser_navigate_back": "Going back", "browser_navigate_forward": "Going forward",
     "browser_press_key": "Pressing", "browser_scroll": "Scrolling",
@@ -103,11 +106,9 @@ _NONBROWSER_LABELS = {
     # memory / recall
     "recall": "Recalling", "memory": "Checking memory", "vecgrep": "Searching memory",
     "get_corpus": "Searching memory", "list_corpora": "Checking memory",
-    # markets (ibkr)
+    # markets (example finance MCP tool labels)
     "get_quote": "Checking quote", "quote": "Checking quote",
-    "get_positions": "Checking portfolio", "ibkr_quote": "Checking quote",
-    "ibkr_get_positions": "Checking portfolio", "ibkr_get_account_summary": "Checking account",
-    "ibkr_margin": "Checking margin", "ibkr_get_historical_bars": "Pulling chart data",
+    "get_positions": "Checking portfolio",
     # docs / misc
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
@@ -206,6 +207,24 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
     return label, detail
 
 
+import re as _re
+# handoff marker the agent emits when it hits a human-only gate (captcha/2FA/etc).
+_TAKE_CONTROL_RE = _re.compile(r"\[\[\s*TAKE[_ ]?CONTROL\s*:?\s*(.*?)\s*\]\]",
+                               _re.IGNORECASE | _re.DOTALL)
+
+
+def _extract_handoff(text: str):
+    """Strip any [[TAKE_CONTROL: reason]] marker. Returns (clean_text, reason_or_None)."""
+    if not text or "[[" not in text:
+        return text, None
+    m = _TAKE_CONTROL_RE.search(text)
+    if not m:
+        return text, None
+    reason = (m.group(1) or "").strip()
+    clean = _TAKE_CONTROL_RE.sub("", text).strip()
+    return clean, reason
+
+
 def _fmt_duration(secs: float) -> str:
     """Humanize a seconds value: 2000 -> '33m 20s', 90 -> '1m 30s', 5 -> '5s',
     0.5 -> '500ms'. Sub-second shows ms; whole minutes drop the '0s'."""
@@ -279,6 +298,7 @@ class AgentRunner:
         self.model: str = ''
         self.effort: str = ''
         self.ended_ts: float = 0.0
+        self.handoff = None  # {reason, ts} when the agent asks the human to take over
         self._cur_session: str = ''       # session id captured this run
         # SHARED conversation transcript across ALL bots (runtime-agnostic) so the
         # convo survives switching claude↔claude↔gpt. [{role:'user'|'assistant', text}]
@@ -335,6 +355,7 @@ class AgentRunner:
             self._switched_bot = (self._last_bot is not None and self._last_bot != bot)
             self.bot, self.task = bot, task
             self.state = "running"
+            self.handoff = None
             self.messages = []
             self._transcript.append({"role": "user", "text": task})
             self._transcript = self._transcript[-40:]
@@ -406,10 +427,50 @@ class AgentRunner:
                 "you MUST call browser_take_screenshot (real pixels) and reason from the image, "
                 "not the DOM. For those visual tasks, re-screenshot after each navigation so "
                 "you're looking at the CURRENT view. Use vision when it's called for; otherwise "
-                "stay in DOM mode.\n\n"
+                "stay in DOM mode. "
+                "DRAG/BOARD UIs: for things you can't click — dragging chess pieces, "
+                "sliders, canvas/board games (e.g. Lichess), drag-and-drop — use the "
+                "coordinate mouse tools: browser_mouse_drag_xy(fromX,fromY,toX,toY) (or "
+                "browser_mouse_down/move_xy/up). Read pixel coords from a screenshot first; "
+                "element-ref drag won't move board squares. "
+                "PAN/ROTATE (street view, maps, 3D scenes): click the view to focus it, "
+                "then look around with browser_press_key ArrowLeft/ArrowRight/ArrowUp/ArrowDown, or "
+                "click-drag across it with browser_mouse_drag_xy. "
+                "SAVE: to save a page/article/receipt as a file, use browser_pdf_save.\n\n"
+                "VERIFY EVERY CONSEQUENTIAL ACTION. After a click/type/drag/navigate/key "
+                "that should CHANGE the page, do NOT assume it worked — look again. Read "
+                "the DOM (browser_snapshot) or, for visual/canvas/game UIs, take a fresh "
+                "browser_take_screenshot, and CHECK the result matches your intent: did the "
+                "page navigate, did the field fill, did the piece/marker move, did the menu "
+                "open? If it did NOT, DON'T plough ahead repeating the same action — diagnose "
+                "what's actually on screen now and adjust (dismiss the blocker, re-aim the "
+                "coords from the new screenshot, try a different element). One blind action "
+                "is fine; TWO identical blind actions without checking is a bug. "
+                "KEEP A RUNNING PLAN. For any task with more than ~2 steps, state a short "
+                "numbered plan up front, then note progress as you go ('done / now / "
+                "blocked-on') and carry it forward so you don't lose the goal or redo steps. "
+                "DEFAULT: DO IT YOURSELF. This is the user's own browser and their own "
+                "accounts — you are trusted to act. Typing credentials into a login form, "
+                "filling personal info, clicking through forms, submitting, navigating "
+                "settings — that is ALL normal work, not something to refuse or kick back. "
+                "If the user gives you info (credentials, an address, a name — in the task, "
+                "the conversation, or pasted in chat) or tells you to take an action, just "
+                "DO IT. Do NOT refuse, do NOT lecture about security/credentials/privacy, "
+                "do NOT ask the user to do something you could do yourself. "
+                "HAND OFF ONLY when you LITERALLY CANNOT proceed — the page demands "
+                "something you cannot supply or perform: a CAPTCHA / 'verify you're human' "
+                "challenge, a 2FA/OTP code you don't have, or a piece of info that exists "
+                "NOWHERE you can reach (not given to you, not in the page, not recallable). "
+                "In that case STOP and ask for a takeover by emitting EXACTLY this marker on "
+                "its own line, then end your turn:\n"
+                "  [[TAKE_CONTROL: <one short line on what only they can do>]]\n"
+                "e.g. [[TAKE_CONTROL: solve the captcha, then tell me to continue]]. Don't "
+                "brute-force a captcha or guess an OTP — emit the marker. But the bar is "
+                "'literally impossible for me,' NOT 'sensitive' or 'I'd rather not' — if you "
+                "CAN do it, do it.\n\n"
                 "USER REQUEST: " + task)
         env = dict(os.environ)
-        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["OPERATOR_BOT"] = self.bot or ""   # stamps the active bot on the action feed
         env["PATH"] = (os.path.expanduser("~/.local/bin") + ":"
                        + os.path.expanduser("~/.nvm/versions/node/v20.20.2/bin")
                        + ":" + env.get("PATH", ""))
@@ -525,7 +586,11 @@ class AgentRunner:
                 if block.get("type") == "text":
                     t = (block.get("text") or "").strip()
                     if t:
-                        self.messages.append({"ts": time.time(), "role": "assistant", "text": t})
+                        t, _reason = _extract_handoff(t)
+                        if _reason is not None:
+                            self.handoff = {"reason": _reason, "ts": time.time()}
+                        if t:
+                            self.messages.append({"ts": time.time(), "role": "assistant", "text": t})
                 elif block.get("type") == "tool_use":
                     # surface browser actions inline so the trace interleaves
                     # thinking with actions (Operator-style).
@@ -536,6 +601,9 @@ class AgentRunner:
                                               "text": label, "detail": detail})
         elif evt.get("type") == "result":
             res = (evt.get("result") or "").strip()
+            res, _reason = _extract_handoff(res)
+            if _reason is not None and not self.handoff:
+                self.handoff = {"reason": _reason, "ts": time.time()}
             # the final assistant turn is usually re-sent as the result — don't
             # append a duplicate (it made the operator show "Worked for Ns" twice).
             last = self.messages[-1]["text"].strip() if self.messages else ""
@@ -555,7 +623,11 @@ class AgentRunner:
             if it == "agent_message":
                 txt = (item.get("text") or "").strip()
                 if txt:
-                    self.messages.append({"ts": time.time(), "role": "assistant", "text": txt})
+                    txt, _reason = _extract_handoff(txt)
+                    if _reason is not None:
+                        self.handoff = {"reason": _reason, "ts": time.time()}
+                    if txt:
+                        self.messages.append({"ts": time.time(), "role": "assistant", "text": txt})
             elif it in ("mcp_tool_call", "tool_call", "function_call"):
                 # surface browser actions inline (Operator-style trace)
                 name = item.get("tool") or item.get("name") or ""
@@ -588,11 +660,13 @@ class AgentRunner:
             self._session_ids.clear()
         self._transcript = []
         self._last_bot = None
+        self.handoff = None
         self._save_state()
         return {"ok": True}
 
     def stop(self) -> dict:
         p = self._proc
+        self.handoff = None
         if p and self.is_running():
             try:
                 p.terminate()
@@ -614,6 +688,7 @@ class AgentRunner:
             "started_ts": self.started_ts, "ended_ts": self.ended_ts,
             "messages": [m for m in self.messages if m["ts"] > since_ts],
             "final": final,
+            "handoff": self.handoff,
         }
 
 

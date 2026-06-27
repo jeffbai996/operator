@@ -62,6 +62,7 @@ class _Streamer:
     _browser = None
     _cdp = None
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
+    _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
 
     # ---- lifecycle -------------------------------------------------------
     def ensure_running(self) -> None:
@@ -541,6 +542,25 @@ class _Streamer:
                 await p.keyboard.type(val, delay=35)
             elif kind == "key":
                 await p.keyboard.press(val or "Enter")
+            elif kind == "key_down":
+                # HELD-KEY AUTO-REPEAT. Playwright keyboard.down() fires ONE keydown and
+                # does NOT auto-repeat like a physically-held key — a held arrow scrolls
+                # once, not continuously. Simulate OS key-repeat: press once now, then a
+                # background task re-presses every ~45ms until key_up (each press = down+up).
+                key = val or "Enter"
+                if self._key_repeat is None:
+                    self._key_repeat = {}
+                old = self._key_repeat.pop(key, None)
+                if old:
+                    old.cancel()
+                await p.keyboard.press(key)
+                self._key_repeat[key] = asyncio.ensure_future(self._repeat_key(key))
+            elif kind == "key_up":            # stop the held-key repeat
+                key = val or "Enter"
+                if self._key_repeat:
+                    t = self._key_repeat.pop(key, None)
+                    if t:
+                        t.cancel()
             elif kind == "scroll":
                 # numeric dy/dx → precise user wheel/touch scroll; else keyword amounts.
                 dx = action.get("dx"); dy = action.get("dy")
@@ -619,6 +639,34 @@ class _Streamer:
         finally:
             try: _lk.release()
             except Exception: pass
+
+    async def _repeat_key(self, key: str) -> None:
+        """Simulate OS key auto-repeat for a held key: re-press every ~45ms until
+        cancelled (key_up). Acquires the io-lock per tick so it doesn't race the grab
+        loop. Self-terminates if the page goes away; cancellation is the normal exit."""
+        try:
+            await asyncio.sleep(0.28)
+            lk = self._iolock()
+            while True:
+                p = self._page
+                if p is None:
+                    break
+                await lk.acquire()
+                try:
+                    await p.keyboard.press(key)
+                except Exception:
+                    break
+                finally:
+                    try: lk.release()
+                    except Exception: pass
+                await asyncio.sleep(0.045)
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            if self._key_repeat:
+                self._key_repeat.pop(key, None)
 
 
 _streamer = _Streamer()

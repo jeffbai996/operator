@@ -4,7 +4,7 @@
 <style>
   /* ── Operator-style page: left conversation/steer rail + right live browser,
      a live action-status line, and a full-window mode that hides the host app
-     header (Jeff 2026-06-26). Dark squad tokens for cohesion. ── */
+     header. Dark theme tokens for cohesion. ── */
   .op { --op-code-bg: #0c0e13; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
@@ -36,6 +36,15 @@
     body.op-locked { display: flex; flex-direction: column; height: 100dvh;
       min-height: 100dvh; width: 100vw; max-width: 100vw; overflow-x: hidden; }
     body.op-locked > header, body.op-locked > header.site { flex: 0 0 auto; }
+    /* Operator runs at a compact scale, so the full-size header looked oversized
+       above it. On the operator page only (body.op-locked), shrink the header to
+       sit proportionate to the compact Operator UI. Other pages keep the normal one. */
+    body.op-locked header.site { padding-top: 0.3rem; padding-bottom: 0.28rem;
+      margin-bottom: 0.6rem; gap: 0.28rem 0.7rem; }
+    body.op-locked header.site a { font-size: 0.78rem; padding: 0.2rem 0.46rem; border-radius: 7px; }
+    body.op-locked header.site a.brand { font-size: 1.0rem; margin-right: 0.55rem; }
+    body.op-locked header.site a.active { padding: 0.24rem 0.6rem; }
+    body.op-locked header.site .nav-caret { font-size: 0.66em; }
     body.op-locked .wrap { flex: 1 1 auto; min-height: 0; min-width: 0;
       width: 100%; max-width: 100%; overflow: hidden;
       padding-top: 12px; padding-bottom: 9px !important; display: flex; flex-direction: column; }
@@ -114,7 +123,7 @@
   /* bot picker: closed shows just 🤖 (overlay); dropdown shows full names. The
      select's own text is transparent so the row never reads "🤖 Claude-A". */
   .op-pick-wrap { margin-left: auto; position: relative; flex: 0 0 auto; display: inline-flex; }
-  .op-pick-face { position: absolute; left: 50%; top: calc(50% - 0.5px);
+  .op-pick-face { position: absolute; left: calc(50% + 1px); top: calc(50% - 0.5px);
     transform: translate(-50%,-50%); font-size: 0.82rem; pointer-events: none; }
   select.op-action-caret { background: var(--bg-3); color: transparent;
     -webkit-appearance: none; appearance: none;
@@ -211,6 +220,9 @@
     animation: op-x .3s cubic-bezier(.2,1.2,.4,1) forwards; }
   @keyframes op-x { 0%{transform:translate(-1px,-1px) scale(0);opacity:0}
     60%{transform:translate(-1px,-1px) scale(1.2);opacity:1} 100%{transform:translate(-1px,-1px) scale(1);opacity:1} }
+  /* stopped (hand-off): just an amber ring — no glyph inside (Jeff). */
+  .op[data-agent="stopped"] .op-action-ico::before { border-color: #f5a04a !important; animation: none; }
+  .op[data-agent="stopped"] .op-action-ico::after { content: none !important; }
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
   .op-action-body { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -241,16 +253,17 @@
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
   .op-action-sub { font: 500 calc(0.66rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
-    margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* +1px baseline-align */
 
   /* wrap is the flex slot; log scrolls inside it; jump-button floats over it */
   .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   .op-jump { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%) translateY(4px);
-    width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+    width: 25px; height: 25px; border-radius: 50%; cursor: pointer;   /* smaller (Jeff) */
     background: var(--bg-4); color: var(--fg); border: 1px solid var(--border-2);
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 4px 14px -4px rgba(0,0,0,.6); z-index: 6;
     opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
+  .op-jump svg { width: 14px; height: 14px; display: block; }   /* SVG caret scales cleanly */
   .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
   .op-jump:hover { background: var(--bg-3); border-color: var(--accent); }
   /* conversation log — flex-grows, scrolls */
@@ -326,6 +339,43 @@
   .op-msg.bot .bubble ul { margin: 0.2rem 0 0.2rem 0; padding-left: 1.1rem; }
   .op-msg.bot .bubble li { margin: 0.1rem 0; }
   .op-msg.bot .bubble div + div { margin-top: 0.15rem; }
+
+  /* hand-off: "Operator needs your input" card — sleek, theme-safe:
+     subtle fill, hairline border, a thin amber left band, a CSS stop-square dot
+     for the head (no emoji), and a ghost/outline Take-control pill (modern). */
+  .op-handoff { margin: 0.5rem 0 0.45rem; padding: 0.62rem 0.75rem 0.66rem 0.8rem;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-left: 2px solid #f5a04a; border-radius: 12px;   /* warmer orange band */
+    display: flex; flex-direction: column; gap: 0.5rem;
+    box-shadow: 0 1px 10px -6px rgba(0,0,0,.55); }
+  .op-handoff-head { display: flex; align-items: center; gap: 0.45rem;
+    font: 700 calc(0.74rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;
+    color: var(--fg); letter-spacing: -.01em; }
+  .op-handoff-head .hi { flex: 0 0 auto; width: 0.6em; height: 0.6em;
+    background: #f5a04a; border-radius: 50%; display: inline-block;
+    box-shadow: 0 0 0 0 rgba(245,160,74,.55); animation: op-handoff-pulse 1.8s ease-out infinite; }
+  @keyframes op-handoff-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(245,160,74,.5); }
+    70%  { box-shadow: 0 0 0 5px rgba(245,160,74,0); }
+    100% { box-shadow: 0 0 0 0 rgba(245,160,74,0); } }
+  .op-handoff-reason { font: 500 calc(0.72rem * var(--chat-scale))/1.45 var(--chat-font);
+    color: var(--fg-2); letter-spacing: -.005em; }
+  .op-takeover-btn { align-self: flex-start; cursor: pointer;
+    background: transparent; color: var(--fg);
+    border: 1px solid var(--border-2);
+    font: 600 calc(0.72rem * var(--chat-scale))/1 'Plus Jakarta Sans', sans-serif;
+    padding: 0.46rem 0.66rem; border-radius: 8px; letter-spacing: -.005em;   /* narrower laterally */
+    transition: background .14s, border-color .14s, transform .08s; }
+  .op-takeover-btn:hover { background: var(--bg-4); border-color: var(--accent); }
+  .op-takeover-btn:active { transform: translateY(1px); }
+  .op-takeover-btn[disabled] { opacity: 0.5; cursor: default; background: transparent; border-color: var(--border); }
+  .op-msg.sys { display: flex; justify-content: center; margin: 0.35rem 0 0.3rem; }
+  .op-msg.sys .body { font: 600 calc(0.66rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 0.26rem 0.7rem; letter-spacing: .01em;
+    display: inline-flex; align-items: center; gap: 0.4rem; }
+  .op-msg.sys .body .op-sys-ico { flex: 0 0 auto; display: block; opacity: 0.9; }
+
   /* event log lines (errors only now) — always small + muted, never big/white */
   .op-events { display: flex; flex-direction: column; gap: 0.1rem; }
   .op-ev { font: 500 0.64rem/1.3 'Plus Jakarta Sans', sans-serif; color: var(--muted);
@@ -701,7 +751,7 @@
   .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
   .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
     color: var(--fg-2); font: 600 calc(0.74rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    padding: 0.25rem 0.1rem 0.25rem 0.45rem; user-select: none; }   /* left pad aligns spinner to the trace line */
+    padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }   /* left pad aligns spinner center to the trace vertical line */
   .op-task-head .ico { width: 14px; height: 14px; flex: 0 0 auto; position: relative; }
   .op-task[data-busy="1"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
     border-radius:50%;
@@ -713,10 +763,14 @@
     display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700; }
   .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { content:"\2715"; color: var(--bad); }
   .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2); }
+  /* stopped (hand-off): a stop symbol instead of the green check (Jeff) */
+  .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { content:"\25A0"; color: var(--bad); font-size: 0.7rem; }
   .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
   .op-task-head .verb { font-weight: 700; color: var(--fg); }   /* bold live action */
   .op-task[data-busy="0"] .op-task-head .verb { font-weight: 600; color: var(--fg-2); }
-  .op-task-head .car { margin-left: auto; color: var(--muted); font-size: 0.7rem; transition: transform .2s; }
+  .op-task-head .car { margin-left: auto; color: var(--muted); display: inline-flex;
+    align-items: center; justify-content: center; transition: transform .2s; }
+  .op-task-head .car svg { display: block; }
   .op-task.collapsed .op-task-head .car { transform: rotate(-90deg); }
   /* steps: indented list with a subtle left vertical rule */
   .op-task-steps { margin: 0.1rem 0 0.2rem 1.05rem; padding-left: 0.85rem;
@@ -747,7 +801,17 @@
     transform: translate(-50%, -50%); font-size: 0.72rem; line-height: 1;
     background: var(--bg-2); padding: 1px; border-radius: 50%; }
   .op-act-step .op-act-lab { margin-left: 0; }
-  .op-act-lab { font-weight: 700; color: var(--fg); }
+  /* label is a flex ROW so text + the xN pill sit on one line, centered together. */
+  .op-act-lab { font-weight: 700; color: var(--fg);
+    display: inline-flex; align-items: center; }
+  /* repeat-count badge — bigger wireframe pill, digit centered both ways. */
+  .op-act-x { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    margin-left: 0.4rem; width: 1.45em; height: 1.45em; padding: 1.5px 0 0 0;
+    font: 500 0.66rem/1 'JetBrains Mono', monospace; color: var(--muted);
+    background: transparent; border: 1px solid var(--border-2);
+    border-radius: 50%; box-sizing: border-box; }
+  .op-act-x.op-x-pop { animation: op-xpop .22s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes op-xpop { 0% { transform: scale(.72); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
   /* GPT-style leading dot on plain reasoning steps */
   .op-task-step:not(.op-act-step) { position: relative; }
   .op-task-step:not(.op-act-step)::before { content: ""; position: absolute;
@@ -765,7 +829,7 @@
     border-radius: 5px; padding: 0.28rem 0.42rem; margin-top: 0.18rem;
     white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   /* step-count header at the top of the live trace — white, same size as action labels */
-  .op-step-count { color: var(--muted); font: 600 calc(0.66rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
+  .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
     letter-spacing: .01em; margin: 0 0 0.3rem 0.35rem; }
   .op-step-count[hidden] { display: none; }
 </style>
@@ -777,7 +841,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.3</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.5</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -813,7 +877,7 @@
     <div class="op-logwrap" id="op-logwrap">
       <div class="op-log" id="op-log"></div>
       <button class="op-jump" id="op-jump" type="button" aria-label="jump to latest" hidden>
-        <svg viewBox="0 0 16 16" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 10l6 6 6-6"></path></svg>
       </button>
     </div>
 
@@ -973,6 +1037,7 @@
   function restoreSession() {
     try { const d = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (d && d.log) { log.innerHTML = d.log; log.scrollTop = log.scrollHeight; updateJump();
+        log.querySelectorAll('.op-handoff').forEach(c => c.remove());
         if (typeof _markLastUser === 'function') _markLastUser(); }
       return d || {};
     } catch { return {}; }
@@ -1357,11 +1422,71 @@
     m.appendChild(b); log.appendChild(m); _trimOnly(); scrollToBottom();
   }
 
+  // ── hand-off: render the "Take control" card; clicking it stops the agent,
+  //    flips to MAN mode, and drops a "Took control" notice. All textContent → XSS-safe. ──
+  function _monitorIcon() {
+    const NS='http://www.w3.org/2000/svg';
+    const svg=document.createElementNS(NS,'svg');
+    svg.setAttribute('class','op-sys-ico'); svg.setAttribute('viewBox','0 0 24 24');
+    svg.setAttribute('width','11'); svg.setAttribute('height','11'); svg.setAttribute('fill','none');
+    svg.setAttribute('stroke','currentColor'); svg.setAttribute('stroke-width','1.7');
+    svg.setAttribute('stroke-linecap','round'); svg.setAttribute('stroke-linejoin','round');
+    svg.setAttribute('aria-hidden','true');
+    const rect=document.createElementNS(NS,'rect');
+    rect.setAttribute('x','3'); rect.setAttribute('y','4.5'); rect.setAttribute('width','18');
+    rect.setAttribute('height','12'); rect.setAttribute('rx','1.6');
+    const stand=document.createElementNS(NS,'path'); stand.setAttribute('d','M9 20h6M12 16.5V20');
+    svg.appendChild(rect); svg.appendChild(stand);
+    return svg;
+  }
+  function logSys(text, icon) {
+    markScroll();
+    const m = document.createElement('div'); m.className='op-msg sys';
+    const b = document.createElement('span'); b.className='body';
+    if (icon === 'monitor') b.appendChild(_monitorIcon());
+    else if (icon) { const e=document.createElement('span'); e.className='sys-emo'; e.textContent=icon; b.appendChild(e); }
+    const t=document.createElement('span'); t.textContent = text; b.appendChild(t);
+    m.appendChild(b); log.appendChild(m); _trimOnly(); scrollToBottom(); saveSession();
+  }
+  function takeControl(card){
+    if (card && card.dataset.done === '1') return;
+    if (card) card.dataset.done = '1';
+    const btn = card && card.querySelector('.op-takeover-btn');
+    if (btn) { btn.disabled = true; const l = btn.querySelector('.tk-lab'); if (l) l.textContent = 'You have control'; }
+    try { fetch(STOP_URL, {method:'POST'}); } catch(_){}
+    _interrupting = true; _handledState = 'done'; _postSteerUntil = Date.now() + 1500;
+    if (_task) { try { finishTask(false, 'Handed off'); } catch(_){} }
+    op.dataset.busy='0'; op.dataset.agent=''; _inFlight = false;
+    setTimeout(()=>{ _interrupting=false; }, 1500);
+    if (card) card.remove();
+    logSys('Took control', 'monitor');   // monitor icon (no slash)
+    MODE = 'man'; applyMode(); saveSession();
+  }
+  function renderHandoff(reason){
+    markScroll();
+    const card = document.createElement('div'); card.className = 'op-handoff'; card.dataset.handoff='1';
+    const head = document.createElement('div'); head.className='op-handoff-head';
+    const hi = document.createElement('span'); hi.className='hi';   // CSS stop-square dot (no emoji)
+    const ht = document.createElement('span'); ht.textContent='Operator needs your input';
+    head.appendChild(hi); head.appendChild(ht); card.appendChild(head);
+    if (reason && String(reason).trim()) {
+      const r = document.createElement('div'); r.className='op-handoff-reason';
+      r.textContent = String(reason).trim(); card.appendChild(r);
+    }
+    const btn = document.createElement('button'); btn.type='button'; btn.className='op-takeover-btn';
+    const bl = document.createElement('span'); bl.className='tk-lab'; bl.textContent='Take control';
+    btn.appendChild(bl);   // no emoji — clean text pill
+    btn.addEventListener('click', ()=> takeControl(card));
+    card.appendChild(btn);
+    log.appendChild(card); _trimOnly(); scrollToBottom(); saveSession();
+    return card;
+  }
+
   // ── Operator-style task group ("Worked for Nm" + indented steps) ──
   let _task = null, _taskStart = 0, _stepCount = 0;
   const BOT_EMOJI = { 'claude-b':'🦆', 'claude-a':'💣', 'gpt':'🤖' };
   function botEmoji(b){ return BOT_EMOJI[b] || '🤖'; }
-  // emoji per action label (matches the words from ACT_VERB / the action-tap)
+  // emoji per action label (matches the words from ACT_VERB / the action feed)
   const ACT_EMOJI = {
     Browsing:'🌐', Navigating:'🌐', Navigated:'🌐', Clicking:'🖱️', Clicked:'🖱️',
     Dragging:'🖱️', Moving:'🖱️', Pressing:'🖱️', Releasing:'🖱️',
@@ -1398,6 +1523,15 @@
     key:'Pressing', scroll:'Scrolling', back:'Going back', reload:'Reloading',
     browser_click:'Clicking', browser_type:'Typing', browser_navigate:'Navigating' };
   function _el(cls, txt) { const e=document.createElement('span'); e.className=cls; if(txt!=null) e.textContent=txt; return e; }
+  function _caretSVG(){
+    const NS='http://www.w3.org/2000/svg';
+    const svg=document.createElementNS(NS,'svg');
+    svg.setAttribute('viewBox','0 0 24 24'); svg.setAttribute('width','12'); svg.setAttribute('height','12');
+    svg.setAttribute('fill','none'); svg.setAttribute('stroke','currentColor'); svg.setAttribute('stroke-width','2.4');
+    svg.setAttribute('stroke-linecap','round'); svg.setAttribute('stroke-linejoin','round'); svg.setAttribute('aria-hidden','true');
+    const path=document.createElementNS(NS,'path'); path.setAttribute('d','M6 10l6 6 6-6');
+    svg.appendChild(path); return svg;
+  }
   function sweepOrphanTasks(){
     // Any task node still marked busy but not the active _task is a stuck orphan
     // (e.g. a prior turn whose finishTask never fired). Force-resolve them.
@@ -1419,7 +1553,8 @@
     _taskStart = Date.now();
     _task = document.createElement('div'); _task.className='op-task'; _task.dataset.busy='1';
     const head=document.createElement('div'); head.className='op-task-head';
-    head.appendChild(_el('ico')); head.appendChild(_el('verb','Working\u2026')); head.appendChild(_el('car','\u2304'));
+    const car=_el('car'); car.appendChild(_caretSVG());
+    head.appendChild(_el('ico')); head.appendChild(_el('verb','Working\u2026')); head.appendChild(car);
     const steps=document.createElement('div'); steps.className='op-task-steps';
     const cnt=document.createElement('div'); cnt.className='op-step-count'; cnt.hidden=true;
     cnt.innerHTML='<span class="sc-n">0 steps</span>';
@@ -1455,11 +1590,30 @@
   }
   function taskActionStep(label, detail) {
     if (!_task) startTask();
+    const steps = _task.querySelector('.op-task-steps');
+    const _last = steps && steps.lastElementChild;
+    const _sig = (label||'') + '' + (detail||'');
+    if (_last && _last.classList.contains('op-act-step') && _last.dataset.sig === _sig) {
+      const n = (parseInt(_last.dataset.n || '1', 10) || 1) + 1;
+      _last.dataset.n = n;
+      let badge = _last.querySelector('.op-act-x');
+      if (!badge) { badge=document.createElement('span'); badge.className='op-act-x';
+        _last.querySelector('.op-act-lab').appendChild(badge); }
+      badge.textContent = '' + n;
+      badge.classList.remove('op-x-pop'); void badge.offsetWidth; badge.classList.add('op-x-pop');
+      _stepCount++;
+      const cnt2 = _task.querySelector('.op-step-count');
+      if (cnt2) { cnt2.hidden = false; const sn = cnt2.querySelector('.sc-n');
+        if (sn) sn.textContent = _stepCount + ' steps'; }
+      scrollToBottom(); saveSession();
+      return;
+    }
     _stepCount++;
     const cnt = _task.querySelector('.op-step-count');
     if (cnt) { cnt.hidden = false; const n = cnt.querySelector('.sc-n');
       if (n) n.textContent = _stepCount + (_stepCount===1 ? ' step' : ' steps'); }
     const e=document.createElement('div'); e.className='op-task-step op-act-step';
+    e.dataset.sig = _sig; e.dataset.n = '1';
     const ico=document.createElement('span'); ico.className='op-act-ico2'; ico.textContent=actEmoji(label);
     const lab=document.createElement('span'); lab.className='op-act-lab';
     // labels are plain text, EXCEPT the code-block fallback ("Using `tool`") which
@@ -1493,10 +1647,10 @@
       _task.classList.add('op-task-failed');
       label = labelOverride || (secs < 2 ? 'Error' : 'Interrupted');
     } else if (labelOverride) {
-      if (labelOverride === 'Steered') {
-        _task.classList.add('op-task-steered');
+      if (labelOverride === 'Steered' || labelOverride === 'Stopped') {
+        _task.classList.add(labelOverride === 'Steered' ? 'op-task-steered' : 'op-task-stopped');
         const dur = secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s';
-        label = 'Steered after ' + dur;   // reflect actual time spent before the steer
+        label = labelOverride + ' after ' + dur;   // "Steered after Xs" / "Stopped after Xs"
       } else { label = labelOverride; }
     } else {
       const verb = DONE_VERBS[secs % DONE_VERBS.length];
@@ -1720,6 +1874,14 @@
   let _runProgressTs = 0;
   let _handledState = '';
   let _postSteerUntil = 0;
+  let _handoffTs = 0;
+  let _sawRunning = false;   // did we observe this turn go 'running' in THIS page load?
+  let _errShown = false;     // one error card per turn — suppress the stacking (Jeff)
+  function turnError(title, reason){
+    if (_errShown) return;
+    _errShown = true;
+    taskError(title, reason);
+  }
   async function pollAgent() {
     if (MODE !== 'auto' || _agentPolling) return;   // guard re-entrancy
     _agentPolling = true;
@@ -1743,14 +1905,26 @@
           taskVerb('Thinking\u2026');
         } else if (m.role === 'error') {
           const et = (m.text||'').trim();
-          taskError('Error', et || '');   // show the specific message when we have one
+          turnError('Turn failed', et || 'The agent ended the turn with an error.');   // one card/turn
         }
       });
       _agentSince = maxTs;
       if (msgs.length) _runProgressTs = Date.now();   // any new msg = progress
       // terminal states must be handled ONCE — not re-fired every poll (that
       // looped "agent stopped" after a stop). Reset when a fresh run starts.
-      if (d.state === 'running') _handledState = '';
+      if (d.state === 'running') { _handledState = ''; _handoffTs = 0; _errShown = false; _sawRunning = true; }
+      // a turn that finished BEFORE this page load (refresh): never saw it run, so don't
+      // re-emit its reply/handoff/error — the restored log already shows it. mark + bail.
+      if (d.state !== 'running' && !_sawRunning) { _handledState = d.state; return; }
+      if (d.handoff && d.handoff.ts && d.handoff.ts !== _handoffTs) {
+        _handoffTs = d.handoff.ts;
+        if (_task) { try { finishTask(false, 'Stopped'); } catch(_){} }
+        renderHandoff(d.handoff.reason || '');
+        op.dataset.busy='0'; op.dataset.agent='stopped'; setInFlight(false);
+        setCardText(actTxt, 'Stopped'); setCardSub(d.bot||'', 'waiting for you');
+        _handledState = d.state;
+        return;
+      }
       if (d.state !== 'running' && _handledState === d.state) { return; }
       if ((d.state === 'done' || d.state === 'error') && Date.now() < _postSteerUntil) { return; }  // swallow the killed run's tail after a steer
       if (d.state !== 'running') _handledState = d.state;
@@ -1762,7 +1936,7 @@
         if (Date.now() - _runProgressTs > 120000) {
           op.dataset.busy='0'; setCardText(actTxt, 'Failed');
           setCardSub(d.bot||'', 'stalled'); op.dataset.agent='errored';
-          taskError('Turn failed', 'No response for 2 minutes — the agent stalled and was stopped.'); finishTask(true); setInFlight(false);
+          turnError('Turn failed', 'No response for 2 minutes — the agent stalled and was stopped.'); finishTask(true); setInFlight(false);
           try { fetch(STOP_URL, {method:'POST'}); } catch {}
           _runProgressTs = 0;
         }
@@ -1798,7 +1972,7 @@
         if (!_interrupting) {
           op.dataset.busy='0'; setCardText(actTxt, 'Failed');
           setCardSub(d.bot||'', 'failed'); op.dataset.agent='errored';
-          taskError('Turn failed', (d && d.detail) ? d.detail : 'The agent ended the turn with an error.'); finishTask(true);
+          turnError('Turn failed', (d && d.detail) ? d.detail : 'The agent ended the turn with an error.'); finishTask(true);
         }
         _runProgressTs = 0; setInFlight(false); }
       else if (d.state === 'idle') { setInFlight(false); }
@@ -1812,7 +1986,7 @@
       if (z) { z.dataset.busy='0'; } }
   }, 2000);
 
-  // poll who's actually driving (from the action-tap) → live status + event trail
+  // poll who's actually driving (from the action feed) → live status + event trail
   let _lastEvTs = Date.now()/1000;
 
 
@@ -2029,6 +2203,8 @@
   }
   async function dispatchTask(txt){
     const bot = selectedBot();
+    log.querySelectorAll('.op-handoff').forEach(c => c.remove());
+    _handoffTs = 0; _errShown = false; op.dataset.agent='';
     op.dataset.busy='1'; setCardText(actTxt, 'Starting up');
     setCardSub(bot, '');
     try { const d = await (await fetch(DISPATCH, { method:'POST',
