@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.0-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.4.1-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -55,6 +55,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.4.1** — vendored a cross-platform Chrome harness (`browse/chrome-attach.sh` launches/attaches a debug Chrome with a separate automation profile on macOS / Linux / Windows / WSL; `browse/playwright-mcp.sh` wires the Playwright MCP to it). Code paths now resolve `browse/` relative to the package.
 
 **v0.4.0** — standalone app: `app.py` + a minimal base template + `requirements.txt`, so it runs on its own (`python app.py`) instead of needing a host Flask app to mount the blueprint.
 

@@ -102,7 +102,7 @@ class _Streamer:
         except Exception:  # noqa: BLE001
             pass
         time.sleep(2)
-        attach = os.path.expanduser("~/.operator/browse/chrome-attach.sh")
+        attach = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse", "chrome-attach.sh")
         if os.path.exists(attach):
             try:
                 subprocess.Popen(["bash", attach], stdin=subprocess.DEVNULL,
@@ -134,7 +134,7 @@ class _Streamer:
             alive = False
         if alive:
             return
-        attach = os.path.expanduser("~/.operator/browse/chrome-attach.sh")
+        attach = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse", "chrome-attach.sh")
         if not os.path.exists(attach):
             return
         # if a wedged Chrome process is lingering, kill it first so the relaunch takes.
