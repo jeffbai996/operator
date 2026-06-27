@@ -701,7 +701,7 @@
   .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
   .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
     color: var(--fg-2); font: 600 calc(0.74rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    padding: 0.25rem 0.1rem; user-select: none; }
+    padding: 0.25rem 0.1rem 0.25rem 0.45rem; user-select: none; }   /* left pad aligns spinner to the trace line */
   .op-task-head .ico { width: 14px; height: 14px; flex: 0 0 auto; position: relative; }
   .op-task[data-busy="1"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
     border-radius:50%;
@@ -719,7 +719,7 @@
   .op-task-head .car { margin-left: auto; color: var(--muted); font-size: 0.7rem; transition: transform .2s; }
   .op-task.collapsed .op-task-head .car { transform: rotate(-90deg); }
   /* steps: indented list with a subtle left vertical rule */
-  .op-task-steps { margin: 0.1rem 0 0.2rem 0.7rem; padding-left: 0.85rem;
+  .op-task-steps { margin: 0.1rem 0 0.2rem 1.05rem; padding-left: 0.85rem;
     border-left: 1.5px solid var(--border); display: flex; flex-direction: column; gap: 0.32rem; }
   .op-task.collapsed .op-task-steps { display: none; }
   .op-task-step { color: var(--muted); font: 500 calc(0.69rem * var(--chat-scale))/1.5 var(--chat-font);
@@ -765,8 +765,8 @@
     border-radius: 5px; padding: 0.28rem 0.42rem; margin-top: 0.18rem;
     white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   /* step-count header at the top of the live trace — white, same size as action labels */
-  .op-step-count { color: var(--muted); font: 600 calc(0.62rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: .01em; margin: 0 0 0.3rem 0; }
+  .op-step-count { color: var(--muted); font: 600 calc(0.66rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: .01em; margin: 0 0 0.3rem 0.35rem; }
   .op-step-count[hidden] { display: none; }
 </style>
 
@@ -1364,6 +1364,7 @@
   // emoji per action label (matches the words from ACT_VERB / the action-tap)
   const ACT_EMOJI = {
     Browsing:'🌐', Navigating:'🌐', Navigated:'🌐', Clicking:'🖱️', Clicked:'🖱️',
+    Dragging:'🖱️', Moving:'🖱️', Pressing:'🖱️', Releasing:'🖱️',
     Typing:'⌨️', Typed:'⌨️', Pressing:'⌨️', Pressed:'⌨️',
     Scrolling:'📜', Scrolled:'📜', Reading:'📖', 'Read page':'📖', Reading_page:'📖',
     'Took screenshot':'📸', Capturing:'📸', Captured:'📸', Waiting:'⏳', Waited:'⏳', Selecting:'☑️', Selected:'☑️',
@@ -1404,7 +1405,8 @@
       if (t === _task) return;
       t.dataset.busy = '0'; t.classList.add('collapsed');
       const car = t.querySelector('.car'); const v = t.querySelector('.verb');
-      if (!t.querySelector('.op-task-step')) { t.remove(); return; }  // empty → drop it
+      // only drop a TRULY empty orphan (no steps). never remove a task with any trace content.
+      if (!t.querySelector('.op-task-step') && !t.querySelector('.op-act-step')) { t.remove(); return; }
       if (v && /working|thinking|reading|navigating|clicking|typing/i.test(v.textContent))
         v.textContent = 'Worked';
       if (car) car.style.display = '';
