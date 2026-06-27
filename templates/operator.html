@@ -185,10 +185,12 @@
   .op[data-state="live"]:not([data-busy="1"]) .op-action-ico::before {
     border-color: var(--live); }
   /* connecting/idle (not yet live, not busy): spin the gray ring like the others */
-  .op[data-state="connecting"]:not([data-busy="1"]) .op-action-ico::before,
-  .op[data-state="idle"]:not([data-busy="1"]):not([data-agent="done"]) .op-action-ico::before {
+  .op[data-state="connecting"]:not([data-busy="1"]):not(.op-signal-lost) .op-action-ico::before,
+  .op[data-state="idle"]:not([data-busy="1"]):not([data-agent="done"]):not(.op-signal-lost) .op-action-ico::before {
     border: 2px solid var(--border-2); border-top-color: var(--fg-2);
     animation: op-spin .8s linear infinite; }
+  /* SIGNAL LOST stays a static ring (no spin) — the triangle overlay is the indicator */
+  .op.op-signal-lost .op-action-ico::before { animation: none; }
   @keyframes op-spin{to{transform:rotate(360deg)}}
   /* animated checkmark when a task completes — a centered ✓ glyph */
   .op-action-ico::after { content: ""; position: absolute; inset: 0;
