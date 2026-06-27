@@ -771,7 +771,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.0</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.1</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -980,6 +980,11 @@
   const STREAM = "{{ url_for('operator.operator_stream') }}";
   const STATUS = "{{ url_for('operator.operator_status') }}";
   const STEER  = "{{ url_for('operator.operator_steer') }}";
+  // hoisted: these are referenced by early init (applyMode→setFollowUp etc.) before
+  // their original later declaration — a let/const there caused a TDZ crash that halted
+  // ALL page JS (poll/agent/steer dead, feed stuck 'Connecting'). Declare them up top.
+  let _inFlight = false;
+  var _queue = [];
 
   // ── full-window toggle (hides host app header) ──
   // ── drag-to-resize the chat rail (desktop). Current width is the floor; drag
@@ -1199,10 +1204,7 @@
   function signalOk(){ op.classList.remove('op-signal-lost'); view.style.visibility='visible'; }
   view.addEventListener('load', () => { _hasFrame = true; _lastImgLoad = Date.now();
     view.style.visibility='visible'; signalOk(); backoff = 600; });
-  // a transient MJPEG error must NOT flash SIGNAL LOST (that caused the flicker) —
-  // reconnect quietly + keep the last frame; only the 6s poll watchdog (below) calls
-  // signalLost() on a SUSTAINED drop.
-  view.addEventListener('error', () => { scheduleReconnect(); });
+  view.addEventListener('error', () => { signalLost(); scheduleReconnect(); });
   connectStream();
   // tab was backgrounded (browser suspends the MJPEG + timers) → on return,
   // immediately reconnect the stream + re-poll so the feed snaps back fast.
@@ -1751,13 +1753,18 @@
       }
       else if (d.state === 'done') { op.dataset.busy='0'; setCardText(actTxt, 'Done');
         _lastActionEmoji='💭'; _lastActionVerb='Thinking';   // clear stale live verb
-        setCardSub(d.bot||'', 'idle'); op.dataset.agent='done';
+        setCardSub(selectedBot()||'', 'idle'); op.dataset.agent='done';   // idle shows the SELECTED bot, not whoever last ran
         // promote the final reply into a markdown bubble. Prefer the incrementally
         // captured one; fall back to the server's authoritative `final` (covers the
         // case where the message flushed together with turn-end — gpt/codex does
         // this, which is why a "Spelunked 19s" turn could end with no reply shown).
         const reply = _lastAssistant || (d.final || '').trim();
-        if (reply) {
+        // don't re-append a reply that's already the last bot bubble (e.g. after a
+        // refresh restores the log, or repeated 'done' polls) — that caused the
+        // message to duplicate on every refresh.
+        const _lastBubble = log.querySelector('.op-msg.bot:last-of-type .bubble');
+        const _alreadyShown = _lastBubble && _lastBubble.textContent.trim() === reply.trim();
+        if (reply && !_alreadyShown) {
           if (_task) { const steps=_task.querySelectorAll('.op-task-step');
             const lastStep = steps[steps.length-1];
             if (lastStep && !lastStep.classList.contains('op-act-step')
@@ -1921,25 +1928,7 @@
         // resume real frames, then trust the open MJPEG connection (no per-poll
         // reconnect — that caused the ~1/sec flicker).
         if (_wasLost) { _wasLost = false; connectStream(); }
-        // STALE-STREAM WATCHDOG: a silently-starved MJPEG <img> (proxy holds the
-        // connection open but stops feeding) never fires 'error' — it just freezes.
-        // If the server is producing frames but the <img> hasn't loaded one in >6s,
-        // the client stream froze → force a fresh reconnect.
-        else if (_lastImgLoad && (Date.now() - _lastImgLoad > 6000)) {
-          _lastImgLoad = Date.now();   // debounce so we don't reconnect every poll
-          connectStream();
-        }
         signalOk();
-        // settle a stuck "Connecting…" heading once the feed is live (works in AUTO too,
-        // where setState skips the heading). Only override connecting/reconnecting text,
-        // and only when no agent run is in flight.
-        {
-          const _t = (actTxt.textContent || '').toLowerCase();
-          const _agentRunning = (op.dataset.agent === 'running') || op.dataset.busy === '1';
-          if (!_agentRunning && (_t.indexOf('connecting') !== -1 || _t.indexOf('reconnect') !== -1)) {
-            actTxt.textContent = (MODE === 'man') ? 'Manual' : 'Ready';
-          }
-        }
       }
       else if (d.status === 'error') { setState('error', 'disconnected'); signalLost(); _coldSince = _coldSince||Date.now(); }
       else {
@@ -1947,14 +1936,14 @@
         const coldMs = Date.now() - _coldSince;
         // brief gaps: the server heartbeats the last frame, so stay as-is (no
         // hide/blink). Only a sustained 6s drop is a real SIGNAL LOST.
-        if (coldMs >= 10000) {
+        if (coldMs >= 6000) {
           signalLost();
           setState('connecting', 'reconnecting…');
           if (!reconnectT) connectStream();
         }
       }
     } catch { if (!_coldSince) _coldSince = Date.now();
-      if (Date.now()-_coldSince >= 10000) setState('error','disconnected'); }
+      if (Date.now()-_coldSince >= 6000) setState('error','disconnected'); }
   }
   const _sess = restoreSession();
   // restore the mode IMMEDIATELY (not in the 400ms timeout) so an early saveSession
@@ -2017,7 +2006,6 @@
     if(/\s/.test(t)) return {kind:'_ambiguous', value:t};
     return {kind:'type',value:t};
   }
-  const _queue = [];
   function drainQueue(){
     if (_inFlight || !_queue.length || MODE!=='auto') return;
     const next = _queue.shift();
@@ -2054,7 +2042,6 @@
     }
   }
   // ── send ⇄ stop toggle ──
-  let _inFlight = false;
   const STOP_URL = "{{ url_for('operator.operator_agent_stop') }}";
   const _sendSVG = send.innerHTML;
   const _stopSVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor">'

@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.0-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.5.1-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -81,6 +81,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.5.1** — fixed a JS temporal-dead-zone crash that could halt the page's scripts on load (feed stuck "Connecting", agent/steering dead while the server was fine); idle status shows the *selected* driver (not whoever last ran); the last reply no longer duplicates on refresh.
 
 **v0.5.0** — runtime documented + generalized: drivers are now generic `claude` (Claude Code) + `gpt` (codex), both BYO-subscription / no metered key; config via env; added `.env.example` + a Quickstart. (Hands-off computer-use lands at v1.0.0; on 0.5.x until then.)
 
