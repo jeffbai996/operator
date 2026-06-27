@@ -1917,6 +1917,11 @@
         // reconnect — that caused the ~1/sec flicker).
         if (_wasLost) { _wasLost = false; connectStream(); }
         signalOk();
+        // settle a stuck "Connecting…" heading once the feed is live + idle
+        if ((!op.dataset.busy || op.dataset.busy === '0') &&
+            (actTxt.textContent === 'Connecting…' || actTxt.textContent === 'Connecting')) {
+          actTxt.textContent = (MODE === 'man') ? 'Manual' : 'Ready';
+        }
       }
       else if (d.status === 'error') { setState('error', 'disconnected'); signalLost(); _coldSince = _coldSince||Date.now(); }
       else {
