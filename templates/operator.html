@@ -10,7 +10,7 @@
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
     --chat-font: 'Plus Jakarta Sans', sans-serif;   /* chat content font (settings) */
     --live:#3fb950; --live-glow:rgba(63,185,80,.6);
-    --rail-w: minmax(280px, 310px);   /* JS overrides with a px value on drag-resize */
+    --rail-w: minmax(322px, 340px);   /* JS overrides with a px value on drag-resize */
     display: grid; grid-template-columns: var(--rail-w) 1fr; gap: 0.7rem;
     margin: 12px 0; box-sizing: border-box; position: relative;
     height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 380px;
@@ -19,6 +19,24 @@
   .op .op-msg .bubble, .op .op-task-step, .op-input, .op-url, .op-title, .op-disclaimer,
   .op-man-note {
     -webkit-user-select: text; user-select: text; }
+  /* FLAT / HIGH-CONTRAST mode: a modifier over any theme — strips gradients, glows, shadows. */
+  .op.op-flat { --glow: transparent; --live-glow: transparent; }
+  .op.op-flat *, .op.op-flat *::before, .op.op-flat *::after { box-shadow: none !important; }
+  .op.op-flat .op-dot { box-shadow: none !important; }
+  .op.op-flat .op-msg.bot .bubble { background: var(--bg-3) !important; }
+  .op.op-flat .op-msg.user .bubble { background: var(--bg-4) !important; }
+  .op.op-flat .op-action, .op.op-flat .op-rail, .op.op-flat .op-browser,
+  .op.op-flat .op-inputbox, .op.op-flat .op-head, .op.op-flat .op-mode { background-image: none !important; }
+  .op.op-flat .op-input:focus, .op.op-flat .op-finish-input:focus { box-shadow: none !important; border-color: var(--accent) !important; }
+  .op.op-flat #op-flat { color: var(--accent); border-color: var(--accent); }
+  .op.op-flat {
+    --bg: #000; --bg-2: #060708; --bg-3: #0c0e11; --bg-4: #14171c;
+    --border: rgba(255,255,255,.10); --border-2: rgba(255,255,255,.14); }
+  .op.op-flat .op-rail, .op.op-flat .op-browser { background: #000 !important; }
+  [data-theme="light"] .op.op-flat {
+    --bg: #eef1f5; --bg-2: #e4e8ee; --bg-3: #dde2e9; --bg-4: #d3d9e2;
+    --border: rgba(0,0,0,.14); --border-2: rgba(0,0,0,.20); }
+  [data-theme="light"] .op.op-flat .op-rail, [data-theme="light"] .op.op-flat .op-browser { background: #eef1f5 !important; }
 
   /* operator is a computer UI — lock the PAGE from scrolling (no rubber-band,
      no scroll-past-bottom). Only inner regions (.op-log, .op-stage) scroll. */
@@ -60,19 +78,22 @@
   body.op-full header.site { display: none !important; }
   body.op-full main, body.op-full .container, body.op-full .wrap {
     max-width: none !important; margin: 0 !important; padding: 0 !important; }
-  body.op-full { overflow: hidden; }
+  body.op-full { overflow: hidden; background: #0c0e13; }
+  body.op-full:has(.op-flat) { background: #000; }
   body.op-full .op { position: fixed; inset: 0; height: 100vh; height: 100dvh; width: 100vw;
     box-sizing: border-box; border-radius: 0; gap: 10px; padding: 10px; background: var(--bg); z-index: 50;
     box-sizing: border-box; overflow: hidden; }
+  body.op-full .op.op-flat { background: #000; }
   body.op-full .op-rail, body.op-full .op-browser { border-radius: 10px; }
 
   /* ── LEFT RAIL ─────────────────────────────────────────────── */
-  .op-rail { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 0.4rem; min-width: 0;
+  .op-rail { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 0.4rem; min-width: 322px;
     min-height: 0; overflow: hidden;   /* enforce grid track → chat log scrolls, box stays fixed */
-    background: linear-gradient(180deg, var(--bg-2), var(--bg)); border: 1px solid var(--border-2);
+    background: var(--bg-2); border: 1px solid var(--border-2);
+    background-clip: padding-box;
     border-radius: 16px; padding: 0.7rem; }
-  .op-head { display: flex; align-items: center; gap: 0.45rem; margin-top: -2px; }
-  #op-clear { margin-left: auto; }
+  .op-head { display: flex; align-items: center; gap: 0.22rem; margin-top: -2px; }
+  #op-clear { margin-left: auto; }   /* push the icon group to the right edge */
   /* nudge the trash glyph up + right a hair to center it optically in its box */
   #op-clear svg { display: block; transform: translate(0.3px, -0.5px); transform-origin: center; }
   /* no hover zoom — just a smooth shake on clear. keyframes KEEP the base translate so
@@ -144,18 +165,18 @@
   .op-set-row select { background: var(--bg-3); color: var(--fg); border: 1px solid var(--border-2);
     border-radius: 6px; padding: 0.15rem 0.3rem; font: 500 0.66rem/1 'Plus Jakarta Sans', sans-serif; cursor: pointer; }
   .op-fontpill { display: inline-flex; align-items: stretch; border: 1px solid var(--border-2);
-    border-radius: 8px; overflow: hidden; height: 26px; align-self: center; }
+    border-radius: 8px; overflow: hidden; height: 24px; align-self: center; flex: 0 0 auto; }
   .op-fontpill button { background: transparent; border: none; color: var(--fg-2); cursor: pointer;
-    font: 500 1rem/1 'Plus Jakarta Sans', sans-serif; width: 26px; height: 100%; padding: 0; margin: 0;
+    font: 500 0.84rem/1 'Plus Jakarta Sans', sans-serif; width: 19px; height: 100%; padding: 0; margin: 0;
     display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
   .op-fontpill button { transform: translate(0.5px, -2px); }
   .op-fontpill button:hover { background: var(--bg-3); color: var(--fg); }
   .op-fontpill button:active { background: var(--bg-4); }
   .op-fontpill-sep { width: 1px; flex: 0 0 1px; align-self: stretch; background: var(--border); }
-  .op-iconbtn { width: 28px; height: 28px; display: inline-flex; align-items: center;
-    justify-content: center; padding: 0 !important; font-size: 1.2rem !important; line-height: 1; }
+  .op-iconbtn { width: 20px; height: 20px; min-width: 20px; display: inline-flex; align-items: center;
+    justify-content: center; padding: 0 !important; font-size: 0.92rem !important; line-height: 1; flex: 0 0 auto; }
   .op-full-btn { background: var(--bg-3); border: 1px solid var(--border-2);
-    color: var(--fg-2); border-radius: 8px; padding: 0.32rem 0.55rem; cursor: pointer;
+    color: var(--fg-2); border-radius: 8px; padding: 0.32rem 0.55rem; cursor: pointer; flex: 0 0 auto;
     font: 500 0.72rem/1 'JetBrains Mono', monospace; transition: all .15s; }
   .op-full-btn:hover { background: var(--bg-4); color: var(--accent); border-color: rgba(184,192,204,.45); }
 
@@ -187,6 +208,9 @@
   .op[data-busy="1"] .op-action-ico::before {
     border: 2px solid var(--live); border-top-color: #7fe39c;   /* Ready-green ring, mid-green arc */
     animation: op-spin .7s linear infinite; }
+  .op[data-state="connecting"]:not(.op-signal-lost) .op-action-ico::before {
+    border: 2px solid #d2a30f !important; border-top-color: #f0cf6a !important;
+    animation: op-spin .8s linear infinite !important; }
   .op[data-mode="man"] .op-action-ico::before { border-color: #f0883e !important;
     transition: border-color .3s ease; }
   .op[data-state="live"]:not([data-busy="1"]) .op-action-ico::before {
@@ -220,13 +244,13 @@
     animation: op-x .3s cubic-bezier(.2,1.2,.4,1) forwards; }
   @keyframes op-x { 0%{transform:translate(-1px,-1px) scale(0);opacity:0}
     60%{transform:translate(-1px,-1px) scale(1.2);opacity:1} 100%{transform:translate(-1px,-1px) scale(1);opacity:1} }
-  /* stopped (hand-off): just an amber ring — no glyph inside (Jeff). */
+  /* stopped (hand-off): just an amber ring — no glyph inside. */
   .op[data-agent="stopped"] .op-action-ico::before { border-color: #f5a04a !important; animation: none; }
   .op[data-agent="stopped"] .op-action-ico::after { content: none !important; }
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
   .op-action-body { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-action-txt { transition: color .25s ease; font: 700 calc(0.9rem * var(--chat-scale))/1.2 'Plus Jakarta Sans',sans-serif; color: var(--fg); }
+    .op-action-txt { transition: color .25s ease; font: 700 0.9rem/1.2 'Plus Jakarta Sans',sans-serif; color: var(--fg); }
   .op-action-sub { transition: color .25s ease; }
   /* tool-call / status text changes animate in like the chat bubbles do */
   .op-action-txt.op-card-swap { animation: op-card-in .4s cubic-bezier(.22,1,.36,1); }
@@ -252,13 +276,13 @@
     border: 1px solid var(--border); border-radius: 8px; }
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
-  .op-action-sub { font: 500 calc(0.66rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
+  .op-action-sub { font: 500 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
     margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* +1px baseline-align */
 
   /* wrap is the flex slot; log scrolls inside it; jump-button floats over it */
   .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   .op-jump { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%) translateY(4px);
-    width: 25px; height: 25px; border-radius: 50%; cursor: pointer;   /* smaller (Jeff) */
+    width: 25px; height: 25px; border-radius: 50%; cursor: pointer;   /* smaller */
     background: var(--bg-4); color: var(--fg); border: 1px solid var(--border-2);
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 4px 14px -4px rgba(0,0,0,.6); z-index: 6;
@@ -377,11 +401,18 @@
     background: transparent; color: var(--fg);
     border: 1px solid var(--border-2);
     font: 600 calc(0.72rem * var(--chat-scale))/1 'Plus Jakarta Sans', sans-serif;
-    padding: 0.46rem 0.66rem; border-radius: 8px; letter-spacing: -.005em;   /* narrower laterally */
+    padding: 0.46rem 0.8rem; border-radius: 999px; letter-spacing: -.005em;   /* fully pill-shaped */
     transition: background .14s, border-color .14s, transform .08s; }
   .op-takeover-btn:hover { background: var(--bg-4); border-color: var(--accent); }
   .op-takeover-btn:active { transform: translateY(1px); }
   .op-takeover-btn[disabled] { opacity: 0.5; cursor: default; background: transparent; border-color: var(--border); }
+  .op-finish { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .op-finish-expand { display: flex; flex-direction: column; gap: 0.4rem; animation: op-man-in .26s cubic-bezier(.16,1,.3,1); }
+  .op-finish-q { font: 500 calc(0.66rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); }
+  .op-finish-opt { font-size: 0.86em; font-style: italic; color: var(--muted); }
+  .op-finish-input { width: 100%; box-sizing: border-box; resize: none; background: var(--bg); color: var(--fg); border: 1px solid var(--border-2); border-radius: 10px; padding: 0.4rem 0.55rem; font: 500 calc(0.7rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif; outline: none; }
+  .op-finish-input::placeholder { font-size: calc(0.64rem * var(--chat-scale)); font-style: italic; color: var(--muted); opacity: 0.6; }
+  .op-finish-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
   .op-msg.sys { display: flex; justify-content: center; margin: 0.35rem 0 0.3rem; }
   .op-msg.sys .body { font: 600 calc(0.66rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
     color: var(--muted); background: var(--bg-2); border: 1px solid var(--border);
@@ -572,6 +603,8 @@
        keeps fixed sizes. */
     #op-input.op-input { font-size: calc(0.66rem * var(--chat-scale)); }
     .op-mini { font-size: calc(0.64rem * var(--chat-scale)); }
+    /* xN pill digit ~1px low on mobile only — nudge up via bottom-pad */
+    .op-act-x { padding: 0 0 1px 0; }
     /* iOS focus-zoom is handled in JS (lock maximum-scale on focus, restore on
        blur) so we keep the compact font here without the box zooming the viewport
        AND without blocking pinch-zoom otherwise. See the focusin/focusout handler. */
@@ -592,7 +625,7 @@
     .op-rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
       height: var(--sheet-h); max-width: 100%;
       border-radius: 18px 18px 0 0; border: 1px solid var(--border-2); border-bottom: none;
-      background: linear-gradient(180deg, var(--bg-2), var(--bg));
+      background: var(--bg-2); background-clip: padding-box;
       box-shadow: 0 -10px 34px -10px rgba(0,0,0,.7);
       transition: height .28s cubic-bezier(.22,1,.36,1);
       padding: 0 0.7rem 0.7rem; overflow: hidden; touch-action: none; }
@@ -723,14 +756,22 @@
     /* the default light theme washes out under this UI — give the operator rail a
        slightly deeper, cooler surface + firmer borders so it reads as a panel, not paper. */
     --bg-2: #e4e8ee; --bg: #eef1f5; --bg-3: #dde2e9; --border: rgba(0,0,0,.12); --border-2: rgba(0,0,0,.16); }
-  [data-theme="light"] .op-rail { background: linear-gradient(180deg, #e7ebf1, #eef1f5); }
+  [data-theme="light"] .op-rail { background: #e7ebf1; }
   [data-theme="midnight"] .op { --op-code-bg: #0a0e18; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
   .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.56rem/1.4 'Plus Jakarta Sans', sans-serif;   /* fixed size — does NOT scale with the +/- control */
     color: var(--muted); opacity: 0.82; text-align: center; cursor: default; }
   [data-theme="light"] .op-disclaimer { color: #5a6573; opacity: 0.92; }   /* darker on light for readability */
   [data-theme="light"] .op-disclaimer-info { color: #3a424d; }
+  [data-theme="light"] .op-err-reason { color: #a01722; background: rgba(200,30,40,.07); border-color: rgba(200,30,40,.3); }
+  [data-theme="light"] .op-err-head { color: #b21d2a; }
+  [data-theme="light"] .op-msg.bot .bubble a, [data-theme="light"] .op-msg.bot .bubble a:visited { color: #2452c0; }
+  [data-theme="light"] a.op-act-detail { color: #2a2e36; }
+  [data-theme="light"] a.op-act-detail:hover { color: #1a3a8c; }
+  [data-theme="light"] .op-act-coord { color: #4a5260; }
+  [data-theme="light"] .op-act-lab { color: var(--fg); }
+  [data-theme="light"] .op-msg.sys .body { color: #3a424d; }
   .op-disclaimer-info { display: block; max-height: 0; overflow: hidden; opacity: 0;
-    transition: none; margin-top: 0; color: var(--fg-2); }   /* collapsed: zero height, no padding/margin (no sliver) */
+    transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem; }   /* collapsed: zero height, no padding/margin (no sliver) */
   /* revealed: gap as margin-top (outside the overflow box, collapses cleanly), NOT
      transitioned → no 1px end-jump. Only max-height+opacity animate. */
   .op-disclaimer:hover .op-disclaimer-info,
@@ -784,7 +825,7 @@
     display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700; }
   .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { content:"\2715"; color: var(--bad); }
   .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2); }
-  /* stopped (hand-off): a stop symbol instead of the green check (Jeff) */
+  /* stopped (hand-off): a stop symbol instead of the green check */
   .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { content:"\25A0"; color: var(--bad); font-size: 0.7rem; }
   .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
   .op-task-head .verb { font-weight: 700; color: var(--fg); }   /* bold live action */
@@ -830,7 +871,7 @@
     display: inline-flex; align-items: center; }
   /* repeat-count badge — bigger wireframe pill, digit centered both ways. */
   .op-act-x { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    margin-left: 0.4rem; width: 1.45em; height: 1.45em; padding: 1.5px 0 0 0;
+    margin-left: 0.4rem; width: 1.45em; height: 1.45em; padding: 1px 0 0 0;
     font: 500 0.66rem/1 'JetBrains Mono', monospace; color: var(--muted);
     background: transparent; border: 1px solid var(--border-2);
     border-radius: 50%; box-sizing: border-box; }
@@ -844,7 +885,7 @@
   /* inline coordinate detail after "Clicking"/"Dragging" — lighter, smaller, set apart */
   .op-act-coord { margin-left: 0.4rem; font-weight: 400; color: var(--muted);
     font: 400 calc(0.6rem * var(--chat-scale))/1 'JetBrains Mono', monospace;
-    letter-spacing: -.01em; vertical-align: baseline; }
+    letter-spacing: -.01em; position: relative; top: 2px; }
   /* plain detail (element names under Clicking/Typing/etc.) — NOT a code block */
   .op-act-detail-plain { color: var(--muted); font-weight: 400; max-width: 100%;
     font: 500 calc(0.66rem * var(--chat-scale))/1.45 var(--chat-font);
@@ -872,7 +913,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.6</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.7</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -883,7 +924,8 @@
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
-      <button class="op-full-btn op-iconbtn" id="op-clear" title="clear chat" aria-label="clear chat"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path><path d="M10 11v6M14 11v6"></path></svg></button>
+      <button class="op-full-btn op-iconbtn" id="op-clear" title="clear chat" aria-label="clear chat"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path><path d="M10 11v6M14 11v6"></path></svg></button>
+      <button class="op-full-btn op-iconbtn" id="op-flat" title="high-contrast / flat theme" aria-label="toggle flat theme"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-full" title="fullscreen">⤢</button>
     </div>
 
@@ -901,6 +943,14 @@
     <div class="op-man-note" id="op-man-note" hidden>
       <div class="op-man-head"><svg class="op-warn" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3.2 22 20H2L12 3.2z" fill="#f5c542" stroke="#1a1205" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 9.5v5" stroke="#1a1205" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.15" fill="#1a1205"/></svg><strong>Manual mode</strong></div>
       <div class="op-man-line">You have control of the computer. Switch to Auto mode to message <span id="op-surface-name">Operator</span>.</div>
+      <div class="op-finish" id="op-finish" hidden>
+        <button type="button" class="op-takeover-btn op-finish-btn" id="op-finish-btn">Finish up</button>
+        <div class="op-finish-expand" id="op-finish-expand" hidden>
+          <div class="op-finish-q">Leave a message for Operator? <span class="op-finish-opt">(optional)</span></div>
+          <textarea class="op-finish-input" id="op-finish-input" rows="2" placeholder="e.g. “I logged in — now book the 7pm slot” or “solved the captcha, carry on”"></textarea>
+          <button type="button" class="op-takeover-btn op-finish-go" id="op-finish-go">Finish up</button>
+        </div>
+      </div>
     </div>
 
     <div class="op-events" id="op-events"></div>
@@ -1097,7 +1147,7 @@
     const rez = document.getElementById('op-resizer'); if (!rez) return;
     const opEl = document.getElementById('op');
     const RW_KEY = 'operator-railwidth-v1';
-    const MIN = 280;
+    const MIN = 322;
     function maxW(){ return Math.round(opEl.getBoundingClientRect().width * 0.62); }
     function apply(px){ const w = Math.max(MIN, Math.min(maxW(), px));
       opEl.style.setProperty('--rail-w', w + 'px'); return w; }
@@ -1132,7 +1182,10 @@
     // snap targets as fractions of the viewport height
     const SNAPS = [0.22, 0.5, 0.9];   // peek (room for the Message box + spinner), half, full
     function vh(){ return window.innerHeight; }
-    function setH(px){ const h = Math.max(vh()*0.12, Math.min(vh()*0.92, px));
+    function hdrH(){ const v = parseFloat(getComputedStyle(opEl).getPropertyValue('--op-hdr-h')); return v||0; }
+    function setH(px){
+      const maxH = vh() - hdrH() - 10;
+      const h = Math.max(vh()*0.12, Math.min(maxH, px));
       opEl.style.setProperty('--sheet-h', h + 'px');
       // tag nearest snap so CSS can switch the sheet into a compact 'peek' layout
       const frac = h / vh();
@@ -1240,6 +1293,19 @@
   });
   document.getElementById('op-full').addEventListener('click', () =>
     document.body.classList.toggle('op-full'));
+  (function(){
+    const FLAT_KEY = 'operator-flat-v1';
+    const opEl = document.getElementById('op');
+    const flatBtn = document.getElementById('op-flat');
+    const apply = (on)=>{ if (opEl) opEl.classList.toggle('op-flat', on); };
+    try { apply(localStorage.getItem(FLAT_KEY) === '1'); } catch {}
+    if (flatBtn) flatBtn.addEventListener('click', ()=>{
+      const on = !(opEl && opEl.classList.contains('op-flat'));
+      apply(on);
+      try { localStorage.setItem(FLAT_KEY, on ? '1' : '0'); } catch {}
+    });
+  })();
+    /* (overflow-dropdown removed — controls fit inline as a compact row) */
 
   // ── live action status (Operator-style present-tense) ──
   const VERB = { goto:'Navigating', click:'Clicking', click_at:'Clicking',
@@ -1321,17 +1387,15 @@
   });
 
   function setState(s, d) {
-    op.dataset.state = s;  // connection dot only — never fights the action text
-    // set the idle 'Ready' label only when nothing is actively working AND no
-    // agent is running (so pollAgent/setAction stay the sole action-text owners)
-    if ((!op.dataset.busy || op.dataset.busy === '0')
-        && (typeof MODE === 'undefined' || MODE !== 'auto')
-        && actTxt.textContent !== 'Working') {
-      if (s === 'live' && MODE === 'auto' && op.dataset.busy!=='1'
-          && op.dataset.agent!=='errored' && op.dataset.agent!=='done'
-          && actTxt.textContent !== 'Interrupted' && actTxt.textContent !== 'Failed'
-          && actTxt.textContent !== 'Done')
-        actTxt.textContent = 'Ready';
+    op.dataset.state = s;
+    // When the feed comes up, the only action text we own is the stale connecting/
+    // reconnecting placeholder — clear it to Ready so the card doesn't get stuck on
+    // "Connecting…" after the feed is live (esp. after a server restart).
+    const t = (actTxt.textContent || '').trim();
+    const isPlaceholder = (t === 'Connecting…' || t === 'Connecting' || t === 'reconnecting…' || t === 'Reconnecting…' || t === '');
+    if (s === 'live' && (!op.dataset.busy || op.dataset.busy === '0') && isPlaceholder) {
+      actTxt.textContent = 'Ready';
+      op.dataset.agent = op.dataset.agent || '';
     }
   }
 
@@ -1524,6 +1588,7 @@
     setTimeout(()=>{ _interrupting=false; }, 1500);
     if (card) card.remove();
     logSys('Took control', 'monitor');   // monitor icon (no slash)
+    _handedToUser = true;
     MODE = 'man'; applyMode(); saveSession();
   }
   function renderHandoff(reason){
@@ -1566,7 +1631,7 @@
     Resize:'📐', 'Handle dialog':'💬', 'Read console':'🖥️', 'Inspect network':'📡', 'Save PDF':'📄',
     Searching:'🔍', Fetching:'🔗', 'Running command':'⌨️', 'Reading file':'📄',
     'Searching files':'🔍', 'Finding files':'📁', 'Writing file':'✏️', 'Editing file':'✏️',
-    'Checking quote':'📈', 'Checking portfolio':'📊',
+    'Checking quote':'📈', 'Checking data':'📊',
     Thinking:'💭', Working:'⚙️'
   };
   function actEmoji(label){ return ACT_EMOJI[label] || '⚙️'; }
@@ -1723,7 +1788,11 @@
     let label;
     if (failed) {
       _task.classList.add('op-task-failed');
-      label = labelOverride || (secs < 2 ? 'Error' : 'Interrupted');
+      const dur = secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s';
+      if (labelOverride === 'Interrupted')
+        label = 'Interrupted after ' + dur;
+      else
+        label = labelOverride || (secs < 2 ? 'Error' : 'Interrupted after ' + dur);
     } else if (labelOverride) {
       if (labelOverride === 'Steered' || labelOverride === 'Stopped') {
         _task.classList.add(labelOverride === 'Steered' ? 'op-task-steered' : 'op-task-stopped');
@@ -1831,6 +1900,7 @@
   // later (TDZ). Default 'man' only if nothing saved.
   let MODE = (function(){ try { const d = JSON.parse(localStorage.getItem('operator-session-v1')||'null');
     return (d && (d.mode === 'auto' || d.mode === 'man')) ? d.mode : 'man'; } catch { return 'man'; } })();
+  let _handedToUser = false;   // SESSION-ONLY: never seeded from storage; only a live Take control sets it true
   (async () => {
     try { const d = await (await fetch(DRIVERS_URL)).json();
       (d.drivers||[]).forEach(b => { const o=document.createElement('option');
@@ -1912,7 +1982,7 @@
   }
   function applyMode() {
     // keep the chat fixed across AUTO⇄MAN: toggling the "Manual mode" banner reflows
-    // the log and shoves it up (Jeff). Capture position before, restore after the reflow.
+    // the log and shoves it up. Capture position before, restore after the reflow.
     const _atBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 24;
     const _fromBottom = log.scrollHeight - log.scrollTop;
     op.dataset.mode = MODE;   // drives the sliding thumb (orange MAN ⇄ green AUTO)
@@ -1937,6 +2007,11 @@
       input.disabled = true; input.value=''; input.placeholder = 'You have control';
       if(inputbox) inputbox.classList.add('disabled');
       if(manNote) manNote.hidden = false;
+      { const fin=document.getElementById('op-finish'), exp=document.getElementById('op-finish-expand'),
+            fbtn=document.getElementById('op-finish-btn');
+        if (fin) fin.hidden = !_handedToUser;
+        if (exp) exp.hidden = true;
+        if (fbtn) fbtn.hidden = false; }
       // clean manual state: no leftover done-checkmark / agent badge, just the
       // orange ring + "Manual". (a real page-load will set busy=1 → spinner.)
       op.dataset.agent = ''; op.dataset.busy = '0';
@@ -1947,9 +2022,30 @@
     else log.scrollTop = Math.max(0, log.scrollHeight - _fromBottom);
   }
   modeBox.addEventListener('click', e => { const b=e.target.closest('.op-mode-btn');
-    if (b) { MODE = b.dataset.mode; applyMode(); saveSession(); } });
+    if (b) { MODE = b.dataset.mode; _handedToUser = false;
+      applyMode(); saveSession(); } });
+  (function(){
+    const finBtn=document.getElementById('op-finish-btn');
+    const finExp=document.getElementById('op-finish-expand');
+    const finGo=document.getElementById('op-finish-go');
+    const finInput=document.getElementById('op-finish-input');
+    if (finBtn) finBtn.addEventListener('click', ()=>{ if (finExp) finExp.hidden=false; finBtn.hidden=true; if (finInput) setTimeout(()=>finInput.focus(),30); });
+    function handBack(){
+      const msg = (finInput && finInput.value.trim()) || '';
+      _handedToUser = false; MODE = 'auto'; applyMode();
+      logSys('Handed control to Operator', 'monitor');
+      if (finInput) finInput.value=''; saveSession();
+      if (msg) { logUser(msg); dispatchTask(msg); }
+      else { dispatchTask('I\'m done — please continue from where you left off.'); }
+    }
+    if (finGo) finGo.addEventListener('click', handBack);
+    if (finInput) finInput.addEventListener('keydown', e=>{ if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); handBack(); } });
+  })();
   caretSel.addEventListener('change', () => { applyMode(); loadModels(selectedBot()); });
   applyMode();
+  { _handedToUser = false;
+    const fin=document.getElementById('op-finish'), exp=document.getElementById('op-finish-expand'), fbtn=document.getElementById('op-finish-btn');
+    if (fin) fin.hidden = true; if (exp) exp.hidden = true; if (fbtn) fbtn.hidden = false; }
 
   // poll the running agent → stream its reasoning into the chat
   let _agentSince = Date.now()/1000;
@@ -1964,7 +2060,7 @@
   let _handoffTs = 0;
   let _handoffActive = false; // a hand-off concluded THIS turn → don't also emit done/error
   let _sawRunning = false;   // did we observe this turn go 'running' in THIS page load?
-  let _errShown = false;     // one error card per turn — suppress the stacking (Jeff)
+  let _errShown = false;     // one error card per turn — suppress the stacking
   function turnError(title, reason){
     if (_errShown) return;
     _errShown = true;
