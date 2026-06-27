@@ -1,10 +1,9 @@
-<h1 align="center" style="font-size:3em; margin-bottom:0.1em;">Operator</h1>
+<h1 align="center">Operator</h1>
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.3.8-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
-  <img src="https://img.shields.io/github/last-commit/jeffbai996/operator" alt="last commit">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
 </p>
