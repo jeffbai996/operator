@@ -1,12 +1,12 @@
 """Browser operator — live view + full remote control of the logged-in Chrome.
 
-One self-contained surface (works full-screen, e.g. on a tablet) that shows the
+One self-contained surface (full-screen on an iPad behind a reverse proxy) that shows the
 real Chrome the squad's computer-use drives and lets you take the wheel live —
 click, type, navigate — interleaving freely with whatever a bot is doing in the
 same browser (shared mouse; last action wins). "See it, steer it." (Jeff
 2026-06-25; refined for click/keyboard control + more controls 2026-06-26.)
 
-Zero new deps — playwright + aiohttp are already in the host app's venv:
+Zero new deps — playwright + aiohttp are already in the host app venv:
   - VIEW: a background thread holds a Playwright connect_over_cdp() attach to the
     Chrome on :9222 and grabs JPEG frames of the active page into a buffer. The
     Flask route streams that as multipart/x-mixed-replace (MJPEG) → an <img>.
@@ -25,7 +25,7 @@ from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
 
 CDP_URL = "http://127.0.0.1:9222"
-FRAME_INTERVAL = 0.08      # ~12fps — snappier feed, still light
+FRAME_INTERVAL = 0.066     # ~15fps — middle ground (20 stalled the CDP grab, 12 was fine); dedup keeps a static page ~0.5fps
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
 
@@ -46,6 +46,7 @@ _PLACEHOLDER_JPEG = _b64ph.b64decode(
 class _Streamer:
     frame: bytes | None = None
     frame_ts: float = 0.0
+    _frame_hash: int = 0          # hash of the last frame — skip re-publishing identical frames (battery/data)
     last_view: float = 0.0
     status: str = "idle"          # idle | connecting | live | error
     detail: str = ""
@@ -233,8 +234,13 @@ class _Streamer:
                 async with self._iolock():
                     png = await self._grab(self._page)
                 if png:
-                    self.frame = png
-                    self.frame_ts = time.monotonic()
+                    # frame-dedup: only publish (bump frame_ts) when the image actually
+                    # changed, so a STATIC page streams ~nothing instead of full fps.
+                    h = hash(png)
+                    if h != self._frame_hash:
+                        self._frame_hash = h
+                        self.frame = png
+                        self.frame_ts = time.monotonic()
                     _misses = 0
                 else:
                     _misses += 1
@@ -290,7 +296,7 @@ class _Streamer:
                 self._cdp = sess
             res = await asyncio.wait_for(
                 sess.send("Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_QUALITY}),
-                timeout=2.5)
+                timeout=4.0)
             try:
                 cr = await asyncio.wait_for(sess.send("Runtime.evaluate", {
                     "expression": "JSON.stringify(window.__opClick||null)",
@@ -309,7 +315,7 @@ class _Streamer:
             try:
                 return await asyncio.wait_for(
                     page.screenshot(type="jpeg", quality=JPEG_QUALITY, animations="disabled"),
-                    timeout=2.5)
+                    timeout=4.0)
             except Exception:
                 return None
 
@@ -545,10 +551,30 @@ class _Streamer:
                 # numeric dy/dx → precise user wheel/touch scroll; else keyword amounts.
                 dx = action.get("dx"); dy = action.get("dy")
                 if isinstance(dy, (int, float)) or isinstance(dx, (int, float)):
-                    await p.mouse.wheel(float(dx or 0), float(dy or 0))
+                    fdx, fdy = float(dx or 0), float(dy or 0)
+                    # mouse.wheel dispatches at the CURRENT mouse pos — if that's the
+                    # (0,0) corner (no prior move) Chrome eats up-scroll (you're already
+                    # at the corner's top). Park the mouse over the page center first so
+                    # the wheel lands on real content and BOTH directions work.
+                    try:
+                        dims = await self._viewport_dims(p)
+                        await p.mouse.move(dims["w"] / 2, dims["h"] / 2)
+                    except Exception:
+                        pass
+                    await p.mouse.wheel(fdx, fdy)
+                    # belt-and-suspenders: also nudge via JS (no-op on eval-blocked sites)
+                    try:
+                        await p.evaluate("(d)=>window.scrollBy(d.x,d.y)", {"x": fdx, "y": fdy})
+                    except Exception:
+                        pass
                 else:
                     amt = {"up": -600, "down": 600, "top": -100000,
                            "bottom": 100000}.get(val, 600)
+                    try:
+                        dims = await self._viewport_dims(p)
+                        await p.mouse.move(dims["w"] / 2, dims["h"] / 2)
+                    except Exception:
+                        pass
                     await p.mouse.wheel(0, amt)
             elif kind == "back":
                 await p.go_back(timeout=15000)
@@ -671,10 +697,10 @@ def operator_stream():
             if f and ts != last_sent:
                 last_sent = ts; last_push = now      # push a new frame immediately
                 yield _part(f)
-            elif f and (now - last_push) > 1.0:
-                last_push = now                       # ~1s heartbeat of last frame
+            elif f and (now - last_push) > 2.0:
+                last_push = now                       # ~0.5fps heartbeat of last frame (static page)
                 yield _part(f)
-            elif not f and (now - last_push) > 1.0:
+            elif not f and (now - last_push) > 2.0:
                 last_push = now                       # placeholder heartbeat (no frame yet)
                 yield _part(_PLACEHOLDER_JPEG)
             time.sleep(POLL)
@@ -853,6 +879,8 @@ import glob as _glob
 # bot → (config_dir, cwd) used to locate its transcript project dir.
 _BOT_PROJECT = {
     "claude-a":     ("~/.claude",            "~/agents/claude-a"),
+    "claude-a":  ("~/.claude",            "~/agents/claude-a"),
+    "claude-b": ("~/.claude",            "~/agents/claude-b"),
     "claude-b":      ("~/.config/claude-b",        "~"),
     "gpt":        (None, None),  # different arch; no claude transcript
 }
@@ -943,6 +971,8 @@ import subprocess as _sp
 # claude-b runs from ~ so match its CLAUDE_CONFIG_DIR in the environ instead.
 _BOT_LIVE_CWD = {
     "claude-a": "/agents/claude-a",
+    "claude-a": "/agents/claude-a",
+    "claude-b": "/agents/claude-b",
 }
 _BOT_LIVE_ENV = {"claude-b": ".config/claude-b"}
 
