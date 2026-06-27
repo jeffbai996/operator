@@ -25,7 +25,7 @@ from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
 
 CDP_URL = "http://127.0.0.1:9222"
-FRAME_INTERVAL = 0.1       # ~10fps; eager CDP-session rebind keeps it stable, dedup keeps a static page ~0.5fps
+FRAME_INTERVAL = 0.08      # ~12fps — snappier feed, still light
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
 
@@ -46,8 +46,6 @@ _PLACEHOLDER_JPEG = _b64ph.b64decode(
 class _Streamer:
     frame: bytes | None = None
     frame_ts: float = 0.0
-    _frame_hash: int = 0          # hash of the last frame — skip re-publishing identical frames (battery/data)
-    _cdp_page: object = None      # the page the cached CDP session is bound to (recreate on change)
     last_view: float = 0.0
     status: str = "idle"          # idle | connecting | live | error
     detail: str = ""
@@ -235,13 +233,8 @@ class _Streamer:
                 async with self._iolock():
                     png = await self._grab(self._page)
                 if png:
-                    # frame-dedup: only publish (bump frame_ts) when the image actually
-                    # changed, so a STATIC page streams ~nothing instead of full fps.
-                    h = hash(png)
-                    if h != self._frame_hash:
-                        self._frame_hash = h
-                        self.frame = png
-                        self.frame_ts = time.monotonic()
+                    self.frame = png
+                    self.frame_ts = time.monotonic()
                     _misses = 0
                 else:
                     _misses += 1
@@ -292,21 +285,12 @@ class _Streamer:
         import base64 as _b64
         try:
             sess = getattr(self, "_cdp", None)
-            # the CDP session is bound to a page — if the active page changed (nav /
-            # tab switch), the old session is stale and would time out. Recreate it
-            # eagerly for the current page instead of capturing through a dead one.
-            if sess is None or getattr(self, "_cdp_page", None) is not page:
-                try:
-                    if sess is not None:
-                        try: await sess.detach()
-                        except Exception: pass
-                except Exception: pass
+            if sess is None:
                 sess = await page.context.new_cdp_session(page)
                 self._cdp = sess
-                self._cdp_page = page
             res = await asyncio.wait_for(
                 sess.send("Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_QUALITY}),
-                timeout=4.0)
+                timeout=2.5)
             try:
                 cr = await asyncio.wait_for(sess.send("Runtime.evaluate", {
                     "expression": "JSON.stringify(window.__opClick||null)",
@@ -321,11 +305,11 @@ class _Streamer:
                 pass
             return _b64.b64decode(res["data"])
         except Exception:
-            self._cdp = None; self._cdp_page = None  # rebuild next grab
+            self._cdp = None  # session may be stale (page nav) — rebuild next time
             try:
                 return await asyncio.wait_for(
                     page.screenshot(type="jpeg", quality=JPEG_QUALITY, animations="disabled"),
-                    timeout=4.0)
+                    timeout=2.5)
             except Exception:
                 return None
 
@@ -561,30 +545,10 @@ class _Streamer:
                 # numeric dy/dx → precise user wheel/touch scroll; else keyword amounts.
                 dx = action.get("dx"); dy = action.get("dy")
                 if isinstance(dy, (int, float)) or isinstance(dx, (int, float)):
-                    fdx, fdy = float(dx or 0), float(dy or 0)
-                    # mouse.wheel dispatches at the CURRENT mouse pos — if that's the
-                    # (0,0) corner (no prior move) Chrome eats up-scroll (you're already
-                    # at the corner's top). Park the mouse over the page center first so
-                    # the wheel lands on real content and BOTH directions work.
-                    try:
-                        dims = await self._viewport_dims(p)
-                        await p.mouse.move(dims["w"] / 2, dims["h"] / 2)
-                    except Exception:
-                        pass
-                    await p.mouse.wheel(fdx, fdy)
-                    # belt-and-suspenders: also nudge via JS (no-op on eval-blocked sites)
-                    try:
-                        await p.evaluate("(d)=>window.scrollBy(d.x,d.y)", {"x": fdx, "y": fdy})
-                    except Exception:
-                        pass
+                    await p.mouse.wheel(float(dx or 0), float(dy or 0))
                 else:
                     amt = {"up": -600, "down": 600, "top": -100000,
                            "bottom": 100000}.get(val, 600)
-                    try:
-                        dims = await self._viewport_dims(p)
-                        await p.mouse.move(dims["w"] / 2, dims["h"] / 2)
-                    except Exception:
-                        pass
                     await p.mouse.wheel(0, amt)
             elif kind == "back":
                 await p.go_back(timeout=15000)
@@ -707,10 +671,10 @@ def operator_stream():
             if f and ts != last_sent:
                 last_sent = ts; last_push = now      # push a new frame immediately
                 yield _part(f)
-            elif f and (now - last_push) > 2.0:
-                last_push = now                       # ~0.5fps heartbeat of last frame (static page)
+            elif f and (now - last_push) > 1.0:
+                last_push = now                       # ~1s heartbeat of last frame
                 yield _part(f)
-            elif not f and (now - last_push) > 2.0:
+            elif not f and (now - last_push) > 1.0:
                 last_push = now                       # placeholder heartbeat (no frame yet)
                 yield _part(_PLACEHOLDER_JPEG)
             time.sleep(POLL)
