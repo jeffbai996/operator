@@ -1,4 +1,4 @@
-<h1 align="center">Operator</h1>
+<h1 align="center" style="font-size:3em; margin-bottom:0.1em;">Operator</h1>
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
