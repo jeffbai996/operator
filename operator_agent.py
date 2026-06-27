@@ -342,6 +342,11 @@ class AgentRunner:
             self.started_ts = time.time()
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
+            # default the claude runtime to Sonnet 4.6 / medium when nothing was picked
+            # (empty model would otherwise drop the flag and use the CLI's own default).
+            if b.get("runtime") == "claude":
+                if not self.model:  self.model = "sonnet"
+                if not self.effort: self.effort = "medium"
             self._thread = threading.Thread(target=self._run, args=(binpath, b, task),
                                             daemon=True, name="operator-agent")
             self._thread.start()
