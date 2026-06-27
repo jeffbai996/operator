@@ -56,7 +56,7 @@ AGENT_BOTS = {
             "persona": "You are GPT — concise, capable." + _BROWSER_MANDATE},
 }
 
-_BROWSE = os.path.expanduser("~/.operator/browse")
+_BROWSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse")
 # MCP config that gives the agent the Playwright tools, attached to :9222 Chrome
 # via the same stdio wrapper the bots use (cdp-endpoint --ensure inside it).
 _MCP_CONFIG = {
