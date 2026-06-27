@@ -504,6 +504,11 @@
       position: relative; overflow: hidden; }
     .op-resizer { display: none; }
     .op-url { font-size: 0.66rem; }
+    /* MOBILE ONLY: the −/+ control scales the whole chat box together (input + the
+       model/effort pickers), so the chatbox text matches the message scale. Desktop
+       keeps fixed sizes. */
+    #op-input.op-input { font-size: calc(0.66rem * var(--chat-scale)); }
+    .op-mini { font-size: calc(0.64rem * var(--chat-scale)); }
     /* iOS focus-zoom is handled in JS (lock maximum-scale on focus, restore on
        blur) so we keep the compact font here without the box zooming the viewport
        AND without blocking pinch-zoom otherwise. See the focusin/focusout handler. */
@@ -632,7 +637,7 @@
   .op-inputbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
   .op-steer { display: flex; gap: 0.4rem; align-items: center; }
   .op-input { flex: 1 1 auto; width: 100%; background: transparent; border: none; outline: none;
-    color: var(--fg); font: 500 calc(0.66rem * var(--chat-scale))/1.35 'Plus Jakarta Sans', sans-serif; padding: 0.2rem 0.25rem;
+    color: var(--fg); font: 500 0.66rem/1.35 'Plus Jakarta Sans', sans-serif; padding: 0.2rem 0.25rem;
     text-align: left; resize: none; overflow-y: auto; max-height: 5.2em;
     white-space: pre-wrap; word-break: break-word; }
   /* iOS zooms in on focus of any input < 16px — bump to 16px on touch devices
@@ -675,7 +680,7 @@
   .op-modelrow { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: nowrap;
     padding-top: 0.25rem; border-top: 1px solid var(--border); overflow: visible; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
-    border: none; cursor: pointer; font: 600 calc(0.64rem * var(--chat-scale))/1.5 'Plus Jakarta Sans', sans-serif;
+    border: none; cursor: pointer; font: 600 0.64rem/1.5 'Plus Jakarta Sans', sans-serif;
     padding: 0.1rem 0.92rem 0.1rem 0.25rem; flex: 0 0 auto; width: auto; line-height: 1.5;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M1 1l3 3 3-3' fill='none' stroke='%237e8a9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
     background-position: right 0.28rem center; background-size: 6px 4px; background-repeat: no-repeat; }
