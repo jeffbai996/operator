@@ -47,6 +47,7 @@ class _Streamer:
     frame: bytes | None = None
     frame_ts: float = 0.0
     _frame_hash: int = 0          # hash of the last frame — skip re-publishing identical frames (battery/data)
+    _cdp_page: object = None      # the page the cached CDP session is bound to (recreate on change)
     last_view: float = 0.0
     status: str = "idle"          # idle | connecting | live | error
     detail: str = ""
@@ -291,9 +292,18 @@ class _Streamer:
         import base64 as _b64
         try:
             sess = getattr(self, "_cdp", None)
-            if sess is None:
+            # the CDP session is bound to a page — if the active page changed (nav /
+            # tab switch), the old session is stale and would time out. Recreate it
+            # eagerly for the current page instead of capturing through a dead one.
+            if sess is None or getattr(self, "_cdp_page", None) is not page:
+                try:
+                    if sess is not None:
+                        try: await sess.detach()
+                        except Exception: pass
+                except Exception: pass
                 sess = await page.context.new_cdp_session(page)
                 self._cdp = sess
+                self._cdp_page = page
             res = await asyncio.wait_for(
                 sess.send("Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_QUALITY}),
                 timeout=4.0)
@@ -311,7 +321,7 @@ class _Streamer:
                 pass
             return _b64.b64decode(res["data"])
         except Exception:
-            self._cdp = None  # session may be stale (page nav) — rebuild next time
+            self._cdp = None; self._cdp_page = None  # rebuild next grab
             try:
                 return await asyncio.wait_for(
                     page.screenshot(type="jpeg", quality=JPEG_QUALITY, animations="disabled"),
