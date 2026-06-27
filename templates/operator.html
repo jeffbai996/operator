@@ -1489,6 +1489,8 @@
     if (failed) {
       _task.classList.add('op-task-failed');
       label = labelOverride || (secs < 2 ? 'Error' : 'Interrupted');
+    } else if (labelOverride) {
+      label = labelOverride;   // e.g. 'Steered' — clean close, not an error
     } else {
       const verb = DONE_VERBS[secs % DONE_VERBS.length];
       const dur = secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s';
@@ -2032,12 +2034,15 @@
       logUser(txt);
       if (_inFlight) {
         // INTERRUPT-STEER: a mid-run message stops the current turn and immediately
-        // redirects the bot with the new message (no queueing/waiting).
-        logRes('interrupting — redirecting the bot…', true);
-        try { await stopAgent(); } catch(_){}
-        // brief beat so the backend registers the stop before we start the new turn
-        await new Promise(r => setTimeout(r, 350));
-        _interrupting = false; _handledState = '';   // clear the interrupt guard for the NEW turn
+        // redirects the bot. This is intentional steering, NOT an error — close the
+        // current turn quietly as "Steered" (no Interrupted/error UI, no extra message).
+        _interrupting = true;
+        try { await fetch(STOP_URL, {method:'POST'}); } catch(_){}
+        if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
+        op.dataset.busy='0'; op.dataset.agent='';
+        _inFlight = false;
+        await new Promise(r => setTimeout(r, 350));   // let the backend register the stop
+        _interrupting = false; _handledState = '__interrupted__';  // swallow the backend 'error' from the killed run
         dispatchTask(txt);
         return;
       }
