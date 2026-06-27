@@ -1493,8 +1493,11 @@
       _task.classList.add('op-task-failed');
       label = labelOverride || (secs < 2 ? 'Error' : 'Interrupted');
     } else if (labelOverride) {
-      label = labelOverride;   // e.g. 'Steered' — clean close, not an error
-      if (labelOverride === 'Steered') _task.classList.add('op-task-steered');
+      if (labelOverride === 'Steered') {
+        _task.classList.add('op-task-steered');
+        const dur = secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s';
+        label = 'Steered after ' + dur;   // reflect actual time spent before the steer
+      } else { label = labelOverride; }
     } else {
       const verb = DONE_VERBS[secs % DONE_VERBS.length];
       const dur = secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s';
@@ -1716,6 +1719,7 @@
   let _lastActionEmoji = '💭', _lastActionVerb = 'Thinking';
   let _runProgressTs = 0;
   let _handledState = '';
+  let _postSteerUntil = 0;
   async function pollAgent() {
     if (MODE !== 'auto' || _agentPolling) return;   // guard re-entrancy
     _agentPolling = true;
@@ -1748,6 +1752,7 @@
       // looped "agent stopped" after a stop). Reset when a fresh run starts.
       if (d.state === 'running') _handledState = '';
       if (d.state !== 'running' && _handledState === d.state) { return; }
+      if ((d.state === 'done' || d.state === 'error') && Date.now() < _postSteerUntil) { return; }  // swallow the killed run's tail after a steer
       if (d.state !== 'running') _handledState = d.state;
       if (d.state === 'running') { op.dataset.busy='1'; setCardText(actTxt, 'Working');
         setCardSub(d.bot||'', _lastActionVerb.toLowerCase(), _lastActionEmoji); op.dataset.agent='running'; setInFlight(true);
@@ -2028,7 +2033,7 @@
     setCardSub(bot, '');
     try { const d = await (await fetch(DISPATCH, { method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify({bot, task:txt, model:(document.getElementById('op-model')||{}).value||'', effort:(document.getElementById('op-effort')||{}).value||''}) })).json();
-      if (d.ok) { _handledState=''; _lastAssistant=''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
+      if (d.ok) { _lastAssistant=''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }   // don't clear _handledState here — a post-steer dispatch needs the '__interrupted__' guard to swallow the killed run's stale 'done'
       else { logRes(d.error || 'failed to start ' + bot, false); settleAction(false); }
     } catch { logRes('failed to start agent', false); settleAction(false); }
   }
@@ -2046,7 +2051,8 @@
         op.dataset.busy='0'; op.dataset.agent='';
         _inFlight = false;
         await new Promise(r => setTimeout(r, 350));   // let the backend register the stop
-        _interrupting = false; _handledState = '__interrupted__';  // swallow the backend 'error' from the killed run
+        _postSteerUntil = Date.now() + 1500;  // ignore stale done/error from the killed run
+        _interrupting = false; _handledState = 'done';  // swallow the killed run's stale 'done'/'error' poll so it can't finish the NEW turn as 'Worked for 0s' (resets on the new run's 'running')
         dispatchTask(txt);
         return;
       }
@@ -2274,9 +2280,22 @@
     }, 50);
   }, {passive:false});
 
+  // typed chars are sent per keydown; navigation/special keys are HELD (key_down on press,
+  // key_up on release) so holding an arrow gives smooth continuous movement in the bot
+  // browser (native key-repeat) instead of laggy per-repeat HTTP round-trips.
+  const _heldKeys = new Set();
   stage.addEventListener('keydown', e => { if(e.metaKey||e.ctrlKey||e.altKey) return;
     if(e.key.length===1){ e.preventDefault(); act({kind:'type',value:e.key}, null, true); }
-    else if(PASS[e.key]){ e.preventDefault(); act({kind:'key',value:PASS[e.key]}, null, true); } });
+    else if(PASS[e.key]){ e.preventDefault();
+      if(e.repeat) return;                       // ignore OS auto-repeat — bot Chrome repeats the held key
+      _heldKeys.add(PASS[e.key]);
+      act({kind:'key_down',value:PASS[e.key]}, null, true); } });
+  stage.addEventListener('keyup', e => {
+    if(PASS[e.key] && _heldKeys.has(PASS[e.key])){ e.preventDefault();
+      _heldKeys.delete(PASS[e.key]);
+      act({kind:'key_up',value:PASS[e.key]}, null, true); } });
+  // release any stuck held keys if focus leaves the stage
+  stage.addEventListener('blur', () => { _heldKeys.forEach(k => act({kind:'key_up',value:k}, null, true)); _heldKeys.clear(); });
 })();
 </script>
 {% endblock %}
