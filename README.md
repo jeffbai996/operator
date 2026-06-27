@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.2-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.5.3-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -81,6 +81,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.5.3** — native coordinate mouse tools (vision caps): `browser_mouse_drag_xy` etc. for board/canvas games (Lichess, GeoGuessr) and drag UIs; `browser_pdf_save` to save a page as PDF; held-key navigation (hold an arrow for smooth continuous map pan/rotate instead of laggy taps); interrupt-steer polish — a mid-run message closes the turn as “Steered after Xs” (real elapsed time) with no spurious entry; cleaner action labels (Clicking/Dragging) for the coordinate tools; trace alignment + bigger steps font.
 
 **v0.5.2** — interrupt-steer: a message sent mid-run now stops the current turn and immediately redirects the agent (instead of queueing); the −/+ control scales the whole chat box (input + model/effort pickers), not just the messages.
 
