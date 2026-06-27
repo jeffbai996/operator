@@ -18,7 +18,7 @@
 
 A live **browser / computer-use agent cockpit**. Watch a real Chrome (or desktop) in real time, steer it manually, or hand control to a subscription-backed agent — Claude or GPT — that drives the browser and reports back.
 
-> **Inspired by OpenAI's Operator.** This project borrows the name and the spirit of a watch-the-agent-drive interface. It is an independent implementation, not affiliated with, endorsed by, or derived from OpenAI.
+> **Inspired by OpenAI's Operator.** This project borrows the name and the spirit of a watch-the-agent-drive interface. It is an independent implementation, not affiliated with, endorsed by OpenAI, or derived from any OpenAI products.
 
 > **MIT licensed** — free to use, modify, and distribute. See [`LICENSE`](LICENSE).
 
