@@ -331,9 +331,21 @@
   .op-msg.bot .bubble code, .op-msg.bot .bubble pre {
     background: var(--op-code-bg); border: 1px solid var(--op-code-bd); border-radius: 5px;
     padding: 0.06rem 0.32rem; color: var(--op-code-fg);
-    font: 500 calc(0.7rem * var(--chat-scale))/1.3 'JetBrains Mono', monospace; }
-  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.1rem 0; overflow-x: auto; white-space: pre; line-height: 1.3; }
+    font: 500 calc(0.66rem * var(--chat-scale))/1.3 'JetBrains Mono', monospace; }
+  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.1rem 0; overflow-x: auto; white-space: pre; line-height: 1.3; position: relative; }
   .op-msg.bot .bubble pre code { background: none; border: none; padding: 0; }   /* no double box */
+  /* code-block copy button: top-right, hover-reveal, theme-safe */
+  .op-copy { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+    background: var(--bg-2); color: var(--muted); border: 1px solid var(--op-code-bd);
+    border-radius: 5px; padding: 0; opacity: 0.5; z-index: 3;
+    pointer-events: auto; touch-action: manipulation;
+    transition: opacity .14s, color .14s, border-color .14s; }
+  .op-msg.bot .bubble pre:hover .op-copy { opacity: 0.95; }
+  .op-copy:hover { color: var(--fg); border-color: var(--accent); }
+  .op-copy:active { opacity: 1; }
+  .op-copy.copied { opacity: 1; color: var(--live); border-color: var(--live); }
+  .op-copy svg { display: block; width: 10px; height: 10px; }
   .op-msg.bot .bubble strong { font-weight: 700; }
   .op-msg.bot .bubble a { color: var(--accent); text-decoration: underline; }
   .op-msg.bot .bubble ul { margin: 0.2rem 0 0.2rem 0; padding-left: 1.1rem; }
@@ -351,13 +363,14 @@
   .op-handoff-head { display: flex; align-items: center; gap: 0.45rem;
     font: 700 calc(0.74rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;
     color: var(--fg); letter-spacing: -.01em; }
+  /* traffic-light-YELLOW status dot (band stays orange) */
   .op-handoff-head .hi { flex: 0 0 auto; width: 0.6em; height: 0.6em;
-    background: #f5a04a; border-radius: 50%; display: inline-block;
-    box-shadow: 0 0 0 0 rgba(245,160,74,.55); animation: op-handoff-pulse 1.8s ease-out infinite; }
+    background: #f5c542; border-radius: 50%; display: inline-block;
+    box-shadow: 0 0 0 0 rgba(245,197,66,.55); animation: op-handoff-pulse 1.8s ease-out infinite; }
   @keyframes op-handoff-pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(245,160,74,.5); }
-    70%  { box-shadow: 0 0 0 5px rgba(245,160,74,0); }
-    100% { box-shadow: 0 0 0 0 rgba(245,160,74,0); } }
+    0%   { box-shadow: 0 0 0 0 rgba(245,197,66,.5); }
+    70%  { box-shadow: 0 0 0 5px rgba(245,197,66,0); }
+    100% { box-shadow: 0 0 0 0 rgba(245,197,66,0); } }
   .op-handoff-reason { font: 500 calc(0.72rem * var(--chat-scale))/1.45 var(--chat-font);
     color: var(--fg-2); letter-spacing: -.005em; }
   .op-takeover-btn { align-self: flex-start; cursor: pointer;
@@ -632,7 +645,9 @@
   .op-ubtn { flex: 0 0 auto; background: transparent; border: 1px solid transparent;
     color: var(--fg-2); border-radius: 7px; cursor: pointer; font-size: 1.5rem; line-height: 1;
     width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
-    transition: all .15s; }
+    transition: background .15s, color .15s, border-color .15s, transform .09s cubic-bezier(.34,1.4,.6,1); }
+  .op-ubtn:active { transform: scale(0.86); }
+  .op-ubtn svg { transition: transform .09s cubic-bezier(.34,1.4,.6,1); }
   .op-url-reload { font-size: 1.05rem; }   /* the in-box reload stays compact */
   .op-url-reload .ic-stop { display: none; }
   .op-url-reload.loading .ic-reload { display: none; }
@@ -740,6 +755,12 @@
   @keyframes op-mini-in { 0%{opacity:.3;transform:translateY(2px)} 100%{opacity:1;transform:none} }
   .op-mini-r { margin-left: auto; font-weight: 600; color: var(--muted);
     text-align: right; text-align-last: right; }   /* effort text hugs its caret on the right, raised to line up */
+  /* DESKTOP ONLY: bump the chat-input row text half a notch. Mobile keeps −/+ sizing. */
+  @media (min-width: 821px) {
+    .op-input { font-size: 0.70rem; }
+    .op-input::placeholder { font-size: 0.70rem; }
+    .op-mini { font-size: 0.68rem; }
+  }
 
   /* ── Operator-style task group: steps indented under a collapsible header that
      shows the live action while running, then "Worked for Nm" when done ── */
@@ -768,9 +789,12 @@
   .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
   .op-task-head .verb { font-weight: 700; color: var(--fg); }   /* bold live action */
   .op-task[data-busy="0"] .op-task-head .verb { font-weight: 600; color: var(--fg-2); }
-  .op-task-head .car { margin-left: auto; color: var(--muted); display: inline-flex;
-    align-items: center; justify-content: center; transition: transform .2s; }
-  .op-task-head .car svg { display: block; }
+  /* collapse caret — a pure-CSS chevron (two borders rotated 45°), fixed px so it can't shrink. */
+  .op-task-head .car { margin-left: auto; flex: 0 0 auto; width: 14px; height: 14px;
+    position: relative; transition: transform .2s; }
+  .op-task-head .car::before { content: ""; position: absolute; top: 3px; left: 4px;
+    width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+    transform: rotate(45deg); }
   .op-task.collapsed .op-task-head .car { transform: rotate(-90deg); }
   /* steps: indented list with a subtle left vertical rule */
   .op-task-steps { margin: 0.1rem 0 0.2rem 1.05rem; padding-left: 0.85rem;
@@ -817,6 +841,10 @@
   .op-task-step:not(.op-act-step)::before { content: ""; position: absolute;
     left: calc(-0.85rem - 3.25px); top: 0.52rem; width: 5px; height: 5px; border-radius: 50%;
     background: var(--muted); box-shadow: 0 0 0 3px var(--bg-2); }
+  /* inline coordinate detail after "Clicking"/"Dragging" — lighter, smaller, set apart */
+  .op-act-coord { margin-left: 0.4rem; font-weight: 400; color: var(--muted);
+    font: 400 calc(0.6rem * var(--chat-scale))/1 'JetBrains Mono', monospace;
+    letter-spacing: -.01em; vertical-align: baseline; }
   /* plain detail (element names under Clicking/Typing/etc.) — NOT a code block */
   .op-act-detail-plain { color: var(--muted); font-weight: 400; max-width: 100%;
     font: 500 calc(0.66rem * var(--chat-scale))/1.45 var(--chat-font);
@@ -824,10 +852,13 @@
   .op-act-detail { color: var(--fg-2); font-weight: 400; max-width: 100%;
     /* commands + URLs render as a code block (scales with the +/- font control) */
     font-family: 'JetBrains Mono', monospace;
-    font-size: calc(0.66rem * var(--chat-scale)); line-height: 1.45;
+    font-size: calc(0.62rem * var(--chat-scale)); line-height: 1.45;
     background: rgba(255,255,255,.05); border: 1px solid var(--border);
     border-radius: 5px; padding: 0.28rem 0.42rem; margin-top: 0.18rem;
-    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    transition: border-color .15s, background .15s; }
+  a.op-act-detail { color: var(--fg-2); text-decoration: none; display: block; cursor: pointer; }
+  a.op-act-detail:hover { border-color: var(--accent); background: rgba(184,192,204,.08); color: var(--fg); }
   /* step-count header at the top of the live trace — white, same size as action labels */
   .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
     letter-spacing: .01em; margin: 0 0 0.3rem 0.35rem; }
@@ -841,7 +872,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.5</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.6</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -1038,6 +1069,8 @@
     try { const d = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (d && d.log) { log.innerHTML = d.log; log.scrollTop = log.scrollHeight; updateJump();
         log.querySelectorAll('.op-handoff').forEach(c => c.remove());
+        log.querySelectorAll('.op-copy').forEach(c => c.remove());
+        if (typeof _addCopyButtons === 'function') log.querySelectorAll('.op-msg.bot .bubble').forEach(_addCopyButtons);
         if (typeof _markLastUser === 'function') _markLastUser(); }
       return d || {};
     } catch { return {}; }
@@ -1414,11 +1447,42 @@
     if(inList) html+='</ul>';
     return html;
   }
+  function _addCopyButtons(bubble){
+    bubble.querySelectorAll('pre').forEach(pre => {
+      if (pre.querySelector('.op-copy')) return;
+      pre.classList.add('op-haspre');
+      const btn=document.createElement('button'); btn.type='button'; btn.className='op-copy';
+      btn.title='copy'; btn.setAttribute('aria-label','copy code');
+      const NS='http://www.w3.org/2000/svg';
+      const mk=(d)=>{const sv=document.createElementNS(NS,'svg');sv.setAttribute('viewBox','0 0 24 24');
+        sv.setAttribute('width','12');sv.setAttribute('height','12');sv.setAttribute('fill','none');
+        sv.setAttribute('stroke','currentColor');sv.setAttribute('stroke-width','2');
+        sv.setAttribute('stroke-linecap','round');sv.setAttribute('stroke-linejoin','round');
+        const p=document.createElementNS(NS,'path');p.setAttribute('d',d);sv.appendChild(p);return sv;};
+      const COPY_D='M9 9h10v10H9zM5 15V5h10';
+      const CHECK_D='M5 13l4 4L19 7';
+      btn.appendChild(mk(COPY_D));
+      let _busy=false;
+      async function doCopy(ev){
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        if (_busy) return; _busy=true;
+        const code=pre.querySelector('code'); const txt=code? code.textContent : pre.textContent;
+        try { await navigator.clipboard.writeText(txt); }
+        catch(_){ try{const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');ta.remove();}catch(__){} }
+        btn.classList.add('copied'); btn.replaceChildren(mk(CHECK_D));
+        setTimeout(()=>{ btn.classList.remove('copied'); btn.replaceChildren(mk(COPY_D)); _busy=false; }, 1200);
+      }
+      btn.addEventListener('click', doCopy);
+      btn.addEventListener('touchend', doCopy, { passive: false });
+      pre.appendChild(btn);
+    });
+  }
   function logBotReply(text) {
     markScroll();
     const m = document.createElement('div'); m.className='op-msg bot';
     const b = document.createElement('span'); b.className='bubble';
     b.innerHTML = _mdToHtml(text);   // _mdToHtml escapes first → XSS-safe
+    _addCopyButtons(b);
     m.appendChild(b); log.appendChild(m); _trimOnly(); scrollToBottom();
   }
 
@@ -1526,10 +1590,10 @@
   function _caretSVG(){
     const NS='http://www.w3.org/2000/svg';
     const svg=document.createElementNS(NS,'svg');
-    svg.setAttribute('viewBox','0 0 24 24'); svg.setAttribute('width','12'); svg.setAttribute('height','12');
-    svg.setAttribute('fill','none'); svg.setAttribute('stroke','currentColor'); svg.setAttribute('stroke-width','2.4');
+    svg.setAttribute('viewBox','0 0 16 16'); svg.setAttribute('width','15'); svg.setAttribute('height','15');
+    svg.setAttribute('fill','none'); svg.setAttribute('stroke','currentColor'); svg.setAttribute('stroke-width','2');
     svg.setAttribute('stroke-linecap','round'); svg.setAttribute('stroke-linejoin','round'); svg.setAttribute('aria-hidden','true');
-    const path=document.createElementNS(NS,'path'); path.setAttribute('d','M6 10l6 6 6-6');
+    const path=document.createElementNS(NS,'path'); path.setAttribute('d','M3 6l5 5 5-5');
     svg.appendChild(path); return svg;
   }
   function sweepOrphanTasks(){
@@ -1553,8 +1617,7 @@
     _taskStart = Date.now();
     _task = document.createElement('div'); _task.className='op-task'; _task.dataset.busy='1';
     const head=document.createElement('div'); head.className='op-task-head';
-    const car=_el('car'); car.appendChild(_caretSVG());
-    head.appendChild(_el('ico')); head.appendChild(_el('verb','Working\u2026')); head.appendChild(car);
+    head.appendChild(_el('ico')); head.appendChild(_el('verb','Working\u2026')); head.appendChild(_el('car'));   // .car = CSS-drawn chevron
     const steps=document.createElement('div'); steps.className='op-task-steps';
     const cnt=document.createElement('div'); cnt.className='op-step-count'; cnt.hidden=true;
     cnt.innerHTML='<span class="sc-n">0 steps</span>';
@@ -1593,7 +1656,8 @@
     const steps = _task.querySelector('.op-task-steps');
     const _last = steps && steps.lastElementChild;
     const _sig = (label||'') + '' + (detail||'');
-    if (_last && _last.classList.contains('op-act-step') && _last.dataset.sig === _sig) {
+    const _noCoalesce = /^(Browsing|Navigating|Going back|Going forward)$/.test(label||'');
+    if (!_noCoalesce && _last && _last.classList.contains('op-act-step') && _last.dataset.sig === _sig) {
       const n = (parseInt(_last.dataset.n || '1', 10) || 1) + 1;
       _last.dataset.n = n;
       let badge = _last.querySelector('.op-act-x');
@@ -1620,13 +1684,27 @@
     // carries backticks → render markdown so it shows as a code chip. _mdToHtml escapes first.
     if ((label||'').indexOf('`') !== -1) lab.innerHTML=_mdToHtml(label); else lab.textContent=label||'';
     e.appendChild(ico); e.appendChild(lab);
-    if (detail) {
+    const _isCoord = detail && /^\(\s*-?\d/.test(detail.trim());
+    if (detail && _isCoord) {
+      const c=document.createElement('span'); c.className='op-act-coord'; c.textContent=detail;
+      lab.appendChild(c);
+    } else if (detail) {
       const lab2 = (label||'').toLowerCase();
       const isCmd = /command|^ran|run js|running js|reading file|writing file|editing file/.test(lab2);
-      const isUrlOrPath = /^(https?:\/\/|\/|~\/|\.\/)/.test(detail.trim()) || /\s-{1,2}\w/.test(detail);
-      const d=document.createElement('div');
-      d.className = (isCmd || isUrlOrPath) ? 'op-act-detail' : 'op-act-detail-plain';
-      d.textContent=detail; e.appendChild(d);
+      const t = detail.trim();
+      const isHttp = /^https?:\/\//.test(t);
+      const isUrlOrPath = isHttp || /^(\/|~\/|\.\/)/.test(t) || /\s-{1,2}\w/.test(detail);
+      let d;
+      if (isHttp) {
+        d=document.createElement('a'); d.className='op-act-detail';
+        d.href = t.split(/\s/)[0]; d.target='_blank'; d.rel='noopener';
+        d.textContent=detail;
+      } else {
+        d=document.createElement('div');
+        d.className = (isCmd || isUrlOrPath) ? 'op-act-detail' : 'op-act-detail-plain';
+        d.textContent=detail;
+      }
+      e.appendChild(d);
     }
     markScroll();
     _task.querySelector('.op-task-steps').appendChild(e);
@@ -1833,6 +1911,10 @@
     input.placeholder = _inFlight ? 'Follow up' : 'Message Operator';
   }
   function applyMode() {
+    // keep the chat fixed across AUTO⇄MAN: toggling the "Manual mode" banner reflows
+    // the log and shoves it up (Jeff). Capture position before, restore after the reflow.
+    const _atBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 24;
+    const _fromBottom = log.scrollHeight - log.scrollTop;
     op.dataset.mode = MODE;   // drives the sliding thumb (orange MAN ⇄ green AUTO)
     modeBox.setAttribute('data-mode', MODE);   // drives the sliding thumb
     modeBox.querySelectorAll('.op-mode-btn').forEach(b =>
@@ -1859,6 +1941,10 @@
       // orange ring + "Manual". (a real page-load will set busy=1 → spinner.)
       op.dataset.agent = ''; op.dataset.busy = '0';
       actTxt.textContent = 'Ready'; setCardSub('', ''); }
+    // restore the log position after the banner toggle reflows the rail
+    void log.offsetHeight;   // force synchronous reflow
+    if (_atBottom) log.scrollTop = log.scrollHeight;
+    else log.scrollTop = Math.max(0, log.scrollHeight - _fromBottom);
   }
   modeBox.addEventListener('click', e => { const b=e.target.closest('.op-mode-btn');
     if (b) { MODE = b.dataset.mode; applyMode(); saveSession(); } });
@@ -1874,7 +1960,9 @@
   let _runProgressTs = 0;
   let _handledState = '';
   let _postSteerUntil = 0;
+  let _steering = false;   // suppress terminal handling from steer until the new run is 'running'
   let _handoffTs = 0;
+  let _handoffActive = false; // a hand-off concluded THIS turn → don't also emit done/error
   let _sawRunning = false;   // did we observe this turn go 'running' in THIS page load?
   let _errShown = false;     // one error card per turn — suppress the stacking (Jeff)
   function turnError(title, reason){
@@ -1912,12 +2000,14 @@
       if (msgs.length) _runProgressTs = Date.now();   // any new msg = progress
       // terminal states must be handled ONCE — not re-fired every poll (that
       // looped "agent stopped" after a stop). Reset when a fresh run starts.
-      if (d.state === 'running') { _handledState = ''; _handoffTs = 0; _errShown = false; _sawRunning = true; }
+      if (d.state === 'running') { _handledState = ''; _handoffTs = 0; _errShown = false; _sawRunning = true; _steering = false; }
+      if (_steering && d.state !== 'running') { return; }   // post-steer: swallow killed run's stale done/error
       // a turn that finished BEFORE this page load (refresh): never saw it run, so don't
       // re-emit its reply/handoff/error — the restored log already shows it. mark + bail.
       if (d.state !== 'running' && !_sawRunning) { _handledState = d.state; return; }
       if (d.handoff && d.handoff.ts && d.handoff.ts !== _handoffTs) {
         _handoffTs = d.handoff.ts;
+        _handoffActive = true;     // suppress this turn's done/error tail
         if (_task) { try { finishTask(false, 'Stopped'); } catch(_){} }
         renderHandoff(d.handoff.reason || '');
         op.dataset.busy='0'; op.dataset.agent='stopped'; setInFlight(false);
@@ -1925,6 +2015,8 @@
         _handledState = d.state;
         return;
       }
+      // a hand-off already concluded this turn → don't also emit reply/no-summary/error.
+      if (_handoffActive && d.state !== 'running') { _handledState = d.state; return; }
       if (d.state !== 'running' && _handledState === d.state) { return; }
       if ((d.state === 'done' || d.state === 'error') && Date.now() < _postSteerUntil) { return; }  // swallow the killed run's tail after a steer
       if (d.state !== 'running') _handledState = d.state;
@@ -2204,7 +2296,7 @@
   async function dispatchTask(txt){
     const bot = selectedBot();
     log.querySelectorAll('.op-handoff').forEach(c => c.remove());
-    _handoffTs = 0; _errShown = false; op.dataset.agent='';
+    _handoffTs = 0; _handoffActive = false; _errShown = false; op.dataset.agent='';
     op.dataset.busy='1'; setCardText(actTxt, 'Starting up');
     setCardSub(bot, '');
     try { const d = await (await fetch(DISPATCH, { method:'POST',
@@ -2221,14 +2313,15 @@
         // INTERRUPT-STEER: a mid-run message stops the current turn and immediately
         // redirects the bot. This is intentional steering, NOT an error — close the
         // current turn quietly as "Steered" (no Interrupted/error UI, no extra message).
-        _interrupting = true;
+        _interrupting = true; _steering = true;
         try { await fetch(STOP_URL, {method:'POST'}); } catch(_){}
         if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
         op.dataset.busy='0'; op.dataset.agent='';
         _inFlight = false;
-        await new Promise(r => setTimeout(r, 350));   // let the backend register the stop
-        _postSteerUntil = Date.now() + 1500;  // ignore stale done/error from the killed run
-        _interrupting = false; _handledState = 'done';  // swallow the killed run's stale 'done'/'error' poll so it can't finish the NEW turn as 'Worked for 0s' (resets on the new run's 'running')
+        await new Promise(r => setTimeout(r, 350));
+        _postSteerUntil = Date.now() + 1500;
+        _interrupting = false; _handledState = 'done';
+        setTimeout(()=>{ _steering = false; }, 8000);   // backstop
         dispatchTask(txt);
         return;
       }
