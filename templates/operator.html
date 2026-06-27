@@ -1921,6 +1921,14 @@
         // resume real frames, then trust the open MJPEG connection (no per-poll
         // reconnect — that caused the ~1/sec flicker).
         if (_wasLost) { _wasLost = false; connectStream(); }
+        // STALE-STREAM WATCHDOG: a silently-starved MJPEG <img> (proxy holds the
+        // connection open but stops feeding) never fires 'error' — it just freezes.
+        // If the server is producing frames but the <img> hasn't loaded one in >6s,
+        // the client stream froze → force a fresh reconnect.
+        else if (_lastImgLoad && (Date.now() - _lastImgLoad > 6000)) {
+          _lastImgLoad = Date.now();   // debounce so we don't reconnect every poll
+          connectStream();
+        }
         signalOk();
         // settle a stuck "Connecting…" heading once the feed is live (works in AUTO too,
         // where setState skips the heading). Only override connecting/reconnecting text,
