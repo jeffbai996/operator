@@ -184,6 +184,11 @@
     transition: border-color .3s ease; }
   .op[data-state="live"]:not([data-busy="1"]) .op-action-ico::before {
     border-color: var(--live); }
+  /* connecting/idle (not yet live, not busy): spin the gray ring like the others */
+  .op[data-state="connecting"]:not([data-busy="1"]) .op-action-ico::before,
+  .op[data-state="idle"]:not([data-busy="1"]):not([data-agent="done"]) .op-action-ico::before {
+    border: 2px solid var(--border-2); border-top-color: var(--fg-2);
+    animation: op-spin .8s linear infinite; }
   @keyframes op-spin{to{transform:rotate(360deg)}}
   /* animated checkmark when a task completes — a centered ✓ glyph */
   .op-action-ico::after { content: ""; position: absolute; inset: 0;
