@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.3.2-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.3.3-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/last-commit/jeffbai996/operator" alt="last commit">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
@@ -56,5 +56,7 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.3.3** — agent cursor; browser zoom + back/forward; URL bar Google-searches non-URL input; theme-aware code blocks.
 
 **v0.3.2** — manual-mode card redesign (warn triangle) + animate-in; convo dims rather than clears in MAN; MAN/AUTO persists across refresh; mobile bottom-sheet chat; theme-toggle + nav fixes; stderr-sourced specific error reasons.
