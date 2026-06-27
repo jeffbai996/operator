@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.3.5-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.3.6-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/last-commit/jeffbai996/operator" alt="last commit">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
@@ -56,6 +56,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.3.6** — per-message hover timestamps; edit/retry the last prompt; animated status subline; fonts scale with the +/- control.
 
 **v0.3.5** — tab UI: animations, home/last-tab/new-tab page; the live view follows the agent's active tab.
 
