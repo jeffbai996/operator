@@ -712,6 +712,7 @@
   .op-task[data-busy="0"] .op-task-head .ico::before { content:"\2713"; position:absolute; inset:0;
     display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700; }
   .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { content:"\2715"; color: var(--bad); }
+  .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2); }
   .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
   .op-task-head .verb { font-weight: 700; color: var(--fg); }   /* bold live action */
   .op-task[data-busy="0"] .op-task-head .verb { font-weight: 600; color: var(--fg-2); }
@@ -1491,6 +1492,7 @@
       label = labelOverride || (secs < 2 ? 'Error' : 'Interrupted');
     } else if (labelOverride) {
       label = labelOverride;   // e.g. 'Steered' — clean close, not an error
+      if (labelOverride === 'Steered') _task.classList.add('op-task-steered');
     } else {
       const verb = DONE_VERBS[secs % DONE_VERBS.length];
       const dur = secs>=60 ? Math.floor(secs/60)+'m '+(secs%60)+'s' : secs+'s';
