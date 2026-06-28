@@ -10,7 +10,7 @@
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
     --chat-font: 'Plus Jakarta Sans', sans-serif;   /* chat content font (settings) */
     --live:#3fb950; --live-glow:rgba(63,185,80,.6);
-    --rail-w: minmax(322px, 340px);   /* JS overrides with a px value on drag-resize */
+    --rail-w: minmax(248px, 300px);   /* JS overrides with a px value on drag-resize */
     display: grid; grid-template-columns: var(--rail-w) 1fr; gap: 0.7rem;
     margin: 12px 0; box-sizing: border-box; position: relative;
     height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 380px;
@@ -32,11 +32,11 @@
   .op.op-flat {
     --bg: #000; --bg-2: #060708; --bg-3: #0c0e11; --bg-4: #14171c;
     --border: rgba(255,255,255,.10); --border-2: rgba(255,255,255,.14); }
-  .op.op-flat .op-rail, .op.op-flat .op-browser { background: #000 !important; }
+  .op.op-flat .op-rail, .op.op-flat .op-browser, .op.op-flat .op-tabs { background: #000 !important; backdrop-filter: none !important; }
   [data-theme="light"] .op.op-flat {
     --bg: #eef1f5; --bg-2: #e4e8ee; --bg-3: #dde2e9; --bg-4: #d3d9e2;
     --border: rgba(0,0,0,.14); --border-2: rgba(0,0,0,.20); }
-  [data-theme="light"] .op.op-flat .op-rail, [data-theme="light"] .op.op-flat .op-browser { background: #eef1f5 !important; }
+  [data-theme="light"] .op.op-flat .op-rail, [data-theme="light"] .op.op-flat .op-browser, [data-theme="light"] .op.op-flat .op-tabs { background: #eef1f5 !important; backdrop-filter: none !important; }
 
   /* operator is a computer UI — lock the PAGE from scrolling (no rubber-band,
      no scroll-past-bottom). Only inner regions (.op-log, .op-stage) scroll. */
@@ -87,31 +87,46 @@
   body.op-full .op-rail, body.op-full .op-browser { border-radius: 10px; }
 
   /* ── LEFT RAIL ─────────────────────────────────────────────── */
-  .op-rail { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 0.4rem; min-width: 322px;
+  .op-rail { grid-column: 1; grid-row: 1; position: relative; display: flex; flex-direction: column; gap: 0.28rem; min-width: 248px;
+    container-type: inline-size; container-name: rail;
     min-height: 0; overflow: hidden;   /* enforce grid track → chat log scrolls, box stays fixed */
     background: var(--bg-2); border: 1px solid var(--border-2);
     background-clip: padding-box;
     border-radius: 16px; padding: 0.7rem; }
-  .op-head { display: flex; align-items: center; gap: 0.22rem; margin-top: -2px; }
+  .op-head { display: flex; align-items: center; gap: 0.22rem; margin-top: -1.5px; }
+  @container rail (max-width: 304px) {
+    .op-head { gap: 0.16rem; }
+    .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }
+    .op-fontpill button { width: 17px; }
+  }
+  @container rail (max-width: 273px) {
+    /* shrink the Operator+version unit to nothing (scale, not clip — so no letter gets chopped mid-word) */
+    .op-head .op-titlewrap { transform: scale(0); max-width: 0; opacity: 0; margin-right: 0; margin-left: 0; }
+    .op-head .op-mode { margin-left: 8px; }   /* keep a gap from the status dot once the wordmark is gone */
+  }
   #op-clear { margin-left: auto; }   /* push the icon group to the right edge */
   /* nudge the trash glyph up + right a hair to center it optically in its box */
-  #op-clear svg { display: block; transform: translate(0.3px, -0.5px); transform-origin: center; }
+  #op-clear svg { display: block; transform: translate(0.3px, 0px); transform-origin: center; }
+  #op-flat svg { display: block; transform: translate(-0.25px, 0.5px); transform-origin: center; }
+  #op-full { transform: translate(0.5px, 0.5px); }
   /* no hover zoom — just a smooth shake on clear. keyframes KEEP the base translate so
      the can doesn't drift lower-left, and rotate around its own center. */
   #op-clear.op-clearing svg { animation: op-trash-shake .5s ease-in-out; }
   @keyframes op-trash-shake {
-    0%   { transform: translate(0.3px,-0.5px) rotate(0deg); }
-    20%  { transform: translate(0.3px,-0.5px) rotate(-9deg); }
-    40%  { transform: translate(0.3px,-0.5px) rotate(7deg); }
+    0%   { transform: translate(0.55px,0px) rotate(0deg); }
+    20%  { transform: translate(0.55px,0px) rotate(-9deg); }
+    40%  { transform: translate(0.55px,0px) rotate(7deg); }
     60%  { transform: translate(0.3px,-0.5px) rotate(-5deg); }
     80%  { transform: translate(0.3px,-0.5px) rotate(3deg); }
     100% { transform: translate(0.3px,-0.5px) rotate(0deg); } }
   .op-titlewrap { display: inline-flex; flex-direction: column; justify-content: center;
-    line-height: 1.05; margin-right: 0.15rem; }
+    line-height: 1.1; margin-left: 2px; margin-right: 0.15rem; margin-top: -2px; position: relative; z-index: 0;
+    transform-origin: left center;
+    transition: max-width .3s cubic-bezier(.2,1,.3,1), transform .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .24s ease; max-width: 240px; }
   .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
-    opacity: 0.7; letter-spacing: .02em; margin-top: 4px; }
+    opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
   .op-title { font: 700 0.94rem/1 'Plus Jakarta Sans',sans-serif; color: var(--fg);
-    letter-spacing: -.01em; margin-right: 0.15rem; }
+    letter-spacing: -.01em; margin-right: 0.15rem; white-space: nowrap; }
   .op-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex:0 0 auto;
     transition: background .3s, box-shadow .3s; }
   .op-dot { transition: background .35s ease, box-shadow .35s ease; }
@@ -123,7 +138,7 @@
      color (orange MAN ⇄ green AUTO). No pop/scale jank. */
   .op-mode { position: relative; display: inline-flex; align-items: stretch; flex: 0 0 auto;
     border: 1px solid var(--border-2); border-radius: 8px; overflow: hidden;
-    margin-left: 0.1rem; margin-top: 2px; align-self: center; background: var(--bg); isolation: isolate; }
+    margin-left: 0; margin-right: 0.4rem; margin-top: 0.75px; transform: translateX(-1px); align-self: center; background: var(--bg); isolation: isolate; position: relative; z-index: 2; transition: margin-left .3s cubic-bezier(.2,1,.3,1); }
   .op-mode-thumb { position: absolute; top: 0; bottom: 0; left: 0; width: 50%; z-index: 0;
     border-radius: 7px; background: #f0883e;
     transition: transform .32s cubic-bezier(.5,1.25,.4,1), background-color .28s ease; }
@@ -137,14 +152,14 @@
   /* active label reads against its thumb color */
   .op-mode[data-mode="man"] .op-mode-btn[data-mode="man"] { color: #2a1402; }
   .op-mode[data-mode="auto"] .op-mode-btn[data-mode="auto"] { color: #062611; }
-  .op-mode-btn { text-indent: 1px; }   /* nudge labels right 1px */
+  .op-mode-btn { text-indent: 2.5px; }   /* nudge MAN/AUTO labels right (text only) */
   .op-mode-btn:hover { background: transparent; }   /* kill the global button:hover gray pill */
   .op-mode-btn:not(.active):hover { color: var(--fg-2); background: transparent; }
   /* the caret slot becomes a compact bot <select> in AUTO */
   /* bot picker: closed shows just 🤖 (overlay); dropdown shows full names. The
      select's own text is transparent so the row never reads "🤖 Claude-A". */
   .op-pick-wrap { margin-left: auto; position: relative; flex: 0 0 auto; display: inline-flex; }
-  .op-pick-face { position: absolute; left: calc(50% + 1px); top: calc(50% - 0.5px);
+  .op-pick-face { position: absolute; left: calc(50% + 0.5px); top: calc(50% - 0.5px);
     transform: translate(-50%,-50%); font-size: 0.82rem; pointer-events: none; }
   select.op-action-caret { background: var(--bg-3); color: transparent;
     -webkit-appearance: none; appearance: none;
@@ -165,11 +180,11 @@
   .op-set-row select { background: var(--bg-3); color: var(--fg); border: 1px solid var(--border-2);
     border-radius: 6px; padding: 0.15rem 0.3rem; font: 500 0.66rem/1 'Plus Jakarta Sans', sans-serif; cursor: pointer; }
   .op-fontpill { display: inline-flex; align-items: stretch; border: 1px solid var(--border-2);
-    border-radius: 8px; overflow: hidden; height: 24px; align-self: center; flex: 0 0 auto; }
+    border-radius: 8px; overflow: hidden; height: 20px; align-self: center; flex: 0 0 auto; }
   .op-fontpill button { background: transparent; border: none; color: var(--fg-2); cursor: pointer;
     font: 500 0.84rem/1 'Plus Jakarta Sans', sans-serif; width: 19px; height: 100%; padding: 0; margin: 0;
     display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
-  .op-fontpill button { transform: translate(0.5px, -2px); }
+  .op-fontpill button { transform: translate(0px, -1.5px); }
   .op-fontpill button:hover { background: var(--bg-3); color: var(--fg); }
   .op-fontpill button:active { background: var(--bg-4); }
   .op-fontpill-sep { width: 1px; flex: 0 0 1px; align-self: stretch; background: var(--border); }
@@ -194,10 +209,16 @@
   .op-action:hover, .op-action:focus { background: var(--bg); }
   /* collapsed: the card shrinks to a slim pill — just the live dot + the caret (now an
      expand chevron). text + picker hide. one click on the caret brings it back. */
-  .op[data-status-min="1"] .op-action { padding: 0 0.45rem 0 0.5rem; height: 32px; min-height: 32px;
-    gap: 0.3rem; width: auto; align-self: flex-start; display: flex; align-items: center; }
+  .op[data-status-min="1"] .op-action { padding: 0 0.5rem 0 0.5rem; height: 32px; min-height: 32px;
+    gap: 0.55rem; width: auto; align-self: flex-start; display: flex; align-items: center; }
+  @media (min-width: 821px) { .op[data-status-min="1"] .op-action { gap: 0.32rem; } }   /* desktop: tighter minimized-pill gap; mobile keeps 0.55 (works as-is) */   /* tighter gap for the minimized pill */   /* match the expanded card gap (ring <-> caret) */
   .op-action > div { transition: opacity .18s ease; }
   .op[data-status-min="1"] .op-action > div { opacity: 0; width: 0; overflow: hidden; pointer-events: none; }
+  /* minimized: float the pill below the header so the rest of its row is transparent and
+     the message log reclaims the width underneath it. */
+  .op[data-status-min="1"] .op-action { position: absolute; top: 36px; left: 0.7rem; z-index: 8; width: auto; }
+  .op[data-status-min="1"] .op-log { padding-top: 40px; }
+  .op[data-status-min="1"] .op-man-note { margin-top: 32px; }   /* gap below pill matches the gap above it */   /* clear the floating minimized pill */
   .op[data-status-min="1"] .op-pick-wrap { display: none !important; }
   .op-status-min { transform: rotate(180deg); }                       /* expanded: caret up */
   .op[data-status-min="1"] .op-status-min { transform: rotate(0deg); margin-left: 0; }   /* minimized: caret down */
@@ -248,7 +269,7 @@
   .op[data-agent="stopped"] .op-action-ico::before { border-color: #f5a04a !important; animation: none; }
   .op[data-agent="stopped"] .op-action-ico::after { content: none !important; }
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
-  .op-action-body { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+  .op-action-body { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .op-action-txt { transition: color .25s ease; font: 700 0.9rem/1.2 'Plus Jakarta Sans',sans-serif; color: var(--fg); }
   .op-action-sub { transition: color .25s ease; }
@@ -281,15 +302,18 @@
 
   /* wrap is the flex slot; log scrolls inside it; jump-button floats over it */
   .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .op-jump { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%) translateY(4px);
-    width: 25px; height: 25px; border-radius: 50%; cursor: pointer;   /* smaller */
-    background: var(--bg-4); color: var(--fg); border: 1px solid var(--border-2);
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 4px 14px -4px rgba(0,0,0,.6); z-index: 6;
-    opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
-  .op-jump svg { width: 14px; height: 14px; display: block; }   /* SVG caret scales cleanly */
+  /* "Jump to bottom" live pill — rises from above the input when scrolled up; red dot = feed is live. */
+  /* "Jump to present" pill — filled red, fast-forward glyph, rises from above the input. */
+  .op-jump { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%) translateY(8px);
+    height: 19px; padding: 0 0.5rem 0 0.4rem; border-radius: 999px; cursor: pointer;
+    background: var(--bad); color: #fff; border: 1px solid var(--bad);
+    display: inline-flex; align-items: center; gap: 0.24rem; white-space: nowrap;
+    font: 600 0.6rem/1 'Plus Jakarta Sans', sans-serif;
+    box-shadow: none; z-index: 6;
+    opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
+  .op-jump-ff { flex: 0 0 auto; width: 10px !important; height: 10px !important; }   /* ▶▶ filled fast-forward */
   .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
-  .op-jump:hover { background: var(--bg-3); border-color: var(--accent); }
+  .op-jump:hover { background: #e5484d; border-color: #e5484d; }   /* stay red on hover, no gray, no glow */
   /* conversation log — flex-grows, scrolls */
   .op-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
     display: flex; flex-direction: column; gap: 0.4rem; padding: 0.05rem 0.1rem; }
@@ -407,6 +431,7 @@
   .op-takeover-btn:active { transform: translateY(1px); }
   .op-takeover-btn[disabled] { opacity: 0.5; cursor: default; background: transparent; border-color: var(--border); }
   .op-finish { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .op-finish[hidden], .op-finish-expand[hidden] { display: none; }
   .op-finish-expand { display: flex; flex-direction: column; gap: 0.4rem; animation: op-man-in .26s cubic-bezier(.16,1,.3,1); }
   .op-finish-q { font: 500 calc(0.66rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); }
   .op-finish-opt { font-size: 0.86em; font-style: italic; color: var(--muted); }
@@ -489,7 +514,7 @@
   .op-tab.active { color: var(--fg); background: var(--accent-soft, rgba(184,192,204,.14));
     border-color: var(--border-2); }
   .op-tab .lbl { overflow: hidden; text-overflow: ellipsis; }
-  .op-urlbar { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem;
+  .op-urlbar { display: flex; align-items: center; gap: 0.42rem; padding: 0.34rem 0.55rem;
     background: var(--bg-2); border-bottom: 1px solid var(--border); }
   .op-traffic { display: flex; gap: 5px; flex: 0 0 auto; }
   .op-traffic span { width: 10px; height: 10px; border-radius: 50%; background: var(--border-2); }
@@ -511,10 +536,10 @@
   .op-lock.secure { color: var(--live); }
   .op-lock.insecure { color: var(--muted); }
   .op-url-wrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
-  .op-url { font: 500 0.78rem/1.3 'JetBrains Mono', monospace; color: var(--fg-2);
+  .op-url { font: 500 0.7rem/1.3 'JetBrains Mono', monospace; color: var(--fg-2);
     white-space: nowrap; flex: 1 1 auto; min-width: 0; outline: none;
     background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
-    padding: 0.4rem 2rem 0.4rem 1.7rem; }   /* left pad clears the in-box lock */
+    padding: 0.3rem 1.8rem 0.3rem 1.5rem; }   /* left pad clears the in-box lock */
   /* when there's no lock (blank/non-http), reclaim the left pad so the placeholder sits normally */
   .op-url-wrap:has(.op-lock:empty) .op-url { padding-left: 0.6rem; }
   .op-url-reload { position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
@@ -601,10 +626,23 @@
     /* MOBILE ONLY: the −/+ control scales the whole chat box together (input + the
        model/effort pickers), so the chatbox text matches the message scale. Desktop
        keeps fixed sizes. */
-    #op-input.op-input { font-size: calc(0.66rem * var(--chat-scale)); }
-    .op-mini { font-size: calc(0.64rem * var(--chat-scale)); }
+    #op-input.op-input { font-size: calc(0.72rem * var(--chat-scale)); }   /* +1 notch (mobile) */
+    .op .op-mini { font-size: calc(0.74rem * var(--chat-scale)) !important; }   /* model/effort scales with -/+ (mobile); .op + !important beats the base font: shorthand */
+    #op-input.op-input::placeholder { font-size: calc(0.72rem * var(--chat-scale)); }
+    .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* xN pill digit ~1px low on mobile only — nudge up via bottom-pad */
     .op-act-x { padding: 0 0 1px 0; }
+
+    /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px). */
+    .op-iconbtn { width: 28px; height: 28px; min-width: 28px; font-size: 1.1rem !important; }
+    .op-iconbtn svg { width: 16px !important; height: 16px !important; }
+    #op-full { font-size: 1.05rem; }
+    .op-fontpill { height: 28px; }
+    .op-fontpill button { width: 26px; font-size: 1rem; }
+    .op-mode { margin-top: 0; height: 28px; transform: none; }
+    .op-mode-btn { padding: 0 0.6rem; font-size: 0.78rem; display: flex; align-items: center; }
+    .op-mode-thumb { border-radius: 7px; }
+    .op-head { gap: 0.3rem; align-items: center; }
     /* iOS focus-zoom is handled in JS (lock maximum-scale on focus, restore on
        blur) so we keep the compact font here without the box zooming the viewport
        AND without blocking pinch-zoom otherwise. See the focusin/focusout handler. */
@@ -676,8 +714,8 @@
   /* ── redesign 2026-06-26: modern chatbox + browser chrome ── */
   /* urlbar buttons (reload / tabs / hamburger) */
   .op-ubtn { flex: 0 0 auto; background: transparent; border: 1px solid transparent;
-    color: var(--fg-2); border-radius: 7px; cursor: pointer; font-size: 1.5rem; line-height: 1;
-    width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
+    color: var(--fg-2); border-radius: 7px; cursor: pointer; font-size: 1.3rem; line-height: 1;
+    width: 25px; height: 25px; display: flex; align-items: center; justify-content: center;
     transition: background .15s, color .15s, border-color .15s, transform .09s cubic-bezier(.34,1.4,.6,1); }
   .op-ubtn:active { transform: scale(0.86); }
   .op-ubtn svg { transition: transform .09s cubic-bezier(.34,1.4,.6,1); }
@@ -706,7 +744,7 @@
   .op-tabs[hidden] { display: none; }
   /* overlay the tabs OVER the top of the view so opening them doesn't resize it */
   .op-tabs { position: absolute; top: 0; left: 0; right: 0; z-index: 20;
-    display: flex; gap: 7px; padding: 6px 8px; background: rgba(19,22,31,0.96);
+    display: flex; gap: 7px; padding: 6px 8px; background: var(--bg-2);
     backdrop-filter: blur(6px); border-bottom: 1px solid var(--border); overflow-x: auto; }
   .op-tab { flex: 0 0 auto; max-width: 160px; display: flex; align-items: center; gap: 4px; background: var(--bg-3); border: 1px solid var(--border);
     border-radius: 8px; color: var(--muted); cursor: pointer; padding: 0.34rem 0.7rem;
@@ -813,7 +851,11 @@
   .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
   .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
     color: var(--fg-2); font: 600 calc(0.74rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }   /* left pad aligns spinner center to the trace vertical line */
+    padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }
+  .op-task:hover .op-task-head .verb,
+  .op-task[data-busy="0"] .op-task-head:hover .verb { color: var(--fg); }   /* brighten text on hover, beats the dimmed finished-state color */
+  .op-task-head:hover .car { opacity: 1; }
+  .op-task-head:hover .car::before { border-color: var(--fg); }   /* + the caret */
   .op-task-head .ico { width: 14px; height: 14px; flex: 0 0 auto; position: relative; }
   .op-task[data-busy="1"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
     border-radius:50%;
@@ -828,19 +870,21 @@
   /* stopped (hand-off): a stop symbol instead of the green check */
   .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { content:"\25A0"; color: var(--bad); font-size: 0.7rem; }
   .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
-  .op-task-head .verb { font-weight: 700; color: var(--fg); }   /* bold live action */
+  .op-task-head .verb { font-weight: 700; color: var(--fg); transition: color .16s ease; }   /* bold live action */
   .op-task[data-busy="0"] .op-task-head .verb { font-weight: 600; color: var(--fg-2); }
   /* collapse caret — a pure-CSS chevron (two borders rotated 45°), fixed px so it can't shrink. */
-  .op-task-head .car { margin-left: auto; flex: 0 0 auto; width: 14px; height: 14px;
-    position: relative; transition: transform .2s; }
-  .op-task-head .car::before { content: ""; position: absolute; top: 3px; left: 4px;
-    width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
-    transform: rotate(45deg); }
+  .op-task-head .car { margin-left: auto; flex: 0 0 auto; width: 10px; height: 10px;
+    position: relative; transition: transform .2s, opacity .16s ease; opacity: 0.7; }
+  .op-task-head .car::before { content: ""; position: absolute; top: 2px; left: 2px;
+    width: 4px; height: 4px; border-right: 1.4px solid var(--muted); border-bottom: 1.4px solid var(--muted);
+    transform: rotate(45deg); transition: border-color .16s ease; }   /* small down chevron */
   .op-task.collapsed .op-task-head .car { transform: rotate(-90deg); }
   /* steps: indented list with a subtle left vertical rule */
   .op-task-steps { margin: 0.1rem 0 0.2rem 1.05rem; padding-left: 0.85rem;
-    border-left: 1.5px solid var(--border); display: flex; flex-direction: column; gap: 0.32rem; }
-  .op-task.collapsed .op-task-steps { display: none; }
+    border-left: 1.5px solid var(--border); display: flex; flex-direction: column; gap: 0.32rem;
+    overflow: visible; max-height: 1500px; opacity: 1;
+    transition: max-height .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .3s, padding .3s; }
+  .op-task.collapsed .op-task-steps { max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
   .op-task-step { color: var(--muted); font: 500 calc(0.69rem * var(--chat-scale))/1.5 var(--chat-font);
     letter-spacing: -.002em; animation: op-msg-in .2s ease;
     white-space: normal; overflow-wrap: anywhere;
@@ -913,7 +957,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.7</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.5.8</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -957,9 +1001,7 @@
 
     <div class="op-logwrap" id="op-logwrap">
       <div class="op-log" id="op-log"></div>
-      <button class="op-jump" id="op-jump" type="button" aria-label="jump to latest" hidden>
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 10l6 6 6-6"></path></svg>
-      </button>
+      <button class="op-jump" id="op-jump" type="button" aria-label="jump to present" hidden><svg class="op-jump-ff" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 5l8 7-8 7z"></path><path d="M12 5l8 7-8 7z"></path></svg>Jump to present</button>
     </div>
 
 
@@ -1046,7 +1088,11 @@
   function scrollToBottom(force){ if (force || _wasAtBottom) log.scrollTop = log.scrollHeight; updateJump(); }
   // legacy name kept for the zoom handler etc. — reads live (no pre-snapshot needed there)
   function stickToBottom(){ if (nearBottom()) log.scrollTop = log.scrollHeight; updateJump(); }
-  function updateJump(){ if (jumpBtn) jumpBtn.classList.toggle('show', !nearBottom()); }
+  function updateJump(){
+    // show the pill only after scrolling up a fair bit (not the 60px auto-scroll threshold)
+    const up = (log.scrollHeight - log.scrollTop - log.clientHeight) > 2080;
+    if (jumpBtn) jumpBtn.classList.toggle('show', up);
+  }
   if (jumpBtn) jumpBtn.addEventListener('click', ()=>{
     log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
     // hide once we've arrived
@@ -1147,7 +1193,7 @@
     const rez = document.getElementById('op-resizer'); if (!rez) return;
     const opEl = document.getElementById('op');
     const RW_KEY = 'operator-railwidth-v1';
-    const MIN = 322;
+    const MIN = 248;
     function maxW(){ return Math.round(opEl.getBoundingClientRect().width * 0.62); }
     function apply(px){ const w = Math.max(MIN, Math.min(maxW(), px));
       opEl.style.setProperty('--rail-w', w + 'px'); return w; }
