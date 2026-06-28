@@ -631,11 +631,7 @@
   /* SIGNAL LOST (6s): spinner + label, no triangle (avoids the old flicker). */
   .op.op-signal-lost #op-overlay-text { letter-spacing: .12em; font-weight: 600;
     color: var(--muted); }
-  /* SIGNAL LOST = a STATIC warning triangle, no spinner (the spinner/two-stage swap
-     flickered). Triangle shows immediately, no animation. */
-  .op.op-signal-lost .op-spinner { display: none; }
-  .op.op-signal-lost .op-overlay::before { content: "\26A0"; font-size: 1.6rem; opacity: .55;
-    margin-bottom: 0.4rem; }
+  /* SIGNAL LOST: spinner + label only; warning triangle removed (flickered). */
   .op-spinner { width: 30px; height: 30px; border-radius: 50%;
     background: conic-gradient(from 0deg, transparent 0deg, var(--accent) 300deg, var(--accent) 360deg);
     -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
@@ -2609,7 +2605,7 @@
       else { if (!silent) logEvent((d.error||'failed').slice(0,80), false); settleAction(false); }
       if (_rl && _isNav) _rl.classList.remove('loading');
       return d;
-    } catch { logRes('action failed — is the browser attached?', false); settleAction(false);
+    } catch { logRes('Action failed — browser disconnected', false); settleAction(false);
       if (_rl && _isNav) _rl.classList.remove('loading'); }
   }
 
