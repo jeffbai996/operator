@@ -315,12 +315,20 @@
   .op-man-head { display: flex; align-items: center; gap: 0.34rem;
     font: 700 0.7rem/1.3 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); margin-bottom: 0.18rem; }
   .op-man-head .op-warn { flex: 0 0 auto; display: block; }
-  .op-man-line { font: 500 0.64rem/1.45 'Plus Jakarta Sans', sans-serif; color: var(--muted); }
+  .op-man-line { font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif; color: var(--muted); }
   .op-man-note:not([hidden]) { animation: op-man-in .34s cubic-bezier(.16,1,.3,1); }
   @keyframes op-man-in { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
   .op-man-note { margin: 0.35rem 0.1rem 0; font: 500 0.6rem/1.4 'Plus Jakarta Sans', sans-serif;
     color: var(--muted); padding: 0.4rem 0.55rem; background: var(--bg-2);
     border: 1px solid var(--border); border-radius: 8px; }
+  /* Demo-mode card — same shape as the Manual-mode card; demo only (.op-demo). */
+  .op-demo-note { margin: 0.35rem 0.1rem 0.1rem; padding: 0.4rem 0.55rem; background: var(--bg-2);
+    border: 1px solid var(--border); border-radius: 8px; }
+  .op-demo-note .op-man-head { color: var(--fg); }
+  .op-demo-note .op-man-line { margin-top: 0.15rem; }
+  #op-demo-note { display: none; }
+  .op-demo #op-demo-note { display: block; }
+  .op:has(#op-man-note:not([hidden])) #op-demo-note { display: none; }
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
   .op-action-sub { font: 500 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
@@ -351,7 +359,7 @@
     transition: opacity .3s ease, filter .3s ease; pointer-events: none; }
   .op-log { transition: opacity .3s ease, filter .3s ease; }
   .op-log:empty::after { content: "Type a message, or use the browser to steer Operator.";
-    color: var(--muted); font: 500 0.64rem/1.45 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif;
     padding: 0; margin: 0; letter-spacing: -.003em; }
   .op-msg { animation: op-msg-in .42s cubic-bezier(.16,1,.3,1); }
   @keyframes op-msg-in{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:none}}
@@ -1057,6 +1065,10 @@
       <span class="op-pick-wrap" id="op-pick-wrap" hidden><span class="op-pick-face" id="op-pick-face" aria-hidden="true">🤖</span><select class="op-action-caret" id="op-action-caret" title="who drives"></select></span>
       <span class="op-status-min" id="op-status-min" title="minimize" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg></span>
     </button>
+    <div class="op-demo-note" id="op-demo-note">
+      <div class="op-man-head"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="var(--fg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><circle cx="12" cy="7.8" r="0.6" fill="var(--fg)" stroke="none"/></svg><strong>Demo mode</strong></div>
+      <div class="op-man-line">This Operator instance does not store any conversation history, personal context, or browser cookies. Sessions are sandboxed, browser-only, and will reset upon restart.</div>
+    </div>
     <div class="op-man-note" id="op-man-note" hidden>
       <div class="op-man-head"><svg class="op-warn" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3.2 22 20H2L12 3.2z" fill="#f5c542" stroke="#1a1205" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 9.5v5" stroke="#1a1205" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.15" fill="#1a1205"/></svg><strong>Manual mode</strong></div>
       <div class="op-man-line">You have control of the computer. Switch to Auto mode to message <span id="op-surface-name">Operator</span>.</div>
@@ -2075,7 +2087,8 @@
   // would only fix it a beat later). Read localStorage directly — _sess is declared
   // later (TDZ). Default 'man' only if nothing saved.
   let MODE = (function(){ try { const d = JSON.parse(localStorage.getItem('operator-session-v1')||'null');
-    return (d && (d.mode === 'auto' || d.mode === 'man')) ? d.mode : 'man'; } catch { return 'man'; } })();
+    const _demoDefault = document.body.classList.contains('op-demo') ? 'auto' : 'man';
+    return (d && (d.mode === 'auto' || d.mode === 'man')) ? d.mode : _demoDefault; } catch { return document.body.classList.contains('op-demo') ? 'auto' : 'man'; } })();
   // true ONLY in the live moment after Operator hands control to the user (Take control).
   // SESSION-ONLY by design — never seeded from storage, always false on load. A refresh
   // or a manual MAN flip must NOT resurrect Finish-up (it's not a real pending hand-off).
