@@ -658,8 +658,18 @@ class AgentRunner:
             prompt = (_persona
                       + (("\n\n=== app CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
                       + "\n\nTask: " + task)
-            cmd = [binpath, "exec", "--json", "--skip-git-repo-check",
-                   "--dangerously-bypass-approvals-and-sandbox"]
+            if getattr(self, "demo", False):
+                # DEMO: do NOT bypass the sandbox. Use codex's read-only sandbox as a
+                # baseline — BUT note it only blocks writes, not reads (codex can still
+                # read outside its workspace). For a PUBLIC demo you MUST additionally
+                # run this process inside an OS-level sandbox (bwrap / container / a
+                # locked-down user) that hides your private files — codex's built-in
+                # shell/file tools are otherwise fully capable. The browser MCP is a
+                # separate process and keeps working under either.
+                cmd = [binpath, "exec", "--json", "--skip-git-repo-check", "-s", "read-only"]
+            else:
+                cmd = [binpath, "exec", "--json", "--skip-git-repo-check",
+                       "--dangerously-bypass-approvals-and-sandbox"]
             if self.model:
                 cmd += ["-m", self.model]
             if self.effort:
