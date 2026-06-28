@@ -329,6 +329,7 @@
   #op-demo-note { display: none; }
   .op-demo #op-demo-note { display: block; }
   .op:has(#op-man-note:not([hidden])) #op-demo-note { display: none; }
+  .op:has(.op-log:not(:empty)) #op-demo-note { display: none; }   /* clear the demo card once the conversation starts */
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
   .op-action-sub { font: 500 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
