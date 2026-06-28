@@ -766,7 +766,8 @@ class AgentRunner:
         try:
             self._proc = subprocess.Popen(
                 cmd, cwd=b["cwd"], env=env, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1)
+                stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
+                start_new_session=True)
             if self._runtime == "agy":
                 self._start_agy_live_poll()
             for line in self._proc.stdout:
@@ -1135,10 +1136,21 @@ class AgentRunner:
         self.handoff = None   # a takeover/stop clears any pending handoff request
         self._stopped = True  # so _flush_agy drops agy's interrupt-noise stdout
         if p and self.is_running():
+            import signal as _sig
+            # kill the whole process GROUP — the agent spawns children (MCP, node) that
+            # keep emitting traces after a bare terminate() of just the leader.
             try:
-                p.terminate()
+                _pgid = os.getpgid(p.pid)
+                os.killpg(_pgid, _sig.SIGTERM)
+                def _hard_kill(pgid=_pgid):
+                    import time as _t
+                    _t.sleep(1.0)
+                    try: os.killpg(pgid, _sig.SIGKILL)
+                    except Exception: pass
+                threading.Thread(target=_hard_kill, daemon=True).start()
             except Exception:  # noqa: BLE001
-                pass
+                try: p.terminate()
+                except Exception: pass
             self.state = "idle"
             return {"ok": True}
         return {"ok": False, "error": "nothing running"}
