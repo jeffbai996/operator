@@ -293,7 +293,7 @@ def _clean_gemma_text(text: str) -> str:
     t = text
     t = _re.sub(r'(?m)^\s*(?:🛑|🟢|▶️?)?\s*Task started:.*$', '', t)
     t = _re.sub(r'!\[([^\]]*)\]\(file://[^)]*\)',
-                lambda m: ('(screenshot: ' + m.group(1).strip() + ')') if m.group(1).strip() else '', t)
+                'took a screenshot', t)
     t = _re.sub(r'!\[([^\]]*)\]\((?!https?://)[^)]*\)',
                 lambda m: ('(' + m.group(1).strip() + ')') if m.group(1).strip() else '', t)
     t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)
