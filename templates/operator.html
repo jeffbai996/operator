@@ -125,7 +125,7 @@
     transition: max-width .3s cubic-bezier(.2,1,.3,1), transform .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .24s ease; max-width: 240px; }
   .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
-  .op-title { font: 700 0.94rem/1 'Plus Jakarta Sans',sans-serif; color: var(--fg);
+  .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans',sans-serif; color: var(--fg);
     letter-spacing: -.01em; margin-right: 0.15rem; white-space: nowrap; }
   .op-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex:0 0 auto;
     transition: background .3s, box-shadow .3s; }
@@ -271,7 +271,7 @@
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
   .op-action-body { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-action-txt { transition: color .25s ease; font: 700 0.9rem/1.2 'Plus Jakarta Sans',sans-serif; color: var(--fg); }
+    .op-action-txt { transition: color .25s ease; font: 700 0.86rem/1.2 'Plus Jakarta Sans',sans-serif; color: var(--fg); }
   .op-action-sub { transition: color .25s ease; }
   /* tool-call / status text changes animate in like the chat bubbles do */
   .op-action-txt.op-card-swap { animation: op-card-in .4s cubic-bezier(.22,1,.36,1); }
@@ -1337,8 +1337,15 @@
     document.body.classList.remove('op-locked');
     if (_vp && _vpPrev !== null) _vp.setAttribute('content', _vpPrev);
   });
-  document.getElementById('op-full').addEventListener('click', () =>
-    document.body.classList.toggle('op-full'));
+  (function(){
+    const FULL_KEY = 'operator-fullscreen-v1';
+    const btn = document.getElementById('op-full');
+    try { if (localStorage.getItem(FULL_KEY) === '1') { document.body.classList.add('op-full'); if (typeof setHdr === 'function') setTimeout(setHdr, 50); } } catch {}
+    btn && btn.addEventListener('click', () => {
+      const on = document.body.classList.toggle('op-full');
+      try { localStorage.setItem(FULL_KEY, on ? '1' : '0'); } catch {}
+    });
+  })();
   (function(){
     const FLAT_KEY = 'operator-flat-v1';
     const opEl = document.getElementById('op');
