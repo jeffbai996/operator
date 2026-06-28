@@ -666,7 +666,7 @@
        model/effort pickers), so the chatbox text matches the message scale. Desktop
        keeps fixed sizes. */
     #op-input.op-input { font-size: calc(0.72rem * var(--chat-scale)); }   /* +1 notch (mobile) */
-    .op .op-mini { font-size: calc(0.74rem * var(--chat-scale)) !important; }   /* model/effort scales with -/+ (mobile); .op + !important beats the base font: shorthand */
+    .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; padding-right: 0.85em !important; }   /* model/effort scales with -/+ (mobile) but CAPPED so high zoom doesn't run the text under the dropdown caret; pad-right reserves the caret slot */
     #op-input.op-input::placeholder { font-size: calc(0.72rem * var(--chat-scale)); }
     .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
@@ -867,7 +867,7 @@
   .op.op-ready .op-disclaimer-info { transition: max-height .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, transform .28s cubic-bezier(.22,.61,.36,1); }   /* ease-out: height resolves smoothly; opacity leads; subtle slide */
   /* MAN mode: the "no screenshots while you have control" line stays shown persistently
      (it's an active reassurance while the user is driving), not just on hover. */
-  .op-noshot { display: inline-block; vertical-align: middle; position: relative; top: -0.5px; }   /* center the icon on the text midline (not flush at baseline) */
+  .op-noshot { display: inline-block; vertical-align: middle; position: relative; top: -1px; }   /* center the icon on the text midline (not flush at baseline) */
   /* model row blended INSIDE the inputbox: model left, effort right, ghost styling */
   .op-modelrow { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: nowrap;
     padding-top: 0.25rem; border-top: 1px solid var(--border); overflow: visible;
