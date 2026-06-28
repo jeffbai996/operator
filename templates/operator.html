@@ -928,8 +928,8 @@
     background: var(--muted); box-shadow: 0 0 0 3px var(--bg-2); }
   /* inline coordinate detail after "Clicking"/"Dragging" — lighter, smaller, set apart */
   .op-act-coord { margin-left: 0.4rem; font-weight: 400; color: var(--muted);
-    font: 400 calc(0.6rem * var(--chat-scale))/1 'JetBrains Mono', monospace;
-    letter-spacing: -.01em; position: relative; top: 2px; }
+    font: 400 calc(0.6rem * var(--chat-scale))/1 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -.01em; position: relative; top: 1px; }
   /* plain detail (element names under Clicking/Typing/etc.) — NOT a code block */
   .op-act-detail-plain { color: var(--muted); font-weight: 400; max-width: 100%;
     font: 500 calc(0.66rem * var(--chat-scale))/1.45 var(--chat-font);
@@ -1803,7 +1803,13 @@
     if ((label||'').indexOf('`') !== -1) lab.innerHTML=_mdToHtml(label); else lab.textContent=label||'';
     e.appendChild(ico); e.appendChild(lab);
     const _isCoord = detail && /^\(\s*-?\d/.test(detail.trim());
-    if (detail && _isCoord) {
+    const _isDur = detail && /^\d+(\.\d+)?\s*(ms|s|m|h)(\s+\d+\s*(s|m))?$/.test(detail.trim());
+    // a short element label (e.g. "Button", "Submit") also goes inline — not a URL/path/command, not long.
+    const _dt = (detail||'').trim();
+    const _isShortLabel = detail && _dt.length <= 32 && !/^https?:\/\//.test(_dt)
+        && !/^(\/|~\/|\.\/)/.test(_dt) && !/\s-{1,2}\w/.test(detail)
+        && !/command|^ran|run js|running js|reading file|writing file|editing file/.test((label||'').toLowerCase());
+    if (detail && (_isCoord || _isDur || _isShortLabel)) {
       const c=document.createElement('span'); c.className='op-act-coord'; c.textContent=detail;
       lab.appendChild(c);
     } else if (detail) {
