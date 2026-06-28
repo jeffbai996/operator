@@ -39,6 +39,25 @@ _BROWSER_MANDATE = (
     " browse and base the answer ONLY on the pages you visited. Do NOT say you"
     " can't browse — you can. Cite the pages you actually visited."
 )
+
+_DESKTOP_MANDATE = (
+    " You are operating a LIVE VIRTUAL DESKTOP (a real computer's screen) shown in a"
+    " noVNC canvas at http://localhost:6902. FIRST navigate there if not already on it."
+    " The page is NOT a website — it is a remote desktop you control by SIGHT and POINTER."
+    " VISION-FIRST, ALWAYS: no DOM/elements/accessibility tree — browser_snapshot is"
+    " useless. EVERY step: screenshot (browser_take_screenshot), LOOK at the pixels,"
+    " then act with COORDINATE input (browser_mouse_click_xy / drag / move + keyboard)."
+    " Re-screenshot to verify; never assume the screen state."
+    " IT'S A DESKTOP, not a browser: no URL bar/tabs inside it — launch/focus apps,"
+    " double-click icons, use the taskbar, alt-tab, keyboard shortcuts, drag."
+    " TIGHT perceive→act→wait→re-perceive loop (esp. games): the screen changes on its"
+    " own; after each action screenshot again and react to the NEW visual state."
+    " Coordinates are canvas pixels from your screenshot; if a click misses, re-screenshot"
+    " and correct rather than repeating the same XY."
+)
+
+def _mandate(mode):
+    return _DESKTOP_MANDATE if mode == "desktop" else _BROWSER_MANDATE
 # (OSS build: no host-app self-context.) The Claude bots get this from their own CLAUDE.md +
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
@@ -457,7 +476,7 @@ class AgentRunner:
     def is_running(self) -> bool:
         return self.state == "running"
 
-    def start(self, bot: str, task: str, model: str = '', effort: str = '', demo: bool = False) -> dict:
+    def start(self, bot: str, task: str, model: str = '', effort: str = '', demo: bool = False, mode: str = 'browser') -> dict:
         with self._lock:
             if self.is_running():
                 return {"ok": False, "error": f"{self.bot} is already running a task"}
@@ -489,6 +508,7 @@ class AgentRunner:
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
             self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
+            self.mode = (mode or 'browser').strip().lower()
             # default the claude runtime to Sonnet 4.6 / medium when nothing was picked
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
@@ -754,7 +774,7 @@ class AgentRunner:
                    "--permission-mode", "bypassPermissions",
                    # --settings/--strict-mcp-config both BREAK --resume (verified).
                    "--mcp-config", cfg_path,
-                   "--append-system-prompt", b["persona"]]
+                   "--append-system-prompt", b["persona"].split(_BROWSER_MANDATE)[0] + _mandate(getattr(self,"mode","browser"))]
             if resume_id:
                 cmd += ["--resume", resume_id]
             if self.model:

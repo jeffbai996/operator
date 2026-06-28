@@ -899,6 +899,13 @@ def operator_dispatch():
         return jsonify(ok=False, error="empty task"), 400
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
+    mode = (data.get("mode") or "").strip()
+    if not mode:
+        try:
+            _u = (_streamer.url or "")
+            mode = "desktop" if (":6902" in _u or "novnc" in _u.lower()) else "browser"
+        except Exception:
+            mode = "browser"
     if DEMO:
         # public demo: GPT-only, effort locked per preset (5.4->medium, 5.5->low);
         # ignore any client-sent bot. demo=True strips the app context/identity/tools.
@@ -906,9 +913,9 @@ def operator_dispatch():
         effort = "medium"   # demo: effort pinned to medium for both presets
         if model not in ("gpt-5.4", "gpt-5.5"):
             model = "gpt-5.4"
-        r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True)
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True, mode=mode)
     else:
-        r = operator_agent.runner.start(bot, task, model=model, effort=effort)
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort, mode=mode)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
