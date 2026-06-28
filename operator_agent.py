@@ -54,6 +54,11 @@ _DESKTOP_MANDATE = (
     " own; after each action screenshot again and react to the NEW visual state."
     " Coordinates are canvas pixels from your screenshot; if a click misses, re-screenshot"
     " and correct rather than repeating the same XY."
+    " HARD RULES: (1) You have NO filesystem, NO shell, NO code execution, and NO 'input"
+    " API' to discover — do NOT run commands, read/list files, or use browser_evaluate to"
+    " inspect the page; those are dead ends. (2) STAY on the desktop — do NOT navigate the"
+    " browser away from localhost:6902; that canvas IS the computer. (3) STOP analyzing and"
+    " just ACT: screenshot → see the target → click/type it."
 )
 
 def _mandate(mode):
@@ -508,7 +513,9 @@ class AgentRunner:
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
             self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
-            self.mode = (mode or 'browser').strip().lower()
+            _m = (mode or 'browser').strip().lower()
+            if _m == "desktop": self._sticky_desktop = True
+            self.mode = "desktop" if getattr(self, "_sticky_desktop", False) else _m
             # default the claude runtime to Sonnet 4.6 / medium when nothing was picked
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
@@ -1160,6 +1167,7 @@ class AgentRunner:
             self.messages.append({"ts": time.time(), "role": "assistant", "text": text})
 
     def reset_session(self, bot: str = "") -> dict:
+        self._sticky_desktop = False
         """Forget stored session id(s) + the shared transcript so the next task
         starts a fresh conversation (wired to the operator's clear/trash button)."""
         if bot:

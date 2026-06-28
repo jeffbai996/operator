@@ -903,7 +903,9 @@ def operator_dispatch():
     if not mode:
         try:
             _u = (_streamer.url or "")
-            mode = "desktop" if (":6902" in _u or "novnc" in _u.lower()) else "browser"
+            if (":6902" in _u or "winstream" in _u.lower() or "novnc" in _u.lower()):
+                _streamer.desktop_session = True
+            mode = "desktop" if getattr(_streamer, "desktop_session", False) else "browser"
         except Exception:
             mode = "browser"
     if DEMO:
