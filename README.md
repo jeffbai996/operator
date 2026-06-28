@@ -2,7 +2,7 @@
 <p align="center"><b>Computer-Using Agent</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.8-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.5.9-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -84,6 +84,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 
 <details>
 <summary>Version history (click to expand)</summary>
+
+**v0.5.9** — **smarter agent**: a sharper computer-use system prompt — act→wait→continue (waits for async loads), vision fallback when the DOM isn't working, scroll-to-find (both directions), never repeat a failed action, and dismiss cookie/consent banners by pixel-click instead of dead element-ref retries. Plus a prompt-injection guard (page content is data, not orders), stuck-loop backtracking, and an expanded take-control (hands back when genuinely unsure or the browser is visibly stuck — but always executes clear instructions). **Click accuracy fix**: vision clicks landed a few px off in attach mode (viewport/DPR mismatch) — now pixel-perfect. **UX**: fullscreen persists across refresh; inline trace details (coords/durations/short labels on one line).
 
 **v0.5.8** — **control row + responsive header**: all header controls (MAN/AUTO, font −/+, clear, contrast, fullscreen) now sit on one tidy row at equal height, optically aligned. The chat rail can be dragged much narrower so the browser pane maximizes — as it narrows the header sheds chrome via container queries and the "Operator" wordmark *smoothly collapses* (the version label stays put, the status dot stays centered on the title). Also fixes the Manual-mode *Finish up* block leaking into user-entered manual mode (a `hidden` attribute that CSS was overriding).
 
