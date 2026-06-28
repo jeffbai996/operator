@@ -279,6 +279,44 @@ _TAKE_CONTROL_RE = _re.compile(r"\[\[\s*TAKE[_ ]?CONTROL\s*:?\s*(.*?)\s*\]\]",
                                _re.IGNORECASE | _re.DOTALL)
 
 
+def _clean_gemma_text(text: str) -> str:
+    """agy/gemma final output carries CLI-runner noise that renders badly in the chat:
+      - "🛑 Task started: ..." status-bullet lines (agy's own progress echo)
+      - ![alt](file:///...) image markdown pointing at a LOCAL path (a web page can't
+        load file://, so it renders as a broken image) — keep the alt as a plain note
+      - a trailing files=[...] literal (agy echoing its attachment list)
+      - +----+ ASCII tables that render as a mangled blob unless monospaced
+    Strip/normalize these so the reply reads clean. Best-effort; never raises."""
+    if not isinstance(text, str) or not text.strip():
+        return text or ""
+    import re as _re
+    t = text
+    t = _re.sub(r'(?m)^\s*(?:🛑|🟢|▶️?)?\s*Task started:.*$', '', t)
+    t = _re.sub(r'!\[([^\]]*)\]\(file://[^)]*\)',
+                lambda m: ('(screenshot: ' + m.group(1).strip() + ')') if m.group(1).strip() else '', t)
+    t = _re.sub(r'!\[([^\]]*)\]\((?!https?://)[^)]*\)',
+                lambda m: ('(' + m.group(1).strip() + ')') if m.group(1).strip() else '', t)
+    t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)
+    lines = t.split('\n')
+    out, i = [], 0
+    while i < len(lines):
+        ln = lines[i]
+        is_tbl = bool(_re.match(r'^\s*[+|]', ln)) and ('+' in ln or '|' in ln)
+        if is_tbl:
+            block = []
+            while i < len(lines) and _re.match(r'^\s*[+|]', lines[i]) and ('+' in lines[i] or '|' in lines[i]):
+                block.append(lines[i]); i += 1
+            if len(block) >= 2:
+                out.append('```'); out.extend(block); out.append('```')
+            else:
+                out.extend(block)
+            continue
+        out.append(ln); i += 1
+    t = '\n'.join(out)
+    t = _re.sub(r'\n{3,}', '\n\n', t).strip()
+    return t
+
+
 def _extract_handoff(text: str) -> tuple[str, str | None]:
     """Strip any [[TAKE_CONTROL: reason]] marker from assistant text.
     Returns (clean_text, reason_or_None). reason is '' if the marker had no text."""
@@ -952,8 +990,10 @@ class AgentRunner:
             if typ == "PLANNER_RESPONSE":
                 think = o.get("thinking")
                 if isinstance(think, str) and think.strip():
-                    self.messages.append({"ts": time.time(), "role": "assistant",
-                                          "text": think.strip()})
+                    _ck = _clean_gemma_text(think.strip())
+                    if _ck:
+                        self.messages.append({"ts": time.time(), "role": "assistant",
+                                              "text": _ck})
                 # tool_calls: list of {name, args} — same shape _action_label wants.
                 for tc in (o.get("tool_calls") or []):
                     if not isinstance(tc, dict):
@@ -972,7 +1012,7 @@ class AgentRunner:
                             "calling mcp tool", "calling tool", "running tool",
                             "using tool", "tool call", "mcp tool")
                         label = (_gerund_label(name) or (_agy_lbl if not _generic else "")
-                                 or _mcp_resource_label(name) or "Calling MCP tool")
+                                 or _mcp_resource_label(name) or "Using tool")
                     if label and not detail:
                         for k in ("CommandLine", "command", "url", "query", "text", "toolSummary"):
                             v = args.get(k)
@@ -983,7 +1023,7 @@ class AgentRunner:
                                               "text": label, "detail": detail})
                 ans = o.get("content")
                 if isinstance(ans, str) and ans.strip():
-                    txt, _reason = _extract_handoff(ans.strip())
+                    txt, _reason = _extract_handoff(_clean_gemma_text(ans.strip()))
                     if _reason is not None and not self.handoff:
                         self.handoff = {"reason": _reason, "ts": time.time()}
                     if txt:
@@ -1061,7 +1101,7 @@ class AgentRunner:
             return   # interrupted run produced only noise → emit nothing
         if not stdout_text:
             return
-        text, _reason = _extract_handoff(stdout_text)
+        text, _reason = _extract_handoff(_clean_gemma_text(stdout_text))
         if _reason is not None and not self.handoff:
             self.handoff = {"reason": _reason, "ts": time.time()}
         if text:
