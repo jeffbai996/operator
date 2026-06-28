@@ -640,7 +640,14 @@
   /* SIGNAL LOST (6s): spinner + label, no triangle (avoids the old flicker). */
   .op.op-signal-lost #op-overlay-text { letter-spacing: .12em; font-weight: 600;
     color: var(--muted); }
-  /* SIGNAL LOST: spinner + label only; warning triangle removed (flickered). */
+  /* SIGNAL LOST: NO spinner — static symbol + label only (spinner stays for "connecting"). */
+  .op.op-signal-lost .op-spinner { display: none; }
+  .op.op-signal-lost .op-overlay { flex-direction: column; gap: 0.5rem; }
+  .op.op-signal-lost .op-overlay::before {
+    content: ""; width: 26px; height: 26px; opacity: .5; background: var(--muted);
+    -webkit-mask: var(--op-nosignal-mask) center/contain no-repeat;
+            mask: var(--op-nosignal-mask) center/contain no-repeat; }
+  .op { --op-nosignal-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 8.82a15 15 0 0 1 4.17-2.65'/><path d='M10.66 5c4.01-.36 8.14.9 11.34 3.76'/><path d='M16.85 11.25a10 10 0 0 1 2.22 1.68'/><path d='M5 13a10 10 0 0 1 5.24-2.76'/><path d='M8.53 16.11a6 6 0 0 1 6.95 0'/><path d='M12 20h.01'/><path d='M2 2l20 20'/></svg>"); }
   .op-spinner { width: 30px; height: 30px; border-radius: 50%;
     background: conic-gradient(from 0deg, transparent 0deg, var(--accent) 300deg, var(--accent) 360deg);
     -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
@@ -1805,7 +1812,12 @@
     
     Thinking:'💭', Working:'⚙️'
   };
-  function actEmoji(label){ return ACT_EMOJI[label] || '⚙️'; }
+  function actEmoji(label){
+    if (!label) return '⚙️';
+    if (ACT_EMOJI[label]) return ACT_EMOJI[label];
+    const first = label.split(' ')[0];
+    return ACT_EMOJI[first] || '⚙️';
+  }
   // imperative trace label -> present-continuous for the live spinner ("Run JS"→"Running JS")
   const ACT_CONT = {
     Navigate:'Navigating', Click:'Clicking', 'Double-click':'Double-clicking', Type:'Typing',
