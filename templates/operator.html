@@ -632,6 +632,9 @@
     .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* xN pill digit ~1px low on mobile only — nudge up via bottom-pad */
     .op-act-x { padding: 0 0 1px 0; }
+    /* MOBILE: taller header → lower the floating minimized pill to clear it; man-note drops to keep the gap. */
+    .op[data-status-min="1"] .op-action { top: 58px; }
+    .op[data-status-min="1"] .op-man-note { margin-top: 66px; }
 
     /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px). */
     .op-iconbtn { width: 28px; height: 28px; min-width: 28px; font-size: 1.1rem !important; }
