@@ -1,12 +1,11 @@
 """Browser operator — live view + full remote control of the logged-in Chrome.
 
-One self-contained surface (full-screen on an iPad behind a reverse proxy) that shows the
-real Chrome the squad's computer-use drives and lets you take the wheel live —
+One self-contained surface (full-screen on an iPad over Tailscale) that shows the
+real Chrome the app computer-use drives and lets you take the wheel live —
 click, type, navigate — interleaving freely with whatever a bot is doing in the
-same browser (shared mouse; last action wins). "See it, steer it." (Jeff
-2026-06-25; refined for click/keyboard control + more controls 2026-06-26.)
+same browser (shared mouse; last action wins). "See it, steer it." 
 
-Zero new deps — playwright + aiohttp are already in the host app venv:
+Zero new deps — playwright + aiohttp are already in the host-app venv:
   - VIEW: a background thread holds a Playwright connect_over_cdp() attach to the
     Chrome on :9222 and grabs JPEG frames of the active page into a buffer. The
     Flask route streams that as multipart/x-mixed-replace (MJPEG) → an <img>.
@@ -24,8 +23,16 @@ from dataclasses import dataclass, field
 from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
 
-CDP_URL = "http://127.0.0.1:9222"
-FRAME_INTERVAL = 0.066     # ~15fps (Jeff's pick)
+import os as _os_cfg
+# DEMO isolation the public demo: a second instance runs with OPERATOR_DEMO=1 and
+# its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
+# unset for the owner live cockpit (-> no behavior change); set only by demo_server.py.
+DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
+# both the live _Streamer and the agent MCP attach here in demo mode (isolated
+# Chrome), never :9222 (the logged-in browser). The unguessable path gate is the
+# WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
+CDP_URL = _os_cfg.environ.get("OPERATOR_DEMO_CDP") or "http://127.0.0.1:9222"
+FRAME_INTERVAL = 0.066     # ~15fps 
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
 
@@ -432,15 +439,28 @@ class _Streamer:
                 # never close the LAST tab — that kills the browser / leaves the
                 # viewer with nothing + no way to reopen. Navigate it to Google.
                 if len(pages) <= 1:
-                    try:
-                        await closing.goto("chrome://newtab/",
-                                           wait_until="domcontentloaded", timeout=15000)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    # last tab: don't close it (that kills the browser) — reset it to a
+                    # blank start page. chrome://newtab/ doesn't exist in bundled
+                    # chromium, so try a few and fall back to about:blank.
+                    for _u in ("chrome://new-tab-page/", "chrome://newtab/", "about:blank"):
+                        try:
+                            await closing.goto(_u, wait_until="domcontentloaded", timeout=8000)
+                            break
+                        except Exception:  # noqa: BLE001
+                            continue
                     self._page = closing; self._cdp = None; self._update_viewport()
                     return {"ok": True, "reset": True}
                 await closing.close()
                 live = [p for p in ctx.pages if not p.is_closed()]
+                if not live:
+                    # safety net: never leave zero tabs (that closes the browser) —
+                    # open a fresh one so the demo/cockpit always has a live page.
+                    try:
+                        newp = await ctx.new_page()
+                        await newp.goto("about:blank", wait_until="domcontentloaded", timeout=8000)
+                        live = [newp]
+                    except Exception:  # noqa: BLE001
+                        live = []
                 if live:
                     self._page = live[-1]; self._cdp = None; self._update_viewport()
                 return {"ok": True}
@@ -538,22 +558,29 @@ class _Streamer:
                     await p.mouse.down(); await asyncio.sleep(0.04); await p.mouse.up()
                 return {"ok": True, "url": p.url, "title": await p.title(),
                         "px": [round(x), round(y)]}
+            elif kind == "rclick_at":              # right-click at normalized x,y (context menu)
+                dims = await self._viewport_dims(p)
+                x = float(action.get("x", 0)) * dims["w"]
+                y = float(action.get("y", 0)) * dims["h"]
+                await p.mouse.move(x, y, steps=10)
+                await p.mouse.click(x, y, button="right")
             elif kind == "type":
                 await p.keyboard.type(val, delay=35)
             elif kind == "key":
                 await p.keyboard.press(val or "Enter")
             elif kind == "key_down":
-                # HELD-KEY AUTO-REPEAT. Playwright keyboard.down() fires ONE keydown and
-                # does NOT auto-repeat like a physically-held key — a held arrow scrolls
-                # once, not continuously. Simulate OS key-repeat: press once now, then a
-                # background task re-presses every ~45ms until key_up (each press = down+up).
+                # HELD-KEY AUTO-REPEAT. Playwright's keyboard.down() fires ONE keydown and
+                # does NOT auto-repeat like a physically-held key — so a held arrow scrolled
+                # once, not continuously. Instead we simulate OS key-repeat: press once now,
+                # then a background task re-presses every ~45ms until key_up. Each press is
+                # a real down+up so the page scrolls/navigates each tick.
                 key = val or "Enter"
                 if self._key_repeat is None:
                     self._key_repeat = {}
                 old = self._key_repeat.pop(key, None)
                 if old:
                     old.cancel()
-                await p.keyboard.press(key)
+                await p.keyboard.press(key)                 # immediate first tick
                 self._key_repeat[key] = asyncio.ensure_future(self._repeat_key(key))
             elif kind == "key_up":            # stop the held-key repeat
                 key = val or "Enter"
@@ -571,9 +598,10 @@ class _Streamer:
                            "bottom": 100000}.get(val, 600)
                     await p.mouse.wheel(0, amt)
             elif kind == "back":
-                # wait_until="commit" returns once nav commits (not full load), so we don't
-                # hold the io-lock for up to 15s and starve the grab loop (that froze/broke
-                # the feed on back/forward). The feed then streams the new page as it loads.
+                # wait_until="commit" returns as soon as the navigation COMMITS (not
+                # full load), so we don't hold the io-lock for up to 15s while the page
+                # loads — that lock starves the grab loop and froze/broke the feed on
+                # back/forward . The feed then streams the new page as it loads.
                 await p.go_back(wait_until="commit", timeout=8000)
             elif kind == "forward":
                 await p.go_forward(wait_until="commit", timeout=8000)
@@ -645,10 +673,11 @@ class _Streamer:
 
     async def _repeat_key(self, key: str) -> None:
         """Simulate OS key auto-repeat for a held key: re-press every ~45ms until
-        cancelled (key_up). Acquires the io-lock per tick so it doesn't race the grab
-        loop. Self-terminates if the page goes away; cancellation is the normal exit."""
+        cancelled (key_up). Each press is a real down+up so the page keeps scrolling/
+        navigating. Acquires the io-lock per tick so it doesn't race the grab loop.
+        Self-terminates if the page goes away. Cancellation is the normal exit."""
         try:
-            await asyncio.sleep(0.28)
+            await asyncio.sleep(0.28)   # honor the OS repeat-delay before the first repeat
             lk = self._iolock()
             while True:
                 p = self._page
@@ -662,7 +691,7 @@ class _Streamer:
                 finally:
                     try: lk.release()
                     except Exception: pass
-                await asyncio.sleep(0.045)
+                await asyncio.sleep(0.045)   # ~22 presses/sec → smooth continuous scroll
         except asyncio.CancelledError:
             pass
         except Exception:  # noqa: BLE001
@@ -679,10 +708,20 @@ _streamer = _Streamer()
 @bp.route("/operator")
 def operator_page():
     from flask import make_response
-    resp = make_response(render_template("operator.html"))
+    # demo: serve the standalone, de-PII'd template (no the app chrome/nav, no owner
+    # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
+    _tmpl = "operator_demo.html" if DEMO else "operator.html"
+    resp = make_response(render_template(_tmpl))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
+
+
+@bp.route("/demo")
+def operator_demo_page():
+    """Demo entry path alias (the public demo URL ends in /demo, not /operator —
+    version-agnostic). Serves the same page; only meaningful when DEMO."""
+    return operator_page()
 
 
 @bp.route("/cockpit")
@@ -785,8 +824,8 @@ def operator_steer():
     return jsonify(_streamer.run_action(action))
 
 
-# ── Live-session driving (Jeff 2026-06-26) ──────────────────────────────────
-# Dispatch a task to one of the host bots' real Discord sessions; the bot
+# ── Live-session driving  ──────────────────────────────────
+# Dispatch a task to one of the the host bots' real agent sessions; the bot
 # runs it on the SAME shared Chrome the operator views. The browser actions are
 # surfaced via the MCP action-tap (operator-events.ndjson) which every bot's
 # playwright-mcp wrapper writes to — so the operator shows "🤖 <bot> · Clicking…"
@@ -794,13 +833,16 @@ def operator_steer():
 import json as _json
 import os as _os
 
-# The 5 drivers: host bots that can take the wheel. home_channel = where the
+# The 5 drivers: the host bots that can take the wheel. home_channel = where the
 # operator posts the task (the running bot picks it up as a prompt). `key` is the
 # bot name the action-tap stamps events with (must match detect_bot()).
 DRIVERS = [
     {"key": "claude-a", "label": "claude-a"},
     {"key": "claude-b", "label": "claude-b"},
     {"key": "gpt", "label": "gpt"},
+    # gemma drives via the agy runtime (flat Google sub) — agy IS gemma's engine,
+    # so there's one pickable entry, not a separate "agy" row.
+    {"key": "gemma", "label": "gemma"},
 ]
 _DRIVER_BY_KEY = {d["key"]: d for d in DRIVERS}
 
@@ -830,14 +872,19 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
         return None
     last = evs[-1]
     if time.time() - last.get("ts", 0) <= window_s:
-        return {"bot": last.get("bot"), "action": last.get("action"),
+        # demo: never leak the app bot names to a public visitor -> generic label.
+        _b = "assistant" if DEMO else last.get("bot")
+        return {"bot": _b, "action": last.get("action"),
                 "detail": last.get("detail", "")}
     return None
 
 
 @bp.route("/operator/drivers")
 def operator_drivers():
-    """The pickable drivers (claude-a / claude-b) — the operator runs them headless."""
+    """The pickable drivers — the operator runs them headless. In demo mode this is
+    a single generic 'gpt' driver (never leak the app bot names to a public visitor)."""
+    if DEMO:
+        return jsonify(drivers=[{"key": "gpt", "label": "gpt"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
 
 
@@ -852,7 +899,16 @@ def operator_dispatch():
         return jsonify(ok=False, error="empty task"), 400
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
-    r = operator_agent.runner.start(bot, task, model=model, effort=effort)
+    if DEMO:
+        # public demo: GPT-only, effort locked per preset (5.4->medium, 5.5->low);
+        # ignore any client-sent bot. demo=True strips the app context/identity/tools.
+        bot = "gpt"
+        effort = "medium"   # demo: effort pinned to medium for both presets
+        if model not in ("gpt-5.4", "gpt-5.5"):
+            model = "gpt-5.4"
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True)
+    else:
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
@@ -889,12 +945,14 @@ def operator_driver_status():
         since = 0.0
     reasoning = []
     bot = (request.args.get("bot") or (drv or {}).get("bot") or "").strip()
-    if bot:
+    # in demo mode the agent has no the app transcript to tail (and we must not read
+    # any the app bot's transcript) -> the live trace comes from the agent runner only.
+    if bot and not DEMO:
         reasoning = _tail_reasoning(bot, since)
     return jsonify(driver=drv, events=_recent_events(30), reasoning=reasoning)
 
 
-# ── Stage 2: reasoning relay (Jeff 2026-06-26) ──────────────────────────────
+# ── Stage 2: reasoning relay  ──────────────────────────────
 # Tail the driving bot's live session transcript JSONL → surface its assistant
 # text (its reasoning/replies) so the operator chat shows thinking, not just
 # clicks. Per-bot transcript dir = <config_dir>/projects/<cwd-slug>/; we take the
@@ -905,7 +963,7 @@ import glob as _glob
 _BOT_PROJECT = {
     "claude-a":     ("~/.claude",            "~/agents/claude-a"),
     "claude-a":  ("~/.claude",            "~/agents/claude-a"),
-    "claude-b": ("~/.claude",            "~/agents/claude-b"),
+    "claude-a": ("~/.claude",            "~/agents/claude-a"),
     "claude-b":      ("~/.config/claude-b",        "~"),
     "gpt":        (None, None),  # different arch; no claude transcript
 }
@@ -997,7 +1055,7 @@ import subprocess as _sp
 _BOT_LIVE_CWD = {
     "claude-a": "/agents/claude-a",
     "claude-a": "/agents/claude-a",
-    "claude-b": "/agents/claude-b",
+    "claude-a": "/agents/claude-a",
 }
 _BOT_LIVE_ENV = {"claude-b": ".config/claude-b"}
 
@@ -1030,7 +1088,7 @@ def _live_bots() -> set:
     except Exception:
         pass
     # gpt is a service bot (always-on if its unit is active) — but it can't drive
-    # reliably (one MCP slot, IBKR), so we don't mark it live for driving.
+    # reliably (one MCP slot), so we do not mark it live for driving.
     return live
 
 
@@ -1043,16 +1101,38 @@ OPERATOR_MODELS = [
     {"value": "sonnet", "label": "Sonnet 4.6"},
     {"value": "haiku", "label": "Haiku 4.5"},
 ]
-# codex/gpt models (default gpt-5.5 medium per Jeff).
+# codex/gpt models (default gpt-5.5 medium per the owner).
 OPERATOR_MODELS_GPT = [
     {"value": "gpt-5.5", "label": "GPT-5.5"},
     {"value": "gpt-5.4", "label": "GPT-5.4"},
+]
+# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner
+# flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
+# ones have a fixed tier baked in (no effort). start() folds family+effort into the
+# agy --model display string, e.g. "Gemini 3.5 Flash (High)".
+OPERATOR_MODELS_GEMMA = [
+    {"value": "Gemini 3.5 Flash", "label": "3.5 Flash"},
+    {"value": "Gemini 3.1 Pro", "label": "3.1 Pro"},
+    {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
+    {"value": "Claude Opus 4.6 (Thinking)", "label": "Opus 4.6"},
+    {"value": "GPT-OSS 120B (Medium)", "label": "GPT-OSS 120B"},
+]
+
+
+# public demo: exactly two presets (effort is locked per model in the dispatch route).
+OPERATOR_MODELS_DEMO = [
+    {"value": "gpt-5.4", "label": "GPT-5.4"},
+    {"value": "gpt-5.5", "label": "GPT-5.5"},
 ]
 
 
 @bp.route("/operator/models")
 def operator_models():
+    if DEMO:
+        return jsonify(models=OPERATOR_MODELS_DEMO)
     driver = request.args.get("driver", "")
     if driver == "gpt":
         return jsonify(models=OPERATOR_MODELS_GPT)
+    if driver == "gemma":
+        return jsonify(models=OPERATOR_MODELS_GEMMA)
     return jsonify(models=OPERATOR_MODELS)

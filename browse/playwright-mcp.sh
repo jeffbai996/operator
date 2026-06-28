@@ -5,6 +5,7 @@
 #
 # Env: OPERATOR_CHROME_PORT (default 9222), OPERATOR_VIEWPORT (default 1280,800),
 #      OPERATOR_MCP_OUTPUT_DIR (default ~/.operator/screenshots)
+#      OPERATOR_DEMO_CDP (explicit CDP endpoint override; skips the auto-probe)
 set -euo pipefail
 PORT="${OPERATOR_CHROME_PORT:-9222}"
 VIEWPORT="${OPERATOR_VIEWPORT:-1280,800}"
@@ -12,7 +13,11 @@ OUT="${OPERATOR_MCP_OUTPUT_DIR:-$HOME/.operator/screenshots}"
 mkdir -p "$OUT"
 
 EP=""
-if (command -v curl >/dev/null && curl -sf "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1); then
+# Explicit endpoint override (e.g. an isolated demo Chrome): attach straight to it,
+# skip the auto-probe. Unset for normal use → original behavior.
+if [ -n "${OPERATOR_DEMO_CDP:-}" ]; then
+  EP="$OPERATOR_DEMO_CDP"
+elif (command -v curl >/dev/null && curl -sf "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1); then
   EP="http://127.0.0.1:${PORT}"
 fi
 
