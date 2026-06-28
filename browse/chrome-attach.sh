@@ -61,13 +61,13 @@ if [ -z "$BIN" ]; then
 fi
 
 echo "chrome-attach: launching $BIN on :${PORT} (profile: $PROFILE)"
-FLAGS="--remote-debugging-port=${PORT} --user-data-dir=${PROFILE} --no-first-run --no-default-browser-check"
+FLAGS="--remote-debugging-port=${PORT} --user-data-dir=${PROFILE} --no-first-run --no-default-browser-check --disable-blink-features=AutomationControlled"
 
 # WSL: hand the launch to Windows so Chrome parents under the Windows session
 if [ "$is_wsl" = 1 ] && case "$BIN" in *.exe) true;; *) false;; esac; then
   win_profile="$(wslpath -w "$PROFILE" 2>/dev/null || echo "$PROFILE")"
   cmd.exe /c start "" "$BIN" --remote-debugging-port=${PORT} \
-    --user-data-dir="$win_profile" --no-first-run --no-default-browser-check >/dev/null 2>&1 || true
+    --user-data-dir="$win_profile" --no-first-run --no-default-browser-check --disable-blink-features=AutomationControlled >/dev/null 2>&1 || true
 else
   nohup "$BIN" $FLAGS >/dev/null 2>&1 &
 fi
