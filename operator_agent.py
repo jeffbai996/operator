@@ -1011,6 +1011,27 @@ class AgentRunner:
                         continue
                     name = tc.get("name") or ""
                     args = tc.get("args") if isinstance(tc.get("args"), dict) else {}
+                    # UNWRAP agy's meta-tools (esp. Gemini Flash): it wraps every real
+                    # MCP call in `call_mcp_tool` (real tool in args["ToolName"], real
+                    # args in args["Arguments"]) — reach through so browser_* maps to
+                    # clean verbs + emojis instead of a generic "Calling MCP tool".
+                    if name in ("call_mcp_tool", "callMcpTool", "mcp_tool", "run_mcp_tool"):
+                        _inner = (args.get("ToolName") or args.get("toolName")
+                                  or args.get("tool") or args.get("name") or "")
+                        _ia = args.get("Arguments") or args.get("arguments") or args.get("args")
+                        if isinstance(_ia, str):
+                            try: _ia = json.loads(_ia)
+                            except Exception: _ia = {}
+                        if _inner:
+                            if isinstance(_ia, dict):
+                                _ia.setdefault("toolAction", args.get("toolAction", ""))
+                                _ia.setdefault("toolSummary", args.get("toolSummary", ""))
+                            name, args = _inner, (_ia if isinstance(_ia, dict) else {})
+                    elif name == "view_file":
+                        name = "browser_get_text"
+                        args = {"path": (tc.get("args") or {}).get("AbsolutePath", ""),
+                                "toolAction": (tc.get("args") or {}).get("toolAction", ""),
+                                "toolSummary": (tc.get("args") or {}).get("toolSummary", "")}
                     label, detail = _action_label(name, args)
                     if not label:
                         # Our mapper didn't recognize it. Prefer OUR gerund verb over
