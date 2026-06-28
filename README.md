@@ -1,18 +1,18 @@
-<h1 align="center">Operator</h1>
-<p align="center"><b>Computer-Using Agent</b></p>
+<h1>Operator</h1>
+<p><b>Computer-Using Agent</b></p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.9-blue" alt="version">
+<p>
+  <img src="https://img.shields.io/badge/version-0.6.2-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
 </p>
 
-<p align="center">
+<p>
   <img src="docs/img/operator-geoguessr.jpeg" alt="Operator driving a live browser">
 </p>
 
-<p align="center"><sub><i>Operator's GPT agent reasoning through a live GeoGuessr round — left: the interleaved thinking + action trace (Browsing / Reading / Clicking) with a live status card; right: the actual browser it's driving, streamed frame-by-frame.</i></sub></p>
+<p><sub><i>Operator's GPT agent reasoning through a live GeoGuessr round — left: the interleaved thinking + action trace (Browsing / Reading / Clicking) with a live status card; right: the actual browser it's driving, streamed frame-by-frame.</i></sub></p>
 
 ---
 

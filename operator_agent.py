@@ -1,13 +1,13 @@
 """operator_agent.py — run a headless Claude Code agent that drives the browser.
 
-Design: the operator IS the agent. We spawn `claude -p` in a
+Option 1 : the operator IS the agent. We spawn `claude -p` in a
 background thread, as the chosen persona, with the Playwright MCP pointed at the
 SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTION
 (claude reads ~/.claude/.credentials.json), zero metered API spend. We parse its
 stream-json output live: assistant text → the operator chat, browser tool calls
 → the action trail. No Discord, no live-session dependency, no spam.
 
-Drivers run a logged-in CLI (claude / codex) headless — no metered API key.
+Only the host personas that can drive: claude-a + claude-b.
 """
 from __future__ import annotations
 
@@ -39,26 +39,56 @@ _BROWSER_MANDATE = (
     " browse and base the answer ONLY on the pages you visited. Do NOT say you"
     " can't browse — you can. Cite the pages you actually visited."
 )
-# The drivers Operator can run. Both are BYO-subscription: each shells out to a
-# logged-in CLI (no metered API key) -- the primary, cheapest path:
-#   claude -> Claude Code  (reads ~/.claude credentials; install the `claude` CLI + `claude login`)
-#   gpt    -> OpenAI codex (reads ~/.codex credentials; install the `codex` CLI + sign in)
-# Config dirs are overridable via CLAUDE_CONFIG_DIR / CODEX_HOME. To use the metered
-# API fallback instead, set a key in .env (see .env.example).
+# (OSS build: no host-app self-context.) The Claude bots get this from their own CLAUDE.md +
+# a SessionStart hook that loads the shared host-app; codex has neither, so gpt
+# was running with no idea who/what it is. Keep this short — it's prepended every turn.
+def _host_boot_context(bot: str = "gpt") -> str:
+    """OSS build: no host-app context to load — the agent runs on its
+    persona + task alone."""
+    return ""
+
+_GPT_SELF = ""
+
+# Inline self-context for gemma — fallback if _host_boot_context("gemma") returns
+# nothing (gemma has no SessionStart hook, same as gpt). Parallel to _GPT_SELF.
+_GEMMA_SELF = ""
+
 AGENT_BOTS = {
-    "claude": {"label": "claude", "runtime": "claude",
-               "config_dir": os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
-               "cwd": os.path.expanduser("~"),
+    "claude-a": {"label": "claude-a", "runtime": "claude",
+               "config_dir": os.path.expanduser("~/.claude"),
+               "cwd": os.path.expanduser("~/agents/claude-a"),
                "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
+    "claude-b": {"label": "claude-b", "runtime": "claude",
+              "config_dir": os.path.expanduser("~/.config/claude-b"),
+              "cwd": os.path.expanduser("~"),
+              "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
+    # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
+    # ~/.codex/config.toml already wires the same playwright MCP wrapper.
+    # Unlike the Claude bots, codex has no CLAUDE.md / SessionStart hook loading
+    # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
-            "config_dir": os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
+            "config_dir": os.path.expanduser("~/.codex"),
             "cwd": os.path.expanduser("~"),
-            "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
+            "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
+    # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
+    # the agy analog of the codex/ChatGPT-sub path. agy `-p` returns PLAIN TEXT
+    # (no JSON event stream), so the live action-trace is unavailable; we surface
+    # the final text only. Like gpt/codex, agy has no CLAUDE.md / SessionStart
+    # hook, so gemma gets its the app self-context inline (host-app digest if
+    # reachable, else _GEMMA_SELF).
+    "gemma": {"label": "gemma", "runtime": "agy",
+              "config_dir": os.path.expanduser("~/.gemini"),
+              "cwd": os.path.expanduser("~"),
+              "persona": ("You are a helpful, capable computer-using assistant." + _GEMMA_SELF + _BROWSER_MANDATE)},
 }
+
+# DEMO sandbox persona — Operator browser-driving behavior ONLY, no the app identity/context.
+# Used when start(demo=True) for the public demo instance the public demo. Strips _GPT_SELF.
+_DEMO_PERSONA = "You are a capable web-browsing assistant operating a live browser." + _BROWSER_MANDATE
 
 _BROWSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse")
 # MCP config that gives the agent the Playwright tools, attached to :9222 Chrome
-# via the stdio wrapper in browse/playwright-mcp.sh.
+# via the same stdio wrapper the bots use (cdp-endpoint --ensure inside it).
 _MCP_CONFIG = {
     "mcpServers": {
         "playwright": {"command": "bash", "args": [os.path.join(_BROWSE, "playwright-mcp.sh")]}
@@ -71,8 +101,8 @@ _MCP_CONFIG = {
 _ACTION_LABELS = {
     "browser_click": "Clicking", "browser_double_click": "Double-clicking",
     "browser_mouse_click_xy": "Clicking", "browser_mouse_drag_xy": "Dragging",
-    "browser_mouse_move_xy": "Moving", "browser_mouse_down": "Pressing",
-    "browser_mouse_up": "Releasing", "browser_mouse_wheel": "Scrolling",
+    "browser_mouse_move_xy": "Moving", "browser_mouse_down": "Pressing", "browser_mouse_up": "Releasing",
+    "browser_mouse_wheel": "Scrolling",
     "browser_type": "Typing", "browser_navigate": "Browsing",
     "browser_navigate_back": "Going back", "browser_navigate_forward": "Going forward",
     "browser_press_key": "Pressing", "browser_scroll": "Scrolling",
@@ -104,11 +134,9 @@ _NONBROWSER_LABELS = {
     "multiedit": "Editing file", "notebookedit": "Editing notebook",
     "ls": "Listing files", "cat": "Reading file",
     # memory / recall
-    "recall": "Recalling", "memory": "Checking memory", "vecgrep": "Searching memory",
+    "recall": "Recalling", "memory": "Checking memory",
     "get_corpus": "Searching memory", "list_corpora": "Checking memory",
-    # markets (example finance MCP tool labels)
-    "get_quote": "Checking quote", "quote": "Checking quote",
-    "get_positions": "Checking portfolio",
+    # markets
     # docs / misc
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
@@ -152,6 +180,19 @@ def _gerund_label(bare: str) -> str:
 _SKIP_TOOLS = {"toolsearch", "tooldispatch"}
 
 
+def _mcp_resource_label(name: str) -> str:
+    """Map generic MCP resource/listing ops to a clean verb . Returns '' if nothing fits."""
+    n = (name or "").lower().rsplit("__", 1)[-1]
+    if any(k in n for k in ("list_resources", "listresources", "resources/list", "list_dir",
+                            "listdir", "list_directory", "readdir")):
+        return "Listing resources"
+    if any(k in n for k in ("read_resource", "readresource", "get_resource", "resources/read")):
+        return "Reading resource"
+    if "list" in n:
+        return "Listing"
+    return ""
+
+
 def _action_label(tool: str, args: dict) -> tuple[str, str]:
     """browser_* tool + input -> (label, detail). Non-browser tools -> ('', '').
 
@@ -189,7 +230,8 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
     detail = ""
     if isinstance(args, dict):
         # coordinate-mouse tools (browser_mouse_*_xy): surface the click/drag coords
-        # so the trace shows WHERE it clicked, e.g. "Clicking (420, 315)" or a drag.
+        # so the trace shows WHERE it clicked, e.g. "Clicking (420, 315)" or a drag
+        # "(120, 80) → (300, 240)". Tolerant of common key spellings.
         if "_xy" in bare or bare in ("browser_mouse_down", "browser_mouse_up", "browser_mouse_move"):
             def _num(*keys):
                 for k in keys:
@@ -202,7 +244,7 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
             if x is not None and y is not None:
                 detail = f"({x}, {y})"
                 if x2 is not None and y2 is not None:
-                    detail += f" \u2192 ({x2}, {y2})"
+                    detail += f" → ({x2}, {y2})"
         if not detail:
             # prefer a HUMAN description (element/text) over the opaque Playwright
             # ref (e.g. "e16") — drop a bare ref, it means nothing to the viewer.
@@ -213,6 +255,7 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
                     break
             if not detail:
                 rv = args.get("ref")
+                # only show ref if it's NOT a bare auto-ref like e12 / s3 / aria-ref ids
                 if isinstance(rv, str) and rv.strip() and not _re.fullmatch(r"[a-z]?\d+|e\d+|s\d+|f\d+", rv.strip()):
                     detail = rv.strip()[:120]
         if not detail and ("width" in args or "height" in args):   # screenshot → resolution
@@ -230,13 +273,15 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
 
 
 import re as _re
-# handoff marker the agent emits when it hits a human-only gate (captcha/2FA/etc).
+# #4 handoff marker the agent emits when it hits a human-only gate (captcha/2FA/etc).
+# Tolerant: optional spaces, case-insensitive key, reason optional.
 _TAKE_CONTROL_RE = _re.compile(r"\[\[\s*TAKE[_ ]?CONTROL\s*:?\s*(.*?)\s*\]\]",
                                _re.IGNORECASE | _re.DOTALL)
 
 
-def _extract_handoff(text: str):
-    """Strip any [[TAKE_CONTROL: reason]] marker. Returns (clean_text, reason_or_None)."""
+def _extract_handoff(text: str) -> tuple[str, str | None]:
+    """Strip any [[TAKE_CONTROL: reason]] marker from assistant text.
+    Returns (clean_text, reason_or_None). reason is '' if the marker had no text."""
     if not text or "[[" not in text:
         return text, None
     m = _TAKE_CONTROL_RE.search(text)
@@ -304,6 +349,19 @@ def _resolve_claude() -> str | None:
     return None
 
 
+def _resolve_agy() -> str | None:
+    """Google Antigravity CLI (`agy`). Drives the browser on the owner flat Google
+    sub (no metered API key) — the agy analog of the codex/ChatGPT-sub path."""
+    from shutil import which
+    a = which("agy")
+    if a:
+        return a
+    base = os.path.expanduser("~/.local/bin/agy")
+    if os.path.isfile(base) and os.access(base, os.X_OK):
+        return base
+    return None
+
+
 class AgentRunner:
     """Runs ONE headless agent task at a time; streams its output into buffers
     the operator endpoints read. Thread-safe single-flight."""
@@ -320,10 +378,13 @@ class AgentRunner:
         self.model: str = ''
         self.effort: str = ''
         self.ended_ts: float = 0.0
-        self.handoff = None  # {reason, ts} when the agent asks the human to take over
+        self.handoff: dict | None = None  # {reason, ts} when the agent asks the human to take over (#4)
         self._cur_session: str = ''       # session id captured this run
+        self._agy_buf: list = []          # agy plain-text stdout lines (no JSON stream)
+        self._agy_brain_dir: str = ''     # ~/.gemini/antigravity-cli/brain (set per-run)
+        self._agy_traj_before: dict = {}  # {trajectory_path: mtime} snapshot pre-launch
         # SHARED conversation transcript across ALL bots (runtime-agnostic) so the
-        # convo survives switching claude↔claude↔gpt. [{role:'user'|'assistant', text}]
+        # convo survives switching claude-a↔claude-b↔gpt. [{role:'user'|'assistant', text}]
         # Persisted to disk so it ALSO survives a server restart (the store/Flask
         # process bounces on every deploy — without this the convo evaporated).
         self._state_path = os.path.join(
@@ -358,7 +419,7 @@ class AgentRunner:
     def is_running(self) -> bool:
         return self.state == "running"
 
-    def start(self, bot: str, task: str, model: str = '', effort: str = '') -> dict:
+    def start(self, bot: str, task: str, model: str = '', effort: str = '', demo: bool = False) -> dict:
         with self._lock:
             if self.is_running():
                 return {"ok": False, "error": f"{self.bot} is already running a task"}
@@ -370,6 +431,10 @@ class AgentRunner:
                 binpath = _resolve_codex()
                 if not binpath:
                     return {"ok": False, "error": "codex binary not found"}
+            elif runtime == "agy":
+                binpath = _resolve_agy()
+                if not binpath:
+                    return {"ok": False, "error": "agy binary not found"}
             else:
                 binpath = _resolve_claude()
                 if not binpath:
@@ -377,7 +442,7 @@ class AgentRunner:
             self._switched_bot = (self._last_bot is not None and self._last_bot != bot)
             self.bot, self.task = bot, task
             self.state = "running"
-            self.handoff = None
+            self.handoff = None           # fresh run → clear any prior takeover request
             self.messages = []
             self._transcript.append({"role": "user", "text": task})
             self._transcript = self._transcript[-40:]
@@ -385,11 +450,22 @@ class AgentRunner:
             self.started_ts = time.time()
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
+            self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
             # default the claude runtime to Sonnet 4.6 / medium when nothing was picked
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
                 if not self.model:  self.model = "sonnet"
                 if not self.effort: self.effort = "medium"
+            # agy gets a Gemini display-string default (NOT an API id) — an empty
+            # model would otherwise build a broken `--model ""`. effort N/A for agy
+            # (it's folded into the model display string, e.g. "(High)").
+            elif b.get("runtime") == "agy":
+                if not self.model:  self.model = "Gemini 3.5 Flash"
+                # agy wants one display string "Gemini X (Tier)" — fold the effort tier in.
+                _eff = (self.effort or "high").strip().capitalize()
+                if self.model and "(" not in self.model:
+                    self.model = self.model + " (" + _eff + ")"
+                self.effort = ""   # agy has no separate effort flag; it is in the model string
             self._thread = threading.Thread(target=self._run, args=(binpath, b, task),
                                             daemon=True, name="operator-agent")
             self._thread.start()
@@ -398,6 +474,10 @@ class AgentRunner:
     def _run(self, binpath: str, b: dict, task: str) -> None:
         self._runtime = b.get("runtime", "claude")
         self._cur_session = ""
+        self._agy_buf = []
+        self._agy_traj_before = {}
+        self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
+        self._stopped = False    # set by stop(); gates agy interrupt-noise suppression
         # Continuity: inject the shared transcript whenever this turn has NO live
         # native session to resume — i.e. the user switched bots/drivers, OR we
         # have no resume id for this bot (cold start, or the server restarted and
@@ -455,22 +535,30 @@ class AgentRunner:
                 "coordinate mouse tools: browser_mouse_drag_xy(fromX,fromY,toX,toY) (or "
                 "browser_mouse_down/move_xy/up). Read pixel coords from a screenshot first; "
                 "element-ref drag won't move board squares. "
-                "PAN/ROTATE (street view, maps, 3D scenes): click the view to focus it, "
+                "PAN/ROTATE (GeoGuessr street view, maps, 3D scenes): click the view to focus it, "
                 "then look around with browser_press_key ArrowLeft/ArrowRight/ArrowUp/ArrowDown, or "
                 "click-drag across it with browser_mouse_drag_xy. "
                 "SAVE: to save a page/article/receipt as a file, use browser_pdf_save.\n\n"
+                # ── #2 VERIFY-AFTER-ACTION (close the loop) ──────────────────────
                 "VERIFY EVERY CONSEQUENTIAL ACTION. After a click/type/drag/navigate/key "
                 "that should CHANGE the page, do NOT assume it worked — look again. Read "
                 "the DOM (browser_snapshot) or, for visual/canvas/game UIs, take a fresh "
                 "browser_take_screenshot, and CHECK the result matches your intent: did the "
                 "page navigate, did the field fill, did the piece/marker move, did the menu "
-                "open? If it did NOT, DON'T plough ahead repeating the same action — diagnose "
-                "what's actually on screen now and adjust (dismiss the blocker, re-aim the "
-                "coords from the new screenshot, try a different element). One blind action "
-                "is fine; TWO identical blind actions without checking is a bug. "
+                "open? If it did NOT (still the same view, an error toast, a moved target, a "
+                "popup/cookie wall in the way), DON'T plough ahead repeating the same action — "
+                "diagnose what's actually on screen now and adjust (dismiss the blocker, "
+                "re-aim the coords from the new screenshot, try a different element). One "
+                "blind action is fine; TWO identical blind actions without checking is a bug. "
+                "This look-act-check-correct loop is what makes games and multi-step flows work. "
+                # ── #3 KEEP A RUNNING PLAN (task memory across steps) ────────────
                 "KEEP A RUNNING PLAN. For any task with more than ~2 steps, state a short "
-                "numbered plan up front, then note progress as you go ('done / now / "
-                "blocked-on') and carry it forward so you don't lose the goal or redo steps. "
+                "numbered plan up front, then as you go briefly note progress ('done: opened "
+                "the board; now: make move 1; blocked-on: nothing') so you (and the watching "
+                "user) always know where you are. Carry that ledger forward across steps — "
+                "don't lose the goal mid-task or redo finished steps. If the page state "
+                "surprises you, update the plan rather than abandoning it.\n\n"
+                # ── #4 HAND OFF only for the LITERALLY-IMPOSSIBLE ───────────────
                 "DEFAULT: DO IT YOURSELF. This is the user's own browser and their own "
                 "accounts — you are trusted to act. Typing credentials into a login form, "
                 "filling personal info, clicking through forms, submitting, navigating "
@@ -506,7 +594,7 @@ class AgentRunner:
                 "IF YOU'RE STUCK, CHANGE TACK OR ESCALATE — don't loop. If you've tried a few different approaches to the same step and none worked, STOP repeating: step back and rethink (another route to the goal? a different page/menu/search? did an earlier step go wrong?), or if it's genuinely blocked, say so plainly and ask the user rather than burning turns flailing. Spinning on the same obstacle for many steps is worse than stopping and reporting what's blocking you.\n\n"
                 "USER REQUEST: " + task)
         env = dict(os.environ)
-        env["OPERATOR_BOT"] = self.bot or ""   # stamps the active bot on the action feed
+        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["PATH"] = (os.path.expanduser("~/.local/bin") + ":"
                        + os.path.expanduser("~/.nvm/versions/node/v20.20.2/bin")
                        + ":" + env.get("PATH", ""))
@@ -516,8 +604,22 @@ class AgentRunner:
             # codex exec: headless, JSONL events, ChatGPT-sub token (no API key).
             # Its ~/.codex/config.toml already wires the playwright MCP, so we just
             # exec it. `codex exec resume <thread_id>` threads context.
-            env["CODEX_HOME"] = b["config_dir"]
-            prompt = (b["persona"] + "\n\nTask: " + task)
+            # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no extra MCP servers,
+            # plugins) -> browser is the agent's only tool, satisfying the sandbox spec.
+            if getattr(self, "demo", False):
+                env["CODEX_HOME"] = os.path.expanduser(os.environ.get("OPERATOR_DEMO_CODEX_HOME", "~/.operator-demo/codex"))
+            else:
+                env["CODEX_HOME"] = b["config_dir"]
+            # PARITY: on the first turn of a gpt thread (no resume yet), prepend the same
+            # the app boot context the Claude bots get from their SessionStart hook. On
+            # resumes, codex already threaded it — don't re-send (avoids per-turn bloat).
+            # (Kept full, not compressed: it's ~92% cached after turn 1, and the app/
+            # context awareness it gives the agent.)
+            _boot = "" if (resume_id or getattr(self, "demo", False)) else _host_boot_context("gpt")
+            _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
+            prompt = (_persona
+                      + (("\n\n=== app CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
+                      + "\n\nTask: " + task)
             cmd = [binpath, "exec", "--json", "--skip-git-repo-check",
                    "--dangerously-bypass-approvals-and-sandbox"]
             if self.model:
@@ -528,6 +630,64 @@ class AgentRunner:
                 cmd += ["resume", resume_id, prompt]
             else:
                 cmd += [prompt]
+        elif self._runtime == "agy":
+            # agy (Google Antigravity CLI): headless `-p` PRINT mode returns PLAIN
+            # TEXT — the final answer only. NO JSON event stream, NO --json flag.
+            # So no live action-trace (tool_use/reasoning events) like codex/claude;
+            # we surface the final text as one assistant message. agy reads its MCP
+            # servers from ~/.gemini/config/mcp_config.json (fixed path — there is no
+            # per-run --mcp-config flag), so we wire the playwright server in there,
+            # idempotently and non-destructively (preserve any other servers).
+            mcp_path = os.path.join(
+                b["config_dir"], "config", "mcp_config.json")
+            try:
+                os.makedirs(os.path.dirname(mcp_path), exist_ok=True)
+                existing = {}
+                try:
+                    with open(mcp_path) as f:
+                        _raw = f.read().strip()
+                    if _raw:
+                        existing = json.loads(_raw)
+                        if not isinstance(existing, dict):
+                            existing = {}
+                except (OSError, ValueError):
+                    existing = {}
+                servers = existing.get("mcpServers")
+                if not isinstance(servers, dict):
+                    servers = {}
+                # add/overwrite ONLY the playwright entry; leave everything else as-is.
+                servers["playwright"] = {"command": "bash",
+                    "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), self.bot or ""]}
+                existing["mcpServers"] = servers
+                tmp = mcp_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(existing, f, indent=2)
+                os.replace(tmp, mcp_path)
+            except OSError:
+                pass
+            env["GEMINI_CLI_CONFIG_DIR"] = b["config_dir"]  # informational; agy uses ~/.gemini
+            # SNAPSHOT existing trajectory files + mtimes BEFORE launch so we can
+            # identify THIS run's transcript_full.jsonl afterward (the new-or-freshest
+            # one). Mirrors codex-chat.ts scanning ~/.codex/sessions for the freshest
+            # rollout. agy `-p` plain-text emits no conversation id, so this mtime-diff
+            # is how we find the trajectory that holds the thinking + tool-call trace.
+            self._agy_brain_dir = os.path.join(b["config_dir"], "antigravity-cli", "brain")
+            self._agy_traj_before = self._agy_snapshot_trajectories()
+            # agy has no --append-system-prompt (a claude flag) — FOLD persona +
+            # the app self-context + task into the -p prompt (like the codex branch).
+            _boot = "" if getattr(self, "demo", False) else _host_boot_context("gemma")
+            _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
+            prompt = (_persona
+                      + (("\n\n=== app CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
+                      + "\n\nTask: " + task)
+            # --dangerously-skip-permissions = agy analog of codex's bypass-approvals
+            # (auto-approve tool/MCP calls non-interactively). No resume for v1 —
+            # --conversation <id> exists but agy `-p` plain-text emits no capturable
+            # session id, so each turn runs fresh (the shared-transcript inject above
+            # carries continuity). TODO: thread --conversation once we can capture the id.
+            cmd = [binpath, "-p", prompt, "--dangerously-skip-permissions"]
+            if self.model:
+                cmd += ["--model", self.model]
         else:
             # claude -p: stream-json, Max/Pro OAuth in the bot's config dir.
             cfg_path = os.path.join(os.path.expanduser("~/.cache/computer-use"),
@@ -559,9 +719,13 @@ class AgentRunner:
             self._proc = subprocess.Popen(
                 cmd, cwd=b["cwd"], env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1)
+            if self._runtime == "agy":
+                self._start_agy_live_poll()
             for line in self._proc.stdout:
                 self._consume(line)
             self._proc.wait()
+            if self._runtime == "agy":
+                self._flush_agy()   # agy buffers plain text → push as one assistant msg
             if self._cur_session:
                 self._session_ids[self.bot or ""] = self._cur_session
             # record the final answer in the shared transcript for cross-bot history
@@ -598,6 +762,14 @@ class AgentRunner:
 
     def _consume(self, line: str) -> None:
         """Parse one stream-json line → push assistant text into messages."""
+        if getattr(self, "_runtime", "claude") == "agy":
+            # agy `-p` emits PLAIN TEXT (the final answer), not JSON events — there
+            # is NO action/tool_use trace on this path (the known agy limitation).
+            # Buffer every non-empty stdout line; _flush_agy() (called at process
+            # end in _run) joins them into ONE assistant message + runs the
+            # handoff extractor so [[TAKE_CONTROL: ...]] still works.
+            self._agy_buf.append(line.rstrip("\n"))
+            return
         line = line.strip()
         if not line:
             return
@@ -625,7 +797,7 @@ class AgentRunner:
                         t, _reason = _extract_handoff(t)
                         if _reason is not None:
                             self.handoff = {"reason": _reason, "ts": time.time()}
-                        if t:
+                        if t:   # marker may have been the whole message → don't push empty
                             self.messages.append({"ts": time.time(), "role": "assistant", "text": t})
                 elif block.get("type") == "tool_use":
                     # surface browser actions inline so the trace interleaves
@@ -687,6 +859,214 @@ class AgentRunner:
             if msg:
                 self.messages.append({"ts": time.time(), "role": "error", "text": msg[:200]})
 
+    def _agy_snapshot_trajectories(self) -> dict:
+        """Map {transcript_full.jsonl path -> mtime} under the agy brain dir, taken
+        BEFORE launch so we can identify THIS run's trajectory afterward (the one
+        that's new or freshest-modified since)."""
+        out: dict = {}
+        bd = self._agy_brain_dir
+        if not bd or not os.path.isdir(bd):
+            return out
+        try:
+            for conv in os.scandir(bd):
+                if not conv.is_dir():
+                    continue
+                tp = os.path.join(conv.path, ".system_generated", "logs",
+                                  "transcript_full.jsonl")
+                try:
+                    out[tp] = os.path.getmtime(tp)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        return out
+
+    def _agy_find_trajectory(self) -> str | None:
+        """Pick THIS run's transcript_full.jsonl: a path that's NEW since the pre-launch
+        snapshot, or one whose mtime advanced. Falls back to the globally-freshest if
+        nothing looks new (best-effort — never raises)."""
+        bd = self._agy_brain_dir
+        if not bd or not os.path.isdir(bd):
+            return None
+        before = self._agy_traj_before or {}
+        now = self._agy_snapshot_trajectories()
+        candidates = [(m, p) for p, m in now.items()
+                      if p not in before or m > before.get(p, 0)]
+        if candidates:
+            return max(candidates)[1]          # freshest among the changed/new ones
+        if now:                                # nothing "changed" — take freshest overall
+            return max((m, p) for p, m in now.items())[1]
+        return None
+
+    def _agy_parse_trajectory(self, path: str) -> bool:
+        """Parse agy's structured trajectory (transcript_full.jsonl) into ordered
+        thinking/action/answer messages — full parity with the codex/claude trace.
+
+        VERIFIED step shapes (real tool-using run, agy 1.0.13):
+          - PLANNER_RESPONSE (source MODEL): the interesting one. Carries
+            `thinking` (str reasoning) AND `tool_calls` (list of {name, args}) on the
+            PLANNING step, and `content` (str final answer) on the FINAL step.
+          - RUN_COMMAND / other MODEL-source non-PLANNER types: a discrete tool/action
+            step (content = a result log). We surface the tool_calls from the planner
+            steps as the actions (they carry the real tool name + args); a MODEL-source
+            non-planner step with no matching planner tool_call is surfaced generically.
+          - USER_INPUT / CONVERSATION_HISTORY / CHECKPOINT (SYSTEM): skip.
+
+        Returns True if it parsed at least one assistant message (so the caller knows
+        the trajectory carried the answer and can skip the stdout fallback). Best-effort:
+        any error → return False and let the caller fall back to plain stdout."""
+        try:
+            steps = []
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        steps.append(json.loads(line))
+                    except ValueError:
+                        continue
+        except OSError:
+            return False
+        steps.sort(key=lambda s: s.get("step_index", 0))   # thinking→action→answer order
+        # The PLANNER_RESPONSE.tool_calls are the AUTHORITATIVE action list (clean tool
+        # name + args + a built-in human label). The standalone tool steps (RUN_COMMAND
+        # etc.) are just execution echoes of those same calls, so if ANY planner carries
+        # tool_calls we drive actions from the planners and SUPPRESS the echo steps
+        # (avoids the duplicate "Running command"). Only if NO planner had tool_calls do
+        # we fall back to surfacing the standalone MODEL non-planner steps as actions —
+        # that path also covers a future agy where browser/MCP calls appear ONLY as their
+        # own step type and never as planner tool_calls.
+        any_planner_tools = any(
+            o.get("source") == "MODEL" and o.get("type") == "PLANNER_RESPONSE"
+            and o.get("tool_calls") for o in steps)
+        got_answer = False
+        for o in steps:
+            if o.get("source") != "MODEL":
+                continue                       # skip USER_INPUT / CONVERSATION_HISTORY / CHECKPOINT
+            _sidx = o.get("step_index", id(o))
+            if _sidx in self._agy_seen:
+                continue                       # already emitted on a prior (live) parse
+            self._agy_seen.add(_sidx)
+            typ = o.get("type")
+            if typ == "PLANNER_RESPONSE":
+                think = o.get("thinking")
+                if isinstance(think, str) and think.strip():
+                    self.messages.append({"ts": time.time(), "role": "assistant",
+                                          "text": think.strip()})
+                # tool_calls: list of {name, args} — same shape _action_label wants.
+                for tc in (o.get("tool_calls") or []):
+                    if not isinstance(tc, dict):
+                        continue
+                    name = tc.get("name") or ""
+                    args = tc.get("args") if isinstance(tc.get("args"), dict) else {}
+                    label, detail = _action_label(name, args)
+                    if not label:
+                        # Our mapper didn't recognize it. Prefer OUR gerund verb over
+                        # agy's built-in toolAction when that's the generic "Calling
+                        # (MCP) tool" noise — only fall back to agy's label if it's a
+                        # SPECIFIC one (e.g. "Read file", "Search web"). Last resort:
+                        # a clean "Calling MCP tool" (never the raw tool name).
+                        _agy_lbl = (args.get("toolAction") or args.get("toolSummary") or "").strip()
+                        _generic = (not _agy_lbl) or _agy_lbl.lower() in (
+                            "calling mcp tool", "calling tool", "running tool",
+                            "using tool", "tool call", "mcp tool")
+                        label = (_gerund_label(name) or (_agy_lbl if not _generic else "")
+                                 or _mcp_resource_label(name) or "Calling MCP tool")
+                    if label and not detail:
+                        for k in ("CommandLine", "command", "url", "query", "text", "toolSummary"):
+                            v = args.get(k)
+                            if isinstance(v, str) and v.strip():
+                                detail = v.strip()[:120]; break
+                    if label:
+                        self.messages.append({"ts": time.time(), "role": "action",
+                                              "text": label, "detail": detail})
+                ans = o.get("content")
+                if isinstance(ans, str) and ans.strip():
+                    txt, _reason = _extract_handoff(ans.strip())
+                    if _reason is not None and not self.handoff:
+                        self.handoff = {"reason": _reason, "ts": time.time()}
+                    if txt:
+                        self.messages.append({"ts": time.time(), "role": "assistant", "text": txt})
+                        got_answer = True
+            elif not any_planner_tools:
+                # No planner tool_calls in this run → surface standalone MODEL non-planner
+                # steps (RUN_COMMAND, or a future browser/MCP step type) as actions. The
+                # content here is a result LOG, not call args — take just a one-line snippet.
+                content = o.get("content")
+                snippet = ""
+                if isinstance(content, str) and content.strip():
+                    snippet = content.strip().splitlines()[0][:120]
+                label = ""
+                if isinstance(typ, str):
+                    label = _gerund_label(typ.lower()) or typ.replace("_", " ").capitalize()
+                if label:
+                    self.messages.append({"ts": time.time(), "role": "action",
+                                          "text": label, "detail": snippet})
+        return got_answer
+
+    def _start_agy_live_poll(self):
+        """agy -p doesn't stream, but it writes transcript_full.jsonl incrementally.
+        Poll it during the run and parse-incrementally so thinking/actions show LIVE
+        (the dedupe set means each parse only emits new steps). Best-effort daemon;
+        the post-wait _flush_agy still does the final authoritative parse."""
+        def _poll():
+            import time as _t
+            while self._proc and self._proc.poll() is None:
+                try:
+                    traj = self._agy_find_trajectory()
+                    if traj:
+                        self._agy_parse_trajectory(traj)
+                except Exception:
+                    pass
+                _t.sleep(0.5)   # tight poll → gemma tool-calls show near-live (parse is cheap: read jsonl + dedupe)
+        try:
+            threading.Thread(target=_poll, daemon=True, name="agy-live-trace").start()
+        except Exception:
+            pass
+
+    def _flush_agy(self) -> None:
+        """Surface agy's output. Primary: parse the structured trajectory
+        (transcript_full.jsonl) for the FULL thinking + tool-call trace — parity with
+        codex/claude. Fallback: the plain-text `-p` stdout (clean final answer) if the
+        trajectory can't be found/parsed. De-dupe so the final answer isn't posted twice
+        (trajectory final == stdout final). Best-effort: never crash the run."""
+        stdout_text = "\n".join(self._agy_buf).strip()
+        self._agy_buf = []
+
+        parsed_answer = False
+        try:
+            traj = self._agy_find_trajectory()
+            if traj:
+                parsed_answer = self._agy_parse_trajectory(traj)
+        except Exception:  # noqa: BLE001 — trace is best-effort; stdout is the floor
+            parsed_answer = False
+
+        # The trajectory's FINAL planner content is the authoritative final answer (the
+        # plain `-p` stdout sometimes captures an intermediate thinking line, not the
+        # clean reply). So when the trajectory yielded an answer, trust it and DON'T also
+        # post the stdout — that's what caused a stray reasoning line to tail the trace.
+        # The stdout fallback fires ONLY when the trajectory couldn't be found/parsed.
+        if parsed_answer or not stdout_text:
+            return
+        # agy prints interrupt/timeout noise to stdout when terminated (user hit Stop):
+        # e.g. "Error: timed out waiting for response". Don't surface that as a reply —
+        # drop those lines (and if the whole thing was just noise on a stop, bail).
+        _NOISE = ("timed out waiting for response", "timed out waiting",
+                  "request was aborted", "operation was canceled", "operation was cancelled")
+        _kept = [ln for ln in stdout_text.splitlines()
+                 if not any(n in ln.lower() for n in _NOISE)]
+        stdout_text = "\n".join(_kept).strip()
+        if getattr(self, "_stopped", False) and not stdout_text:
+            return   # interrupted run produced only noise → emit nothing
+        if not stdout_text:
+            return
+        text, _reason = _extract_handoff(stdout_text)
+        if _reason is not None and not self.handoff:
+            self.handoff = {"reason": _reason, "ts": time.time()}
+        if text:
+            self.messages.append({"ts": time.time(), "role": "assistant", "text": text})
+
     def reset_session(self, bot: str = "") -> dict:
         """Forget stored session id(s) + the shared transcript so the next task
         starts a fresh conversation (wired to the operator's clear/trash button)."""
@@ -702,7 +1082,8 @@ class AgentRunner:
 
     def stop(self) -> dict:
         p = self._proc
-        self.handoff = None
+        self.handoff = None   # a takeover/stop clears any pending handoff request
+        self._stopped = True  # so _flush_agy drops agy's interrupt-noise stdout
         if p and self.is_running():
             try:
                 p.terminate()
@@ -724,7 +1105,7 @@ class AgentRunner:
             "started_ts": self.started_ts, "ended_ts": self.ended_ts,
             "messages": [m for m in self.messages if m["ts"] > since_ts],
             "final": final,
-            "handoff": self.handoff,
+            "handoff": self.handoff,   # #4: {reason, ts} when the agent asks for a takeover
         }
 
 
