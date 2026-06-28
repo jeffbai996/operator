@@ -749,6 +749,15 @@
     .op[data-sheet="peek"] .op-action .op-action-sub { font-size: 0.68rem; }
     /* caret pinned right, same as expanded */
     .op[data-sheet="peek"] .op-action .op-status-min { display: inline-flex; flex: 0 0 auto; margin-left: auto; }
+    /* peek + minimized-pill BOTH set -> peek wins: undo the status-min absolute float
+       + text-hide so the peek status bar shows normally (was mangled, no text). */
+    .op[data-sheet="peek"][data-status-min="1"] .op-action {
+       position: static; top: auto; left: auto; height: auto; min-height: 0;
+       width: 100%; padding: 0.5rem 0.75rem; z-index: auto; }
+    .op[data-sheet="peek"][data-status-min="1"] .op-action > div {
+       opacity: 1 !important; width: auto !important; overflow: visible !important;
+       pointer-events: auto !important; }
+    .op[data-sheet="peek"][data-status-min="1"] .op-log { padding-top: 0; }
     .op[data-sheet="peek"] .op-inputbox { order: 0; margin: 0; flex: 0 0 auto; }
   }
 
@@ -838,7 +847,7 @@
     --bg-2: #e4e8ee; --bg: #eef1f5; --bg-3: #dde2e9; --border: rgba(0,0,0,.12); --border-2: rgba(0,0,0,.16); }
   [data-theme="light"] .op-rail { background: #e7ebf1; }   /* solid (no gradient corner seam) */
   [data-theme="midnight"] .op { --op-code-bg: #0a0e18; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
-  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.58rem/1.4 'Plus Jakarta Sans', sans-serif;   /* fixed size — does NOT scale with the +/- control */
+  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'Plus Jakarta Sans', sans-serif;   /* fixed size — does NOT scale with the +/- control */
     color: var(--muted); opacity: 0.82; text-align: center; cursor: default; }
   [data-theme="light"] .op-disclaimer { color: #5a6573; opacity: 0.92; }   /* darker on light for readability */
   [data-theme="light"] .op-disclaimer-info { color: #3a424d; }
