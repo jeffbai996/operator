@@ -1048,7 +1048,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.3</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.5</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -1952,6 +1952,17 @@
     // carries backticks → render markdown so it shows as a code chip. _mdToHtml escapes first.
     if ((label||'').indexOf('`') !== -1) lab.innerHTML=_mdToHtml(label); else lab.textContent=label||'';
     e.appendChild(ico); e.appendChild(lab);
+    // a SEARCH query → show inline as Searching ("the terms") so the trace reveals
+    // WHAT was searched (parity with Claude's WebSearch(query)). Covers web/code/file
+    // search verbs; the query rides right after the label in muted quotes.
+    const _isSearch = /search|searching|grep|finding|looking up/.test((label||'').toLowerCase());
+    if (detail && _isSearch) {
+      const c=document.createElement('span'); c.className='op-act-coord';
+      c.textContent = '("' + detail.trim() + '")';
+      lab.appendChild(c);
+      markScroll(); steps.appendChild(e); scrollToBottom(); saveSession();
+      return;
+    }
     // coordinate-click detail e.g. "(420, 315)" or a drag "(120, 80) → (300, 240)":
     // show it INLINE after the label in lighter, smaller, muted text .
     const _isCoord = detail && /^\(\s*-?\d/.test(detail.trim());

@@ -121,6 +121,41 @@ _MCP_CONFIG = {
 }
 
 
+def _strip_agy_global_mcp(config_dir: str) -> None:
+    """Remove the playwright entry Operator wired into agy's GLOBAL mcp_config.json.
+    agy has no per-run --mcp-config flag, so a run must add the server to the fixed
+    ~/.gemini/config/mcp_config.json — but leaving it there means the user's NORMAL
+    gemma (Discord/terminal) inherits the browser tool. So we strip it back out when
+    the run ends (finally), restoring the prior state: preserve other servers; delete
+    the file if playwright was the only one. Best-effort; never raises."""
+    try:
+        mcp_path = os.path.join(config_dir, "config", "mcp_config.json")
+        if not os.path.exists(mcp_path):
+            return
+        with open(mcp_path) as f:
+            d = json.load(f)
+        servers = d.get("mcpServers")
+        if not isinstance(servers, dict) or "playwright" not in servers:
+            return
+        del servers["playwright"]
+        if servers:
+            d["mcpServers"] = servers
+            tmp = mcp_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(d, f, indent=2)
+            os.replace(tmp, mcp_path)
+        else:
+            # playwright was the only server -> remove the file so global gemma is clean
+            os.remove(mcp_path)
+        # agy caches one tool-schema json per MCP tool under antigravity-cli/mcp/<server>;
+        # drop the playwright cache so a normal session doesn't see stale browser tools.
+        import shutil
+        cache = os.path.join(config_dir, "antigravity-cli", "mcp", "playwright")
+        shutil.rmtree(cache, ignore_errors=True)
+    except Exception:
+        pass
+
+
 # Map a Playwright MCP tool call -> ("present-tense action label", "short detail")
 # so the operator trace can interleave actions with the agent's thinking.
 _ACTION_LABELS = {
@@ -170,6 +205,16 @@ _NONBROWSER_LABELS = {
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
     "fill_form": "Filling form",
+    # agy / Antigravity CLI tool names (gemma driver) — give them real verbs so the
+    # trace reads like the Claude/codex trace instead of "Using `grep_search`".
+    "grep_search": "Searching", "codebase_search": "Searching code",
+    "find_files": "Finding files", "view_file": "Reading file",
+    "read_file": "Reading file", "view_code_item": "Reading code",
+    "run_command": "Running command", "run_terminal_command": "Running command",
+    "read_url_content": "Fetching", "search_web": "Searching web",
+    "write_to_file": "Writing file", "edit_file": "Editing file",
+    "replace_file_content": "Editing file", "list_dir": "Listing files",
+    "create_memory": "Saving memory", "browser_preview": "Opening preview",
     # discord MCP (bots fetch/reply/react in-channel)
     "fetch_messages": "Fetching messages", "reply": "Replying", "send_message": "Sending message",
     "react": "Reacting", "edit_message": "Editing message", "download_attachment": "Downloading",
@@ -248,11 +293,20 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
         if nb:
             d = ""
             if isinstance(args, dict):
-                for k in ("query", "url", "command", "pattern", "prompt", "symbol",
-                          "q", "text", "name", "path", "file_path", "id"):
-                    v = args.get(k)
-                    if isinstance(v, str) and v.strip():
-                        d = v.strip()[:120]; break
+                # Preferred fields, in priority order. agy/Antigravity uses CapitalCase
+                # (Query, SearchPath, AbsolutePath, CommandLine, Url, ...) where Claude/
+                # codex use lowercase — so we match case-INSENSITIVELY to surface the
+                # arg for BOTH. This is what makes gemma's trace read "Searching
+                # (\"terms\")" instead of a bare "Searching web".
+                _pref = ("query", "q", "searchterm", "url", "commandline", "command",
+                         "cmd", "pattern", "prompt", "symbol", "text", "name",
+                         "absolutepath", "targetfile", "filepath", "file_path",
+                         "directorypath", "path", "searchpath", "id")
+                _lc = {k.lower(): v for k, v in args.items()
+                       if isinstance(v, str) and v.strip()}
+                for k in _pref:
+                    if k in _lc:
+                        d = _lc[k].strip()[:120]; break
             return nb, d
         return "", ""
     label = _ACTION_LABELS.get(bare, bare.replace("browser_", "").replace("_", " ").capitalize())
@@ -565,6 +619,7 @@ class AgentRunner:
         self._runtime = b.get("runtime", "claude")
         self._cur_session = ""
         self._agy_buf = []
+        self._agy_mcp_dir = ""    # set when we wire agy's global MCP; finally strips it
         self._agy_traj_before = {}
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
         self._stopped = False    # set by stop(); gates agy interrupt-noise suppression
@@ -697,7 +752,7 @@ class AgentRunner:
             # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no tool/search/
             # plugins) -> browser is the agent's only tool, satisfying the sandbox spec.
             if getattr(self, "demo", False):
-                env["CODEX_HOME"] = os.path.expanduser(os.environ.get("OPERATOR_DEMO_CODEX_HOME", "~/.operator-demo/codex"))
+                env["CODEX_HOME"] = os.path.expanduser(os.environ.get("OPERATOR_DEMO_CODEX_HOME", "~/.operator-sandbox/codex"))
             else:
                 env["CODEX_HOME"] = b["config_dir"]
             # PARITY: on the first turn of a gpt thread (no resume yet), prepend the same
@@ -722,7 +777,7 @@ class AgentRunner:
                 # defense-in-depth; the real seal is the OS sandbox.) Verified can't read
                 # the host repo. The browser MCP it spawns inherits the sandbox but still
                 # reaches the isolated Chrome (network) + writes screenshots (bound dir).
-                _sandbox = os.path.expanduser("~/operator-demo/sandbox.sh")
+                _sandbox = os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_SCRIPT", "~/.operator-sandbox/sandbox.sh"))
                 cmd = ["bash", _sandbox, binpath, "exec", "--json",
                        "--skip-git-repo-check",
                        "--dangerously-bypass-approvals-and-sandbox"]
@@ -770,6 +825,7 @@ class AgentRunner:
                 with open(tmp, "w") as f:
                     json.dump(existing, f, indent=2)
                 os.replace(tmp, mcp_path)
+                self._agy_mcp_dir = b["config_dir"]   # teardown strips playwright in finally
             except OSError:
                 pass
             env["GEMINI_CLI_CONFIG_DIR"] = b["config_dir"]  # informational; agy uses ~/.gemini
@@ -824,7 +880,7 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=(os.path.expanduser("~/operator-demo/workspace") if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
+                cmd, cwd=(os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_WORKSPACE", "~/.operator-sandbox/workspace")) if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             if self._runtime == "agy":
@@ -865,6 +921,11 @@ class AgentRunner:
         finally:
             try: _errf.close()
             except Exception: pass
+            # agy: undo the GLOBAL mcp_config.json edit so the user's normal gemma
+            # (outside Operator) doesn't keep the browser tool. No-op for other runtimes.
+            if getattr(self, "_agy_mcp_dir", ""):
+                _strip_agy_global_mcp(self._agy_mcp_dir)
+                self._agy_mcp_dir = ""
             self.ended_ts = time.time()
             self._proc = None
 
