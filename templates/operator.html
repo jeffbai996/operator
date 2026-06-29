@@ -2443,7 +2443,7 @@
         } else if (m.role === 'assistant') {
           // reasoning step; remember it — the LAST one becomes the final reply bubble
           _lastAssistant = m.text;
-          taskStep(m.text.slice(0,400));
+          taskStep(m.text);
           taskVerb('Thinking\u2026');
         } else if (m.role === 'error') {
           const et = (m.text||'').trim();
