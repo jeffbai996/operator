@@ -273,7 +273,18 @@ class _Streamer:
                         self._hard_relaunch_chrome()
                         await self._attach()
                 if not self.vw:
-                    self._update_viewport()
+                    # CDP-attached pages have NO Playwright viewport_size (it's None for
+                    # connect_over_cdp), so the sync helper leaves vw/vh=0 → manual click
+                    # mapping breaks. Read the REAL viewport via JS innerWidth/innerHeight.
+                    try:
+                        _vp = await self._page.evaluate(
+                            "({w: window.innerWidth, h: window.innerHeight})")
+                        if _vp and _vp.get("w"):
+                            self.vw, self.vh = int(_vp["w"]), int(_vp["h"])
+                        else:
+                            self._update_viewport()
+                    except Exception:
+                        self._update_viewport()
             except Exception as e:  # noqa: BLE001
                 self.detail = str(e)
                 # A single transient capture error is normal during navigation —

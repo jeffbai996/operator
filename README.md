@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.6.6-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.7-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -84,6 +84,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 
 <details>
 <summary>Version history (click to expand)</summary>
+
+**v0.6.7** — **trace + streaming polish**: agent thinking/tool steps now STREAM live during a turn for the Gemini/Antigravity driver (they were stalling until end-of-turn — the live-poll was flip-flopping between trajectory files; now it locks onto the run's file); the status card shows **Ready / Connecting** by live-browser state instead of a mode label; harmony-format reasoning tokens from open models (gpt-oss) are stripped so traces read clean; agent sessions isolated from the interactive session list.
 
 **v0.6.6** — **reliability + cost + status-card pass**: clean interrupt handling (Stop reads "Interrupted", no phantom error card, next turn isn't stuck on a half-killed session) and the orphaned browser-tool process is reaped so the agent never hangs after the first turn; a **screenshot-economy** directive + a per-turn **token guard** that warns when a vision-heavy task's context balloons (long games re-sending accumulated screenshots can otherwise burn a huge amount of tokens); modern eased status-card spinner with smooth transitions and a "Reconnecting" state instead of a false "Ready" over a dropped feed; the action trace reveals search queries + tool args across drivers; the agent is steered off inspecting browser internals; unified header; and agent sessions are isolated so they don't clutter the interactive session list.
 
