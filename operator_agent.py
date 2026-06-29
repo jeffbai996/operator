@@ -275,6 +275,24 @@ def _mcp_resource_label(name: str) -> str:
     return ""
 
 
+def _scrub_detail(d: str) -> str:
+    """Sanitize an action detail before it renders in the (possibly public) trace.
+    Strips absolute home paths to a basename and removes a leading user home prefix,
+    so a gemma schema-read can't leak '/home/<user>/.gemini/...'. Idempotent."""
+    if not isinstance(d, str) or not d.strip():
+        return ""
+    d = d.strip()
+    # a detail that's PURELY an absolute path → show just the last path component
+    if _re.fullmatch(r"/(?:home|Users|root)/[^\s]+", d):
+        d = d.rstrip("/").rsplit("/", 1)[-1] or d
+    else:
+        # a home path embedded in a sentence → collapse to ~/<tail-basename>
+        d = _re.sub(r"/(?:home|Users)/[^/\s]+(/[^\s]*)?",
+                    lambda m: "~/" + (m.group(1).rstrip("/").rsplit("/", 1)[-1] if m.group(1) else ""),
+                    d)
+    return d[:120]
+
+
 def _action_label(tool: str, args: dict) -> tuple[str, str]:
     """browser_* tool + input -> (label, detail). Non-browser tools -> ('', '').
 
@@ -315,18 +333,37 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
                 for k in _pref:
                     if k in _lc:
                         d = _lc[k].strip()[:120]; break
-            return nb, d
+            return nb, _scrub_detail(d)
         return "", ""
     label = _ACTION_LABELS.get(bare, bare.replace("browser_", "").replace("_", " ").capitalize())
     detail = ""
     if isinstance(args, dict):
+        # CASE-INSENSITIVE arg access: agy/Gemini sends CapitalCase keys
+        # (Text/Url/Key/Value/Selector/X/Y/...) where claude/codex send lowercase.
+        # The browser detail path used to read lowercase-only, so EVERY agy browser
+        # action with a CapitalCase arg surfaced no detail (the systematic gap behind
+        # bare "Typing"/"Browsing"/"Pressing"). Mirror args lowercased and look up
+        # through _ci so both spellings hit. (Also unwraps a nested Arguments dict that
+        # some agy steps leave wrapped.)
+        _src = args
+        if isinstance(args.get("Arguments"), dict):   # belt-and-suspenders unwrap
+            _src = {**args, **args["Arguments"]}
+        _ci = {}
+        for _k, _v in _src.items():
+            if isinstance(_k, str):
+                _ci.setdefault(_k.lower(), _v)
+        def _g(*keys):
+            for _k in keys:
+                if _k in _src: return _src[_k]
+                if _k.lower() in _ci: return _ci[_k.lower()]
+            return None
         # coordinate-mouse tools (browser_mouse_*_xy): surface the click/drag coords
         # so the trace shows WHERE it clicked, e.g. "Clicking (420, 315)" or a drag
         # "(120, 80) → (300, 240)". Tolerant of common key spellings.
         if "_xy" in bare or bare in ("browser_mouse_down", "browser_mouse_up", "browser_mouse_move"):
             def _num(*keys):
                 for k in keys:
-                    v = args.get(k)
+                    v = _g(k)
                     if isinstance(v, (int, float)):
                         return int(round(v))
                 return None
@@ -337,30 +374,53 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
                 if x2 is not None and y2 is not None:
                     detail += f" → ({x2}, {y2})"
         if not detail:
-            # prefer a HUMAN description (element/text) over the opaque Playwright
-            # ref (e.g. "e16") — drop a bare ref, it means nothing to the viewer.
-            for k in ("element", "text", "value", "url", "key", "selector", "query"):
-                v = args.get(k)
-                if isinstance(v, str) and v.strip():
-                    detail = v.strip()[:120]
-                    break
+            # agy attaches a human one-liner per call ("Clicking learn more link") —
+            # prefer it; it beats a raw selector. Then a HUMAN description
+            # (element/text), THEN a selector — but DROP a value that's just an opaque
+            # ref (e6, s3) or a bare tag ("a", "div"): those mean nothing to the viewer,
+            # better to show the bare verb ("Clicking") than "Clicking — a".
+            def _trivial(val):
+                v = val.strip()
+                return (_re.fullmatch(r"[a-z]?\d+|e\d+|s\d+|f\d+", v)         # auto-ref e6/s3
+                        or _re.fullmatch(r"[a-zA-Z][a-zA-Z0-9]{0,2}", v))        # bare tag a/div
+            _act = (_g("toolAction") or _g("toolSummary") or "")
+            if isinstance(_act, str) and _act.strip():
+                _d = _act.strip()
+                # drop a leading word that just re-states the label's verb so we don't
+                # render "Clicking — Clicking learn more link" / "Took screenshot —
+                # Taking screenshot ...". Covers present + past forms of common verbs.
+                _roots = ("click", "tap", "typ", "screenshot", "screen shot", "navigat",
+                          "read", "view", "scroll", "drag", "select", "press", "hover",
+                          "tak", "took", "go", "open", "search")
+                _w = _d.split(None, 1)
+                if len(_w) == 2 and any(_w[0].lower().startswith(r) for r in _roots):
+                    _d = _w[1]
+                    _w2 = _d.split(None, 1)   # trim a left-behind article/prep
+                    if len(_w2) == 2 and _w2[0].lower() in ("the", "a", "an", "on", "of", "to"):
+                        _d = _w2[1]
+                detail = _d[:120]
             if not detail:
-                rv = args.get("ref")
-                # only show ref if it's NOT a bare auto-ref like e12 / s3 / aria-ref ids
-                if isinstance(rv, str) and rv.strip() and not _re.fullmatch(r"[a-z]?\d+|e\d+|s\d+|f\d+", rv.strip()):
+                for k in ("element", "text", "value", "url", "key", "selector", "target", "query"):
+                    v = _g(k)
+                    if isinstance(v, str) and v.strip() and not _trivial(v):
+                        detail = v.strip()[:120]
+                        break
+            if not detail:
+                rv = _g("ref")
+                if isinstance(rv, str) and rv.strip() and not _trivial(rv):
                     detail = rv.strip()[:120]
-        if not detail and ("width" in args or "height" in args):   # screenshot → resolution
-            w, h = args.get("width"), args.get("height")
+        if not detail and (_g("width") is not None or _g("height") is not None):  # screenshot → resolution
+            w, h = _g("width"), _g("height")
             if isinstance(w, (int, float)) and isinstance(h, (int, float)):
                 detail = f"{int(w)}×{int(h)}"
         if not detail:                      # Waiting: surface the time, humanized
             for k in ("time", "timeout", "seconds", "ms"):
-                v = args.get(k)
+                v = _g(k)
                 if isinstance(v, (int, float)):
                     secs = v / 1000.0 if k == "ms" else float(v)
                     detail = _fmt_duration(secs)
                     break
-    return label, detail
+    return label, _scrub_detail(detail)
 
 
 import re as _re
@@ -1319,10 +1379,39 @@ class AgentRunner:
                         label = (_gerund_label(name) or (_agy_lbl if not _generic else "")
                                  or _mcp_resource_label(name) or "Using tool")
                     if label and not detail:
-                        for k in ("CommandLine", "command", "url", "query", "text", "toolSummary"):
+                        # agy attaches a human description per call (toolAction /
+                        # toolSummary, e.g. "Clicking learn more link") — PREFER that as
+                        # the detail; it's cleaner than a raw selector. Then fall back to
+                        # the real arg (target/selector/url/...). If NOTHING is present we
+                        # leave detail empty so the trace shows the bare verb ("Clicking")
+                        # rather than an opaque "element".
+                        # token roots already implied by common labels, so a toolAction
+                        # echoing the same verb ("Clicking ..."/"Took screenshot" vs
+                        # "Taking screenshot ...") doesn't render "Clicking — Clicking ...".
+                        _verb_roots = {"click", "tap", "typ", "screenshot", "navigat",
+                                       "read", "scroll", "drag", "select", "press", "hover"}
+                        for k in ("toolAction", "toolSummary", "CommandLine", "command",
+                                  "url", "query", "text", "target", "selector"):
                             v = args.get(k)
-                            if isinstance(v, str) and v.strip():
-                                detail = v.strip()[:120]; break
+                            if not (isinstance(v, str) and v.strip()):
+                                continue
+                            _d = v.strip()
+                            if k in ("toolAction", "toolSummary"):
+                                # drop a leading word that just re-states the label's verb
+                                _w = _d.split(None, 1)
+                                if len(_w) == 2 and any(_w[0].lower().startswith(r) for r in _verb_roots):
+                                    _d = _w[1]
+                                _w2 = _d.split(None, 1)   # then a left-behind article/prep
+                                if len(_w2) == 2 and _w2[0].lower() in ("the", "a", "an", "on", "of"):
+                                    _d = _w2[1]
+                            elif k in ("target", "selector"):
+                                # a bare tag selector ("a", "div", "button") is useless as a
+                                # label — skip it so the trace shows the bare verb instead.
+                                import re as _re2
+                                if _re2.fullmatch(r"[a-zA-Z][a-zA-Z0-9]{0,2}", _d):
+                                    continue
+                            if _d:
+                                detail = _d[:120]; break
                     if label:
                         self.messages.append({"ts": time.time(), "role": "action",
                                               "text": label, "detail": detail})
