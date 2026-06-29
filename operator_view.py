@@ -69,6 +69,7 @@ class _Streamer:
     _browser = None
     _cdp = None
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
+    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch 
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
 
     # ---- lifecycle -------------------------------------------------------
@@ -89,6 +90,12 @@ class _Streamer:
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        # asyncio.Lock/Task bind to the loop they're created on. A reattach spins a
+        # fresh loop here, so DROP any primitives cached against the previous loop —
+        # else they raise "bound to a different event loop" on the next action and the
+        # status card flashes "Failed" for every click/keystroke. Rebuilt lazily.
+        self._io_lock = None
+        self._key_repeat = {}   # drop any Tasks bound to the dead old loop
         try:
             self._loop.run_until_complete(self._grab_loop())
         except Exception as e:  # noqa: BLE001
@@ -126,9 +133,11 @@ class _Streamer:
             except Exception:  # noqa: BLE001
                 continue
 
-    def _ensure_chrome_alive(self) -> None:
-        """If CDP is unreachable (Chrome died), relaunch the logged-in Chrome via
-        chrome-attach.sh — the same thing the desktop 'Open Bot Chrome' script does.
+    def _ensure_chrome_alive(self, relaunch: bool = False) -> None:
+        """If CDP is unreachable, OPTIONALLY relaunch the logged-in Chrome via
+        chrome-attach.sh. relaunch=False (the passive streamer path) only checks
+        liveness — it must NOT resurrect a Chrome the USER closed manually .
+        relaunch=True is the explicit-intent path (a task dispatch) that may spawn it.
         Blocking + best-effort; runs in the streamer thread before an attach."""
         import os, subprocess, urllib.request, json as _json
         alive = False
@@ -141,10 +150,18 @@ class _Streamer:
         except Exception:  # noqa: BLE001 — dead OR wedged → (re)launch
             alive = False
         if alive:
+            self._user_closed = False   # it's up → clear any manual-close latch
+            return
+        if not relaunch:
+            # passive path: Chrome is down and nobody explicitly asked to (re)launch.
+            # Treat as a manual close — surface it, latch it, and DON'T resurrect it.
+            self._user_closed = True
+            self.status, self.detail = "idle", "browser closed — start a task to relaunch"
             return
         attach = os.path.expanduser("~/agents/browse/chrome-attach.sh")
         if not os.path.exists(attach):
             return
+        self._user_closed = False
         # if a wedged Chrome process is lingering, kill it first so the relaunch takes.
         try:
             subprocess.run(["powershell.exe", "-NoProfile", "-Command",
@@ -171,7 +188,7 @@ class _Streamer:
 
     async def _attach(self) -> None:
         from playwright.async_api import async_playwright
-        self._ensure_chrome_alive()
+        self._ensure_chrome_alive(relaunch=not getattr(self, '_user_closed', False))
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.connect_over_cdp(CDP_URL)
         ctx = self._browser.contexts[0] if self._browser.contexts else \
@@ -926,6 +943,14 @@ def operator_dispatch():
         return jsonify(ok=False, error="empty task"), 400
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
+    # explicit user intent → if the user had manually closed Chrome, this is the
+    # signal to bring it back. Clear the latch + relaunch (the agent needs the browser).
+    try:
+        _streamer._user_closed = False
+        _streamer._ensure_chrome_alive(relaunch=True)
+        _streamer.ensure_running()
+    except Exception:
+        pass
     if DEMO:
         # public demo: GPT-only, effort locked per preset (5.4->medium, 5.5->low);
         # ignore any client-sent bot. demo=True strips the app context/identity/tools.

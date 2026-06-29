@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.6.5-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.6-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -84,6 +84,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 
 <details>
 <summary>Version history (click to expand)</summary>
+
+**v0.6.6** — **reliability + cost + status-card pass**: clean interrupt handling (Stop reads "Interrupted", no phantom error card, next turn isn't stuck on a half-killed session) and the orphaned browser-tool process is reaped so the agent never hangs after the first turn; a **screenshot-economy** directive + a per-turn **token guard** that warns when a vision-heavy task's context balloons (long games re-sending accumulated screenshots can otherwise burn a huge amount of tokens); modern eased status-card spinner with smooth transitions and a "Reconnecting" state instead of a false "Ready" over a dropped feed; the action trace reveals search queries + tool args across drivers; the agent is steered off inspecting browser internals; unified header; and agent sessions are isolated so they don't clutter the interactive session list.
 
 **v0.6.5** — **inline agent screenshots** + cleanup: when an agent reports a screenshot in its reply, it now renders inline in the chat (served from the run's output dir via a guarded `/operator/shot/<name>` route — basename-only, image-extension whitelist, path-traversal safe) instead of collapsing to a "took a screenshot" note. Gemini driver: the Playwright MCP it wires into the global CLI config is now stripped back out after each run, so a normal (non-Operator) session of the same CLI doesn't inherit the browser tool. **Search-query reveal + arg parity**: the trace now shows WHAT a tool acted on — `Searching ("the terms")`, file paths, commands — across every driver's tool set, not just a bare verb. Plus de-dup/label fixes across the action trace.
 

@@ -71,15 +71,12 @@
     body.op-locked { display: flex; flex-direction: column; height: 100dvh;
       min-height: 100dvh; width: 100vw; max-width: 100vw; overflow-x: hidden; }
     body.op-locked > header, body.op-locked > header.site { flex: 0 0 auto; }
-    /* Operator runs at a compact scale, so the full-size host-app header looked
-       oversized above it . On the operator page only, shrink the header to
-       sit proportionate to the compact Operator UI. Other host-app pages keep
-       the normal header — this is scoped to body.op-locked. */
-    body.op-locked header.site { padding-top: 0.3rem; padding-bottom: 0.28rem;
-      margin-bottom: 0.6rem; gap: 0.28rem 0.7rem; }
-    body.op-locked header.site a { font-size: 0.78rem; padding: 0.2rem 0.46rem; border-radius: 7px; }
-    body.op-locked header.site a.brand { font-size: 1.0rem; margin-right: 0.55rem; }
-    body.op-locked header.site a.active { padding: 0.24rem 0.6rem; }
+    /* Header is UNIFIED with the rest of the host-app UI : the
+       Operator page used to shrink it (smaller padding/fonts) to sit proportionate
+       to the compact Operator UI, but that made navigating between Operator and other
+       pages jarring. We now inherit the shared header.site size verbatim — only the
+       margin below it is trimmed since the op grid sits right under it. */
+    body.op-locked header.site { margin-bottom: 0.6rem; }
     body.op-locked header.site .nav-caret { font-size: 0.66em; }
     body.op-locked .wrap { flex: 1 1 auto; min-height: 0; min-width: 0;
       width: 100%; max-width: 100%; overflow: hidden;
@@ -190,6 +187,10 @@
     width: 2.1em; padding: 0.3rem 0.5rem; cursor: pointer; }   /* no dropdown arrow — the whole chip is the picker */
   select.op-action-caret option { color: var(--fg); background: var(--bg-2); }   /* names visible in popup */
   select.op-action-caret:focus { outline: none; border-color: var(--accent); }
+  /* highlight the bot picker on hover so it reads as the interactive driver button */
+  select.op-action-caret { transition: border-color .18s ease, background .18s ease, box-shadow .18s ease; }
+  select.op-action-caret:hover { border-color: var(--accent); background: var(--bg-2);
+    box-shadow: 0 0 0 2px rgba(120,160,255,.16); }
   .op-rail { position: relative; }   /* anchor for the settings popover */
   .op-settings { position: fixed; z-index: 200;
     background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
@@ -242,21 +243,23 @@
      message log reclaims the full width underneath it . */
   .op[data-status-min="1"] .op-action { position: absolute; top: 36px; left: 0.7rem; z-index: 8; width: auto; }   /* small gap below the header  */   /* float just below the header row */
   .op[data-status-min="1"] .op-log { padding-top: 40px; }
-  .op[data-status-min="1"] .op-man-note { margin-top: 32px; }   /* gap below pill matches the gap above it */   /* clear the floating minimized pill */   /* leave room for the floating pill, log fills the rest */
+  .op[data-status-min="1"] .op-man-note { margin-top: 36px; }   /* +4px buffer so the man-note isn't stuck under the pill  — matches the v0.6.5 gap */   /* clear the floating minimized pill */
   .op[data-status-min="1"] .op-pick-wrap { display: none !important; }
   .op-status-min { transform: rotate(180deg); }                       /* expanded: caret up */
   .op[data-status-min="1"] .op-status-min { transform: rotate(0deg); margin-left: 0; }   /* minimized: caret down */
   /* ring stays full size when minimized */
   .op-action-ico { width: 18px; height: 18px; flex: 0 0 auto; position: relative; }
   .op-action-ico::before { content:""; position:absolute; inset:0; border-radius:50%;
-    border: 2px solid var(--border-2); }
+    border: 2px solid var(--border-2);
+    transition: border-color .3s cubic-bezier(.4,0,.2,1), box-shadow .3s ease; }
   .op[data-busy="1"] .op-action-ico::before {
-    border: 2px solid var(--live); border-top-color: #7fe39c;   /* Ready-green ring, mid-green arc */
-    animation: op-spin .7s linear infinite; }
+    border: 2px solid color-mix(in srgb, var(--live) 35%, transparent); border-top-color: var(--live);
+    box-shadow: 0 0 6px -2px var(--live);   /* soft modern glow on the active ring */
+    animation: op-spin .8s cubic-bezier(.65,.05,.36,1) infinite; }
   /* CONNECTING → yellow spinning ring (not green), even while busy=1 on cold start  */
   .op[data-state="connecting"]:not(.op-signal-lost) .op-action-ico::before {
     border: 2px solid #d2a30f !important; border-top-color: #f0cf6a !important;
-    animation: op-spin .8s linear infinite !important; }
+    animation: op-spin .85s cubic-bezier(.65,.05,.36,1) infinite !important; }
   .op[data-mode="man"] .op-action-ico::before { border-color: #f0883e !important;
     transition: border-color .3s ease; }
   .op[data-state="live"]:not([data-busy="1"]) .op-action-ico::before {
@@ -265,10 +268,12 @@
   .op[data-state="connecting"]:not([data-busy="1"]):not(.op-signal-lost) .op-action-ico::before,
   .op[data-state="idle"]:not([data-busy="1"]):not([data-agent="done"]):not(.op-signal-lost) .op-action-ico::before {
     border: 2px solid var(--border-2); border-top-color: var(--fg-2);
-    animation: op-spin .8s linear infinite; }
+    animation: op-spin .85s cubic-bezier(.65,.05,.36,1) infinite; }
   /* SIGNAL LOST stays a static ring (no spin) — the triangle overlay is the indicator */
   .op.op-signal-lost .op-action-ico::before { animation: none; }
-  @keyframes op-spin{to{transform:rotate(360deg)}}
+  @keyframes op-spin{
+    0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+  /* modern indeterminate feel: ease-in-out rotation (subtle accel/decel each turn). */
   /* animated checkmark when a task completes — a centered ✓ glyph */
   .op-action-ico::after { content: ""; position: absolute; inset: 0;
     display: flex; align-items: center; justify-content: center;
@@ -290,6 +295,14 @@
     animation: op-x .3s cubic-bezier(.2,1.2,.4,1) forwards; }
   @keyframes op-x { 0%{transform:translate(-1px,-1px) scale(0);opacity:0}
     60%{transform:translate(-1px,-1px) scale(1.2);opacity:1} 100%{transform:translate(-1px,-1px) scale(1);opacity:1} }
+  /* a FAILED steer action (click/type rejected) → flash the ring red + pulse so
+     the failure is felt, not just read. Transient class cleared by settleAction. */
+  .op.op-act-failed .op-action-ico::before {
+    border-color: var(--bad) !important; animation: op-fail-pulse .5s ease-out 1 !important; }
+  @keyframes op-fail-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(229,83,75,.55); transform: scale(1); }
+    45%  { box-shadow: 0 0 0 5px rgba(229,83,75,0);  transform: scale(1.12); }
+    100% { box-shadow: 0 0 0 0 rgba(229,83,75,0);    transform: scale(1); } }
   /* stopped (hand-off): just an amber ring — no glyph inside .
      distinct from done(✓ green ring)/errored(✕ red ring). */
   .op[data-agent="stopped"] .op-action-ico::before { border-color: #f5a04a !important; animation: none; }
@@ -689,7 +702,7 @@
     /* MOBILE: the header is taller (28px controls), so the floating minimized pill
        needs to sit lower to clear it; man-note drops further to keep the gap. */
     .op[data-status-min="1"] .op-action { top: 58px; }
-    .op[data-status-min="1"] .op-man-note { margin-top: 66px; }
+    .op[data-status-min="1"] .op-man-note { margin-top: 70px; }   /* +4px buffer : unstick from pill */
 
     /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px).
        Desktop keeps the compact 20px sizing. */
@@ -1048,7 +1061,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.5</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.6</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -1120,16 +1133,16 @@
   <section class="op-browser">
     <div class="op-tabs" id="op-tabs" hidden></div>
     <div class="op-urlbar">
-      <button class="op-ubtn" id="op-tabs-toggle" title="show tabs" aria-label="show tabs"><svg viewBox="0 0 20 20" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="2.2"></rect><path d="M10 3v14M3 10h14"></path></svg></button>
-      <button class="op-ubtn" data-kind="back" title="back" aria-label="back"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"></path></svg></button>
-      <button class="op-ubtn" data-kind="forward" title="forward" aria-label="forward"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"></path></svg></button>
+      <button class="op-ubtn" id="op-tabs-toggle" title="show tabs" aria-label="show tabs"><svg viewBox="0 0 20 20" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="2.2"></rect><path d="M10 3v14M3 10h14"></path></svg></button>
+      <button class="op-ubtn" data-kind="back" title="back" aria-label="back"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"></path></svg></button>
+      <button class="op-ubtn" data-kind="forward" title="forward" aria-label="forward"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"></path></svg></button>
       <div class="op-url-wrap">
         <span class="op-lock" id="op-lock" aria-hidden="true" title=""></span>
         <input class="op-url" id="op-url" autocomplete="off" spellcheck="false" placeholder="enter a URL and press Enter" value="">
         <button class="op-ubtn op-url-reload" id="op-reload" data-kind="reload" title="reload" aria-label="reload"><svg class="ic-reload" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 6a7 7 0 1 0 1.5 5"></path><path d="M16.5 3v3.2H13.3"></path></svg><svg class="ic-stop" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l8 8M14 6l-8 8"></path></svg></button>
       </div>
       <div class="op-ham" id="op-ham">
-        <button class="op-ubtn" id="op-ham-btn" title="more" aria-label="more"><svg viewBox="0 0 20 20" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h14M3 10h14M3 14h14"></path></svg></button>
+        <button class="op-ubtn" id="op-ham-btn" title="more" aria-label="more"><svg viewBox="0 0 20 20" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6h14M3 10h14M3 14h14"></path></svg></button>
         <div class="op-ham-menu" id="op-ham-menu" hidden>
           <button class="op-ham-item" data-kind="back"><span>Back</span><span class="k">←</span></button>
           <button class="op-ham-item" data-kind="forward"><span>Forward</span><span class="k">→</span></button>
@@ -1495,12 +1508,22 @@
     setCardText(actTxt, (VERB[kind] || 'Working'));
     if (sub !== undefined) setCardText(actSub, sub || '');
   }
+  let _failRingT = null;
   function settleAction(ok) {
     op.dataset.busy = '0';
     // idle label depends on mode: MAN -> "Manual", AUTO -> "Ready". never flash
     // "Ready" in manual (it's an auto-mode concept).
     setCardText(actTxt, ok === false ? 'Failed' : 'Ready');
-    settleT = setTimeout(() => { if (op.dataset.busy === '0') setCardText(actTxt, 'Ready'); }, 1500);
+    if (ok === false) {
+      // flash the status-card ring red + pulse. Re-trigger the animation by removing
+      // then re-adding on the next frame (so back-to-back failures each pulse).
+      op.classList.remove('op-act-failed'); void op.offsetWidth;
+      op.classList.add('op-act-failed');
+      if (_failRingT) clearTimeout(_failRingT);
+      _failRingT = setTimeout(() => op.classList.remove('op-act-failed'), 1500);
+    } else { op.classList.remove('op-act-failed'); }
+    settleT = setTimeout(() => { if (op.dataset.busy === '0' && !op.classList.contains('op-signal-lost'))
+      setCardText(actTxt, (MODE === 'man') ? 'Manual' : 'Ready'); }, 1500);
   }
 
   // ── stream w/ graceful reconnect ──
@@ -1527,8 +1550,14 @@
   let _wasLost = false;
   function signalLost(){ view.style.visibility='hidden';   // hide the broken-? glyph
     _wasLost = true;
-    if (overlayText) overlayText.textContent = 'SIGNAL LOST'; op.classList.add('op-signal-lost'); }
-  function signalOk(){ op.classList.remove('op-signal-lost'); view.style.visibility='visible'; }
+    if (overlayText) overlayText.textContent = 'SIGNAL LOST'; op.classList.add('op-signal-lost');
+    // the card must agree with the overlay — never show "Ready" over a dead feed.
+    if (op.dataset.busy !== '1') { try { setCardText(actTxt, 'Reconnecting'); } catch(_){} } }
+  function signalOk(){ const wasLost = op.classList.contains('op-signal-lost');
+    op.classList.remove('op-signal-lost'); view.style.visibility='visible';
+    // feed came back while idle → settle the card to its proper idle label.
+    if (wasLost && op.dataset.busy !== '1') {
+      try { setCardText(actTxt, (MODE === 'man') ? 'Manual' : 'Ready'); } catch(_){} } }
   view.addEventListener('load', () => { _hasFrame = true; _lastImgLoad = Date.now();
     view.style.visibility='visible'; signalOk(); backoff = 600; });
   view.addEventListener('error', () => { signalLost(); scheduleReconnect(); });
@@ -1771,6 +1800,20 @@
     MODE = 'man'; applyMode(); saveSession();       // hand the wheel to the user
   }
   function renderHandoff(reason){
+    // DEDUP: never stack hand-off cards. If one is already on screen (the agent can
+    // re-emit the [[TAKE_CONTROL]] marker every step while it waits at a 2FA/captcha
+    // gate, which otherwise spawns a card per step — the "million cards" storm), just
+    // refresh the existing card's reason and bail instead of appending another.
+    const _existing = log.querySelector('.op-handoff[data-handoff="1"]');
+    if (_existing) {
+      if (reason && String(reason).trim()) {
+        let r = _existing.querySelector('.op-handoff-reason');
+        if (!r) { r = document.createElement('div'); r.className='op-handoff-reason';
+          _existing.appendChild(r); }
+        r.textContent = String(reason).trim();
+      }
+      return _existing;
+    }
     markScroll();
     const card = document.createElement('div'); card.className = 'op-handoff'; card.dataset.handoff='1';
     const head = document.createElement('div'); head.className='op-handoff-head';
@@ -2402,6 +2445,11 @@
       if (msgs.length) _runProgressTs = Date.now();   // any new msg = progress
       // terminal states must be handled ONCE — not re-fired every poll (that
       // looped "agent stopped" after a stop). Reset when a fresh run starts.
+      // While interrupting (user hit Stop), do NOT let a lingering 'running' poll from
+      // the dying run re-arm the turn — that reset cleared the swallow guards and let the
+      // killed run's trailing 'done' spawn a spurious extra card ("Cogitated for 1s"
+      // after the Interrupted card). Ignore running polls until _interrupting clears.
+      if (d.state === 'running' && _interrupting) { return; }
       if (d.state === 'running') { _handledState = ''; _handoffTs = 0; _errShown = false; _sawRunning = true; _steering = false; }
       // post-steer: until the NEW run is confirmed 'running' (above), swallow every
       // non-running poll — the killed run's stale done/error must not finish the fresh
@@ -2471,6 +2519,17 @@
           logBotReply('_(done — the agent acted but returned no summary. ask it to recap, or try again.)_');
         }
         setInFlight(false); }
+      else if (d.state === 'interrupted') {           // USER hit stop → clean interrupt, NOT an error
+        // server SIGTERM'd the agent (exit -15). Finalize the turn as "Interrupted
+        // after Xs" — no red error card, no extra done-verb. (Unless a steer is mid-
+        // flight, in which case submit() already closed it as "Steered".)
+        if (!_interrupting && !_steering) {
+          op.dataset.busy='0'; setCardText(actTxt, 'Ready');
+          _lastActionEmoji='💭'; _lastActionVerb='Thinking';
+          setCardSub(selectedBot()||'', 'idle'); op.dataset.agent='';
+          if (_task) { try { finishTask(false, 'Interrupted'); } catch(_){} }
+        }
+        _runProgressTs = 0; setInFlight(false); }
       else if (d.state === 'error') {                 // agent died/gave up → don't hang
         if (!_interrupting) {
           op.dataset.busy='0'; setCardText(actTxt, 'Failed');
