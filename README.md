@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.6.7-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.8-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -84,6 +84,8 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 
 <details>
 <summary>Version history (click to expand)</summary>
+
+**v0.6.8** — **mobile polish**: model/effort pickers no longer hide long names (e.g. "Flash 3.5") behind the dropdown caret; larger default content scale on phones; picker padding tuned so words never tuck under the caret at any zoom.
 
 **v0.6.7** — **trace + streaming polish**: agent thinking/tool steps now STREAM live during a turn for the Gemini/Antigravity driver (they were stalling until end-of-turn — the live-poll was flip-flopping between trajectory files; now it locks onto the run's file); the status card shows **Ready / Connecting** by live-browser state instead of a mode label; harmony-format reasoning tokens from open models (gpt-oss) are stripped so traces read clean; agent sessions isolated from the interactive session list.
 

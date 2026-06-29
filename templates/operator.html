@@ -686,14 +686,15 @@
     /* ── browser fills the screen; chat is a draggable BOTTOM SHEET over it
        (iOS Maps / Uber idiom). Snap states: peek / half / full via --sheet-h. ── */
     .op { display: block; height: 100dvh; width: 100%; max-width: 100%; margin: 0;
-      position: relative; overflow: hidden; }
+      position: relative; overflow: hidden;
+      --chat-scale: 1.18; }   /* mobile default a notch larger than desktop's 1.05 ; still −/+ adjustable */
     .op-resizer { display: none; }
     .op-url { font-size: 0.66rem; }
     /* MOBILE ONLY: the −/+ control scales the whole chat box together (input + the
        model/effort pickers), so the chatbox text matches the message scale. Desktop
        keeps fixed sizes. */
     #op-input.op-input { font-size: calc(0.72rem * var(--chat-scale)); }   /* +1 notch (mobile) */
-    .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; padding-right: 0.85em !important; }   /* model/effort scales with -/+ (mobile) but CAPPED so high zoom doesn't run the text under the dropdown caret; pad-right reserves the caret slot */
+    .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; padding-right: 1.15em !important; background-position: right 0.18rem center !important; }   /* model/effort scales with -/+ (mobile) but CAPPED; MORE pad-right (0.85->1.15em) + caret nudged to the edge so a long word like "Flash 3.5" never hides behind the caret  */
     #op-input.op-input::placeholder { font-size: calc(0.72rem * var(--chat-scale)); }
     .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
@@ -914,7 +915,7 @@
   .op-anim-ready .op-mini { transition: opacity .2s ease; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
     border: none; cursor: pointer; font: 600 0.64rem/1.5 'Plus Jakarta Sans', sans-serif;
-    padding: 0.1rem 0.92rem 0.1rem 0.25rem; flex: 0 0 auto; width: auto; line-height: 1.5;
+    padding: 0.1rem 1.05rem 0.1rem 0.25rem; flex: 0 0 auto; width: auto; line-height: 1.5;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M1 1l3 3 3-3' fill='none' stroke='%237e8a9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
     background-position: right 0.28rem center; background-size: 6px 4px; background-repeat: no-repeat; }
   .op-mini:hover { color: var(--fg); }
@@ -928,7 +929,7 @@
   @media (min-width: 821px) {
     .op-input { font-size: 0.70rem; }
     .op-input::placeholder { font-size: 0.70rem; }
-    .op-mini { font-size: 0.68rem; }
+    .op-mini { font-size: 0.74rem; }
   }
 
   /* ── Operator-style task group: steps indented under a collapsible header that
@@ -1061,7 +1062,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.7</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.8</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
