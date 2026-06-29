@@ -90,11 +90,11 @@ AGENT_BOTS = {
               "cwd": os.path.expanduser("~/.operator-sessions/claude-b"),
               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
-    # ~/.codex/config.toml already wires the same playwright MCP wrapper.
+    # ~/.codex-operator/config.toml wires playwright (Operator-only home); the
     # Unlike the Claude bots, codex has no CLAUDE.md / SessionStart hook loading
     # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
-            "config_dir": os.path.expanduser("~/.codex"),
+            "config_dir": os.path.expanduser("~/.codex-operator"),  # Operator-only CODEX_HOME: has playwright; the interactive gpt Discord bot uses ~/.codex (no playwright) — clean platform separation
             "cwd": os.path.expanduser("~/.operator-sessions/gpt"),
             "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
     # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
@@ -585,7 +585,15 @@ class AgentRunner:
             pass
 
     def is_running(self) -> bool:
-        return self.state == "running"
+        # state alone lies after a process dies without the _run finally landing
+        # (loop crash, killed child, reattach). A "running" state with no live
+        # process must read as not-running, or it wedges every future dispatch
+        # ("X is already running a task") with nothing actually running.
+        if self.state != "running":
+            return False
+        if self._proc is None:
+            return False
+        return self._proc.poll() is None
 
     def start(self, bot: str, task: str, model: str = '', effort: str = '', demo: bool = False) -> dict:
         with self._lock:
@@ -623,6 +631,13 @@ class AgentRunner:
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
                 if not self.model:  self.model = "sonnet"
+                if not self.effort: self.effort = "medium"
+            elif b.get("runtime") == "codex":
+                # gpt/codex: default effort to medium too. Without this, an unset effort
+                # drops the -c flag and codex falls back to its config.toml default
+                # (xhigh) — needless token burn for browser tasks. (Set BEFORE the
+                # cmd-build effort check above only fires when self.effort is truthy,
+                # so we must default it here.)
                 if not self.effort: self.effort = "medium"
             # agy gets a Gemini display-string default (NOT an API id) — an empty
             # model would otherwise build a broken `--model ""`. effort N/A for agy
@@ -893,9 +908,24 @@ class AgentRunner:
             # the app self-context + task into the -p prompt (like the codex branch).
             _boot = "" if getattr(self, "demo", False) else _squad_boot_context("gemma")
             _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
+            # STEP-BY-STEP (agy/Gemini only): Flash one-shots its whole plan — it writes
+            # every tool_call in a single planner pass up front, then executes silently,
+            # so the live trace lands in a burst instead of streaming. The user watches
+            # this trace live and wants each step AS it happens. Force an interleaved
+            # think->act->observe loop so the trajectory grows continuously and the 0.4s
+            # live-poll surfaces each step in real time. claude/codex already stream
+            # step-by-step, so this directive is agy-only.
+            _stepwise = (
+                "WORK ONE STEP AT A TIME — DO NOT PLAN EVERYTHING UP FRONT. The user is "
+                "watching your steps stream live. Take exactly ONE browser action, wait "
+                "for its result, briefly note what you see, THEN decide the next single "
+                "action. Do NOT batch multiple tool calls into one turn or pre-plan the "
+                "whole sequence — that makes your trace dump out all at once at the end "
+                "instead of streaming. One action, observe, next action. Keep going until "
+                "the task is done.\n\n")
             prompt = (_persona
                       + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
-                      + "\n\nTask: " + task)
+                      + "\n\n" + _stepwise + "Task: " + task)
             # --dangerously-skip-permissions = agy analog of codex's bypass-approvals
             # (auto-approve tool/MCP calls non-interactively). No resume for v1 —
             # --conversation <id> exists but agy `-p` plain-text emits no capturable
@@ -987,11 +1017,12 @@ class AgentRunner:
         finally:
             try: _errf.close()
             except Exception: pass
-            # agy: undo the GLOBAL mcp_config.json edit so the user's normal gemma
-            # (outside Operator) doesn't keep the browser tool. No-op for other runtimes.
-            if getattr(self, "_agy_mcp_dir", ""):
-                _strip_agy_global_mcp(self._agy_mcp_dir)
-                self._agy_mcp_dir = ""
+            # NOTE (2026-06-29, the owner): playwright now lives PERMANENTLY in ~/.gemini —
+            # the anti-archaeology behavioral directive made gemma well-behaved, so she
+            # keeps the browser tool and we DON'T strip it on teardown (the per-run
+            # write/strip dance was racy + caused gemma's "breaks after 1 step" flakiness).
+            # _strip_agy_global_mcp is kept defined but no longer called here.
+            self._agy_mcp_dir = ""
             self.ended_ts = time.time()
             self._proc = None
 
@@ -1153,21 +1184,38 @@ class AgentRunner:
             pass
         return out
 
-    def _agy_find_trajectory(self) -> str | None:
+    def _agy_find_trajectory(self, strict: bool = False) -> str | None:
         """Pick THIS run's transcript_full.jsonl: a path that's NEW since the pre-launch
         snapshot, or one whose mtime advanced. Falls back to the globally-freshest if
-        nothing looks new (best-effort — never raises)."""
+        nothing looks new (best-effort — never raises).
+
+        strict=True (the LIVE poll): return ONLY a brand-new path — never a touched or
+        freshest-overall fallback. agy creates this run's brain dir a few seconds in, so
+        on the first poll cycles brand_new is empty; without strict the poll would lock
+        onto a PRIOR run's trajectory (the VesselFinder/stale-steps bug) and stick there.
+        Strict makes the poll WAIT (return None) until the real new file appears, then
+        lock on it. The post-run _flush_agy calls non-strict so it can still fall back."""
         bd = self._agy_brain_dir
         if not bd or not os.path.isdir(bd):
             return None
         before = self._agy_traj_before or {}
         now = self._agy_snapshot_trajectories()
-        candidates = [(m, p) for p, m in now.items()
-                      if p not in before or m > before.get(p, 0)]
-        if candidates:
-            return max(candidates)[1]          # freshest among the changed/new ones
-        if now:                                # nothing "changed" — take freshest overall
-            return max((m, p) for p, m in now.items())[1]
+        # PREFER a path that did NOT exist before this run — that is unambiguously
+        # THIS run's trajectory. A pre-existing path whose mtime merely advanced is a
+        # trap: a prior run's brain dir can get touched and win the freshest-changed
+        # race, so the live-poll locks onto STALE steps (you'd see a previous task's
+        # thinking/actions replayed).
+        brand_new = [(m, pth) for pth, m in now.items() if pth not in before]
+        if brand_new:
+            return max(brand_new)[1]
+        if strict:
+            return None                        # live poll waits for the real new file
+        # non-strict (final flush): fall back to a touched path, then freshest overall.
+        touched = [(m, pth) for pth, m in now.items() if m > before.get(pth, 0)]
+        if touched:
+            return max(touched)[1]
+        if now:                                # nothing new/touched — freshest overall
+            return max((m, pth) for pth, m in now.items())[1]
         return None
 
     def _agy_parse_trajectory(self, path: str) -> bool:
@@ -1216,8 +1264,8 @@ class AgentRunner:
         for o in steps:
             if o.get("source") != "MODEL":
                 continue                       # skip USER_INPUT / CONVERSATION_HISTORY / CHECKPOINT
-            _sidx = o.get("step_index", id(o))
-            if _sidx in self._agy_seen:
+            _sidx = (path, o.get("step_index", id(o)))   # qualify by file: step_index
+            if _sidx in self._agy_seen:                       # collides across trajectories
                 continue                       # already emitted on a prior (live) parse
             self._agy_seen.add(_sidx)
             typ = o.get("type")
@@ -1316,7 +1364,7 @@ class AgentRunner:
             while self._proc and self._proc.poll() is None:
                 try:
                     if locked is None:
-                        locked = self._agy_find_trajectory()
+                        locked = self._agy_find_trajectory(strict=True)
                     if locked:
                         self._agy_parse_trajectory(locked)
                         self._agy_live_traj = locked   # let the final flush reuse the same file
@@ -1372,7 +1420,14 @@ class AgentRunner:
 
     def reset_session(self, bot: str = "") -> dict:
         """Forget stored session id(s) + the shared transcript so the next task
-        starts a fresh conversation (wired to the operator's clear/trash button)."""
+        starts a fresh conversation (wired to the operator's clear/trash button).
+        Also force-clears a wedged "running" state whose process is already
+        dead — the trash button is the manual escape hatch for that hang."""
+        # if state says running but the process is gone, the _run finally never
+        # landed; unwedge it so the reset (and the next dispatch) isn't rejected.
+        if self.state == "running" and (self._proc is None or self._proc.poll() is not None):
+            self._proc = None
+            self.state = "idle"
         if bot:
             self._session_ids.pop(bot, None)
         else:
