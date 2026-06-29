@@ -1061,7 +1061,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.6</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.7</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -1509,6 +1509,14 @@
     if (sub !== undefined) setCardText(actSub, sub || '');
   }
   let _failRingT = null;
+  // idle status-card label: NEVER "Manual"  — it reflects the BROWSER state.
+  // live feed → "Ready"; otherwise (connecting / signal lost / not yet attached) →
+  // "Connecting". Independent of MAN/AUTO mode.
+  function idleCardText() {
+    var st = op.dataset.state || '';
+    if (st === 'live' && !op.classList.contains('op-signal-lost')) return 'Ready';
+    return 'Connecting';
+  }
   function settleAction(ok) {
     op.dataset.busy = '0';
     // idle label depends on mode: MAN -> "Manual", AUTO -> "Ready". never flash
@@ -1523,7 +1531,7 @@
       _failRingT = setTimeout(() => op.classList.remove('op-act-failed'), 1500);
     } else { op.classList.remove('op-act-failed'); }
     settleT = setTimeout(() => { if (op.dataset.busy === '0' && !op.classList.contains('op-signal-lost'))
-      setCardText(actTxt, (MODE === 'man') ? 'Manual' : 'Ready'); }, 1500);
+      setCardText(actTxt, idleCardText()); }, 1500);
   }
 
   // ── stream w/ graceful reconnect ──
@@ -1557,7 +1565,7 @@
     op.classList.remove('op-signal-lost'); view.style.visibility='visible';
     // feed came back while idle → settle the card to its proper idle label.
     if (wasLost && op.dataset.busy !== '1') {
-      try { setCardText(actTxt, (MODE === 'man') ? 'Manual' : 'Ready'); } catch(_){} } }
+      try { setCardText(actTxt, idleCardText()); } catch(_){} } }
   view.addEventListener('load', () => { _hasFrame = true; _lastImgLoad = Date.now();
     view.style.visibility='visible'; signalOk(); backoff = 600; });
   view.addEventListener('error', () => { signalLost(); scheduleReconnect(); });
@@ -2328,7 +2336,7 @@
       if(manNote) manNote.hidden = true;
       setFollowUp();
       { const f=document.getElementById('op-pick-face'); setPickFace(f, selectedBot()); }
-      if (actTxt.textContent === 'Manual') actTxt.textContent = 'Ready';
+      if (actTxt.textContent === 'Manual') actTxt.textContent = idleCardText();
       setCardSub(selectedBot()||'', 'idle'); }
     else { if(pickWrap) pickWrap.hidden = false;
       { const f=document.getElementById('op-pick-face'); if(f) f.textContent='🖥️'; }
@@ -2828,7 +2836,7 @@
     if (!on) {                              // turn over → kill the spinner, no orphans
       op.dataset.busy = '0';
       if (typeof _task !== 'undefined' && _task) { try { finishTask(); } catch(_){} }
-      if (actTxt.textContent === 'Working') actTxt.textContent = (MODE==='auto'?'Done':'Manual');
+      if (actTxt.textContent === 'Working') actTxt.textContent = (MODE==='auto'?'Done':idleCardText());
     }
     refreshSendButton();
     setFollowUp();

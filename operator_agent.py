@@ -382,6 +382,22 @@ def _clean_gemma_text(text: str) -> str:
         return text or ""
     import re as _re
     t = text
+    # HARMONY-FORMAT tokens (gpt-oss-120b via agy emits OpenAI "harmony" reasoning
+    # markup that leaks raw into the trace as malformed text): strip the control tokens
+    # <|start|> <|end|> <|message|> <|channel|> <|constrain|> <|return|> and the bare
+    # channel headers (analysis/commentary/final) that precede a message. No-op for
+    # models that don't use harmony (Gemini/Claude via agy).
+    if '<|' in t and ('channel' in t or 'message' in t):
+        # Parse harmony: ...<|channel|>NAME<|message|>BODY<|end|>... Keep ONLY the
+        # `final` channel's body (the real answer); drop analysis/commentary reasoning
+        # and all control tokens. If no `final` channel, fall back to stripping tokens.
+        _finals = _re.findall(r'<\|channel\|>\s*final\s*<\|message\|>(.*?)(?:<\|end\|>|<\|start\|>|<\|return\|>|$)', t, _re.S)
+        if _finals:
+            t = '\n'.join(x.strip() for x in _finals if x.strip())
+        else:
+            t = _re.sub(r'<\|channel\|>\s*(?:analysis|commentary)\s*<\|message\|>.*?(?=<\||$)', '', t, flags=_re.S)
+            t = _re.sub(r'<\|[a-z_]+\|>', '', t)
+            t = _re.sub(r'(?m)^\s*(?:analysis|commentary|final|assistant)\s*$', '', t)
     # drop "🛑 Task started:" (and bare "Task started:") progress lines
     t = _re.sub(r'(?m)^\s*(?:🛑|🟢|▶️?)?\s*Task started:.*$', '', t)
     # ![alt](file:///.../shot.png) -> rewrite to the cockpit's screenshot route so it
@@ -628,6 +644,7 @@ class AgentRunner:
         self._cur_session = ""
         self._agy_buf = []
         self._agy_mcp_dir = ""    # set when we wire agy's global MCP; finally strips it
+        self._agy_live_traj = ""  # the run's locked trajectory (live-poll streaming)
         self._peak_in_tokens = 0   # highest single-turn input tokens (context size)
         self._tok_warned = False   # one-shot token-blowout warning per run
         self._agy_traj_before = {}
@@ -1292,14 +1309,20 @@ class AgentRunner:
         the post-wait _flush_agy still does the final authoritative parse."""
         def _poll():
             import time as _t
+            locked = None   # once we find THIS run's trajectory, stick to it — re-picking
+                            # the "freshest" each poll can flip between files (an older
+                            # brain dir with a recent mtime), which stalls streaming until
+                            # the very end. Lock on first find for consistent live steps.
             while self._proc and self._proc.poll() is None:
                 try:
-                    traj = self._agy_find_trajectory()
-                    if traj:
-                        self._agy_parse_trajectory(traj)
+                    if locked is None:
+                        locked = self._agy_find_trajectory()
+                    if locked:
+                        self._agy_parse_trajectory(locked)
+                        self._agy_live_traj = locked   # let the final flush reuse the same file
                 except Exception:
                     pass
-                _t.sleep(0.5)   # tight poll → gemma tool-calls show near-live (parse is cheap: read jsonl + dedupe)
+                _t.sleep(0.4)   # tight poll → gemma tool-calls show near-live (parse is cheap: read jsonl + dedupe)
         try:
             threading.Thread(target=_poll, daemon=True, name="agy-live-trace").start()
         except Exception:
