@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.6.3-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.5-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -16,7 +16,7 @@
 
 ---
 
-A live **browser / computer-use agent cockpit**. Watch a real Chrome (or desktop) in real time, steer it manually, or hand control to a subscription-backed agent — Claude or GPT — that drives the browser and reports back.
+A live **browser / computer-use agent cockpit**. Watch a real Chrome in real time, steer it manually, or hand control to a subscription-backed agent — Claude, GPT, or Gemini — that drives the browser and reports back.
 
 > **Inspired by OpenAI's Operator.** This project borrows the name and the spirit of a watch-the-agent-drive interface. It is an independent implementation, not affiliated with, endorsed by OpenAI, or derived from any OpenAI products.
 
@@ -84,6 +84,10 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 
 <details>
 <summary>Version history (click to expand)</summary>
+
+**v0.6.5** — **inline agent screenshots** + cleanup: when an agent reports a screenshot in its reply, it now renders inline in the chat (served from the run's output dir via a guarded `/operator/shot/<name>` route — basename-only, image-extension whitelist, path-traversal safe) instead of collapsing to a "took a screenshot" note. Gemini driver: the Playwright MCP it wires into the global CLI config is now stripped back out after each run, so a normal (non-Operator) session of the same CLI doesn't inherit the browser tool. **Search-query reveal + arg parity**: the trace now shows WHAT a tool acted on — `Searching ("the terms")`, file paths, commands — across every driver's tool set, not just a bare verb. Plus de-dup/label fixes across the action trace.
+
+**v0.6.2** — **third driver + richer trace**: adds a **Gemini** driver (Google's Antigravity CLI, subscription-backed like the Claude/GPT paths) with its thinking + tool-call trace surfaced. Browser **gesture tools** (coordinate mouse down/move/up, drag) for canvas/board UIs. Markdown + code-block backgrounds in replies. Fixes: no spurious turn after Stop, accurate MCP action labels, code-block scroll no longer traps the page, last-tab handling.
 
 **v0.5.9** — **smarter agent**: a sharper computer-use system prompt — act→wait→continue (waits for async loads), vision fallback when the DOM isn't working, scroll-to-find (both directions), never repeat a failed action, and dismiss cookie/consent banners by pixel-click instead of dead element-ref retries. Plus a prompt-injection guard (page content is data, not orders), stuck-loop backtracking, and an expanded take-control (hands back when genuinely unsure or the browser is visibly stuck — but always executes clear instructions). **Click accuracy fix**: vision clicks landed a few px off in attach mode (viewport/DPR mismatch) — now pixel-perfect. **UX**: fullscreen persists across refresh; inline trace details (coords/durations/short labels on one line).
 
