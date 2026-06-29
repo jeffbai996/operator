@@ -39,41 +39,42 @@ _BROWSER_MANDATE = (
     " browse and base the answer ONLY on the pages you visited. Do NOT say you"
     " can't browse — you can. Cite the pages you actually visited."
 )
-
-_DESKTOP_MANDATE = (
-    " You are operating a LIVE VIRTUAL DESKTOP (a real computer's screen) shown in a"
-    " noVNC canvas at http://localhost:6902. FIRST navigate there if not already on it."
-    " The page is NOT a website — it is a remote desktop you control by SIGHT and POINTER."
-    " VISION-FIRST, ALWAYS: no DOM/elements/accessibility tree — browser_snapshot is"
-    " useless. EVERY step: screenshot (browser_take_screenshot), LOOK at the pixels,"
-    " then act with COORDINATE input (browser_mouse_click_xy / drag / move + keyboard)."
-    " Re-screenshot to verify; never assume the screen state."
-    " IT'S A DESKTOP, not a browser: no URL bar/tabs inside it — launch/focus apps,"
-    " double-click icons, use the taskbar, alt-tab, keyboard shortcuts, drag."
-    " TIGHT perceive→act→wait→re-perceive loop (esp. games): the screen changes on its"
-    " own; after each action screenshot again and react to the NEW visual state."
-    " Coordinates are canvas pixels from your screenshot; if a click misses, re-screenshot"
-    " and correct rather than repeating the same XY."
-    " HARD RULES: (1) You have NO filesystem, NO shell, NO code execution, and NO 'input"
-    " API' to discover — do NOT run commands, read/list files, or use browser_evaluate to"
-    " inspect the page; those are dead ends. (2) STAY on the desktop — do NOT navigate the"
-    " browser away from localhost:6902; that canvas IS the computer. (3) STOP analyzing and"
-    " just ACT: screenshot → see the target → click/type it."
-)
-
-def _mandate(mode):
-    return _DESKTOP_MANDATE if mode == "desktop" else _BROWSER_MANDATE
-# (OSS build: no host-app self-context.) The Claude bots get this from their own CLAUDE.md +
+# Squad self-context for gpt. The Claude bots get this from their own CLAUDE.md +
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
-def _host_boot_context(bot: str = "gpt") -> str:
-    """OSS build: no host-app context to load — the agent runs on its
-    persona + task alone."""
-    return ""
+def _squad_boot_context(bot: str = "gpt") -> str:
+    """The SAME the app context the Claude bots load at SessionStart (SQUAD.md rulebook
+    + SYSTEM.md roster/infra + the memories/journal/files digest), so gpt has real
+    PARITY rather than a hand-written blurb. Imported lazily + fail-soft: if host-app
+    isn't importable (e.g. the OSS build), gpt just runs without it."""
+    try:
+        import sys as _sys
+        _ss = os.path.expanduser("~/.host-app")
+        if _ss not in _sys.path:
+            _sys.path.insert(0, _ss)
+        import store as _store  # type: ignore
+        parts = []
+        for fn in ("format_squad_doc_for_prompt", "format_system_doc_for_prompt"):
+            try:
+                v = getattr(_store, fn)(bot=bot)
+                if v:
+                    parts.append(v)
+            except Exception:
+                pass
+        try:
+            dig = _store.format_store_digest(bot)
+            if dig:
+                parts.append(dig)
+        except Exception:
+            pass
+        return "\n\n".join(parts)
+    except Exception:
+        return ""
+
 
 _GPT_SELF = ""
 
-# Inline self-context for gemma — fallback if _host_boot_context("gemma") returns
+# Inline self-context for gemma — fallback if _squad_boot_context("gemma") returns
 # nothing (gemma has no SessionStart hook, same as gpt). Parallel to _GPT_SELF.
 _GEMMA_SELF = ""
 
@@ -110,7 +111,7 @@ AGENT_BOTS = {
 # Used when start(demo=True) for the public demo instance the public demo. Strips _GPT_SELF.
 _DEMO_PERSONA = "You are a capable web-browsing assistant operating a live browser." + _BROWSER_MANDATE
 
-_BROWSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse")
+_BROWSE = os.path.expanduser("~/agents/browse")
 # MCP config that gives the agent the Playwright tools, attached to :9222 Chrome
 # via the same stdio wrapper the bots use (cdp-endpoint --ensure inside it).
 _MCP_CONFIG = {
@@ -157,10 +158,14 @@ _NONBROWSER_LABELS = {
     "glob": "Finding files", "write": "Writing file", "edit": "Editing file",
     "multiedit": "Editing file", "notebookedit": "Editing notebook",
     "ls": "Listing files", "cat": "Reading file",
-    # memory / recall
-    "recall": "Recalling", "memory": "Checking memory",
-    "get_corpus": "Searching memory", "list_corpora": "Checking memory",
-    # markets
+    # memory / recall (host-app, search)
+    "recall": "Recalling", "memory": "Checking data", "search": "Searching",
+    "get_corpus": "Searching", "list_corpora": "Checking data",
+    # markets (tool)
+    "get_quote": "Checking data", "quote": "Checking data",
+    "get_positions": "Checking data", "tool_quote": "Checking data",
+    "tool_get_positions": "Checking data", "tool_get_account_summary": "Checking data",
+    "tool_margin": "Checking data", "tool_get_historical_bars": "Pulling data",
     # docs / misc
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
@@ -315,12 +320,34 @@ def _clean_gemma_text(text: str) -> str:
         return text or ""
     import re as _re
     t = text
+    # drop "🛑 Task started:" (and bare "Task started:") progress lines
     t = _re.sub(r'(?m)^\s*(?:🛑|🟢|▶️?)?\s*Task started:.*$', '', t)
-    t = _re.sub(r'!\[([^\]]*)\]\(file://[^)]*\)',
-                'took a screenshot', t)
-    t = _re.sub(r'!\[([^\]]*)\]\((?!https?://)[^)]*\)',
-                lambda m: ('(' + m.group(1).strip() + ')') if m.group(1).strip() else '', t)
+    # ![alt](file:///.../shot.png) -> rewrite to the cockpit's screenshot route so it
+    # renders INLINE (file:// can't load in a browser). Only screenshots that live in
+    # the computer-use output dir are servable; basename-match into that dir, else fall
+    # back to a plain "took a screenshot" note. The route does its own safety checks.
+    import os as _os_sc
+    _shot_dir = _os_sc.path.realpath(_os_sc.path.expanduser(
+        _os_sc.environ.get("COMPUTER_USE_OUTPUT_DIR")
+        or _os_sc.environ.get("PLAYWRIGHT_OUTPUT_DIR")
+        or "~/.cache/computer-use"))
+
+    def _shot_sub(m):
+        alt, path = m.group(1), m.group(2)
+        # file:///abs/path  ->  /abs/path
+        p = _re.sub(r'^file://', '', path)
+        base = _os_sc.path.basename(p)
+        if base and _os_sc.path.splitext(base)[1].lower() in ('.png', '.jpg', '.jpeg', '.webp') \
+                and _os_sc.path.isfile(_os_sc.path.join(_shot_dir, base)):
+            return '![%s](operator/shot/%s)' % (alt or 'screenshot', base)
+        return 'took a screenshot'
+
+    t = _re.sub(r'!\[([^\]]*)\]\((file://[^)]*)\)', _shot_sub, t)
+    # any other ![](non-http, non-route) image -> drop it (keep nothing; non-renderable)
+    t = _re.sub(r'!\[[^\]]*\]\((?!https?://|/?operator/shot/)[^)]*\)', '', t)
+    # strip a trailing files=[...] literal (single or multi-line)
     t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)
+    # wrap contiguous +---+ / | ascii-table blocks in a fenced code block so they align
     lines = t.split('\n')
     out, i = [], 0
     while i < len(lines):
@@ -337,6 +364,7 @@ def _clean_gemma_text(text: str) -> str:
             continue
         out.append(ln); i += 1
     t = '\n'.join(out)
+    # collapse 3+ blank lines left by the strips
     t = _re.sub(r'\n{3,}', '\n\n', t).strip()
     return t
 
@@ -481,7 +509,7 @@ class AgentRunner:
     def is_running(self) -> bool:
         return self.state == "running"
 
-    def start(self, bot: str, task: str, model: str = '', effort: str = '', demo: bool = False, mode: str = 'browser') -> dict:
+    def start(self, bot: str, task: str, model: str = '', effort: str = '', demo: bool = False) -> dict:
         with self._lock:
             if self.is_running():
                 return {"ok": False, "error": f"{self.bot} is already running a task"}
@@ -513,9 +541,6 @@ class AgentRunner:
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
             self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
-            _m = (mode or 'browser').strip().lower()
-            if _m == "desktop": self._sticky_desktop = True
-            self.mode = "desktop" if getattr(self, "_sticky_desktop", False) else _m
             # default the claude runtime to Sonnet 4.6 / medium when nothing was picked
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
@@ -659,7 +684,7 @@ class AgentRunner:
                 "IF YOU'RE STUCK, CHANGE TACK OR ESCALATE — don't loop. If you've tried a few different approaches to the same step and none worked, STOP repeating: step back and rethink (another route to the goal? a different page/menu/search? did an earlier step go wrong?), or if it's genuinely blocked, say so plainly and ask the user rather than burning turns flailing. Spinning on the same obstacle for many steps is worse than stopping and reporting what's blocking you.\n\n"
                 "USER REQUEST: " + task)
         env = dict(os.environ)
-        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["SQUAD_STORE_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["PATH"] = (os.path.expanduser("~/.local/bin") + ":"
                        + os.path.expanduser("~/.nvm/versions/node/v20.20.2/bin")
                        + ":" + env.get("PATH", ""))
@@ -669,7 +694,7 @@ class AgentRunner:
             # codex exec: headless, JSONL events, ChatGPT-sub token (no API key).
             # Its ~/.codex/config.toml already wires the playwright MCP, so we just
             # exec it. `codex exec resume <thread_id>` threads context.
-            # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no extra MCP servers,
+            # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no tool/search/
             # plugins) -> browser is the agent's only tool, satisfying the sandbox spec.
             if getattr(self, "demo", False):
                 env["CODEX_HOME"] = os.path.expanduser(os.environ.get("OPERATOR_DEMO_CODEX_HOME", "~/.operator-demo/codex"))
@@ -679,21 +704,28 @@ class AgentRunner:
             # the app boot context the Claude bots get from their SessionStart hook. On
             # resumes, codex already threaded it — don't re-send (avoids per-turn bloat).
             # (Kept full, not compressed: it's ~92% cached after turn 1, and the app/
-            # context awareness it gives the agent.)
-            _boot = "" if (resume_id or getattr(self, "demo", False)) else _host_boot_context("gpt")
+            # search/store awareness it gives the bot is worth the one-time cold cost.)
+            _boot = "" if (resume_id or getattr(self, "demo", False)) else _squad_boot_context("gpt")
             _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
             prompt = (_persona
-                      + (("\n\n=== app CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
+                      + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
                       + "\n\nTask: " + task)
+            # DEMO: read-only sandbox (codex's own FS sandbox restricts the agent to its
+            # workspace — it CANNOT read ~/repos, ~/.claude, the app files). Non-demo keeps
+            # the bypass (it's the owner's trusted local cockpit). The browser MCP runs as
+            # a separate subprocess outside this sandbox, so browsing still works fully.
             if getattr(self, "demo", False):
-                # DEMO: do NOT bypass the sandbox. Use codex's read-only sandbox as a
-                # baseline — BUT note it only blocks writes, not reads (codex can still
-                # read outside its workspace). For a PUBLIC demo you MUST additionally
-                # run this process inside an OS-level sandbox (bwrap / container / a
-                # locked-down user) that hides your private files — codex's built-in
-                # shell/file tools are otherwise fully capable. The browser MCP is a
-                # separate process and keeps working under either.
-                cmd = [binpath, "exec", "--json", "--skip-git-repo-check", "-s", "read-only"]
+                # DEMO: run codex INSIDE a bwrap FS sandbox (sandbox.sh) — tmpfs over
+                # $HOME hides ~/repos, ~/.claude, ~/.codex, the app data; only the empty
+                # workspace + auth + browse module are bound. codex's built-in shell/file
+                # tools physically cannot reach owner/the app files. (-s read-only too, as
+                # defense-in-depth; the real seal is the OS sandbox.) Verified can't read
+                # the host repo. The browser MCP it spawns inherits the sandbox but still
+                # reaches the isolated Chrome (network) + writes screenshots (bound dir).
+                _sandbox = os.path.expanduser("~/operator-demo/sandbox.sh")
+                cmd = ["bash", _sandbox, binpath, "exec", "--json",
+                       "--skip-git-repo-check",
+                       "--dangerously-bypass-approvals-and-sandbox"]
             else:
                 cmd = [binpath, "exec", "--json", "--skip-git-repo-check",
                        "--dangerously-bypass-approvals-and-sandbox"]
@@ -750,10 +782,10 @@ class AgentRunner:
             self._agy_traj_before = self._agy_snapshot_trajectories()
             # agy has no --append-system-prompt (a claude flag) — FOLD persona +
             # the app self-context + task into the -p prompt (like the codex branch).
-            _boot = "" if getattr(self, "demo", False) else _host_boot_context("gemma")
+            _boot = "" if getattr(self, "demo", False) else _squad_boot_context("gemma")
             _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
             prompt = (_persona
-                      + (("\n\n=== app CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
+                      + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
                       + "\n\nTask: " + task)
             # --dangerously-skip-permissions = agy analog of codex's bypass-approvals
             # (auto-approve tool/MCP calls non-interactively). No resume for v1 —
@@ -781,7 +813,7 @@ class AgentRunner:
                    "--permission-mode", "bypassPermissions",
                    # --settings/--strict-mcp-config both BREAK --resume (verified).
                    "--mcp-config", cfg_path,
-                   "--append-system-prompt", b["persona"].split(_BROWSER_MANDATE)[0] + _mandate(getattr(self,"mode","browser"))]
+                   "--append-system-prompt", b["persona"]]
             if resume_id:
                 cmd += ["--resume", resume_id]
             if self.model:
@@ -792,9 +824,9 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=b["cwd"], env=env, stdin=subprocess.DEVNULL,
+                cmd, cwd=(os.path.expanduser("~/operator-demo/workspace") if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
-                start_new_session=True)
+                start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             if self._runtime == "agy":
                 self._start_agy_live_poll()
             for line in self._proc.stdout:
@@ -1039,9 +1071,10 @@ class AgentRunner:
                     name = tc.get("name") or ""
                     args = tc.get("args") if isinstance(tc.get("args"), dict) else {}
                     # UNWRAP agy's meta-tools (esp. Gemini Flash): it wraps every real
-                    # MCP call in `call_mcp_tool` (real tool in args["ToolName"], real
-                    # args in args["Arguments"]) — reach through so browser_* maps to
-                    # clean verbs + emojis instead of a generic "Calling MCP tool".
+                    # MCP call in `call_mcp_tool` with the actual tool in args["ToolName"]
+                    # and the real args in args["Arguments"] — so _action_label saw only
+                    # "call_mcp_tool" and rendered "Calling MCP tool". Reach through to
+                    # the real tool/args so browser_* maps to clean verbs + emojis.
                     if name in ("call_mcp_tool", "callMcpTool", "mcp_tool", "run_mcp_tool"):
                         _inner = (args.get("ToolName") or args.get("toolName")
                                   or args.get("tool") or args.get("name") or "")
@@ -1050,12 +1083,13 @@ class AgentRunner:
                             try: _ia = json.loads(_ia)
                             except Exception: _ia = {}
                         if _inner:
+                            # keep agy's toolAction/Summary on the args as a label fallback
                             if isinstance(_ia, dict):
                                 _ia.setdefault("toolAction", args.get("toolAction", ""))
                                 _ia.setdefault("toolSummary", args.get("toolSummary", ""))
                             name, args = _inner, (_ia if isinstance(_ia, dict) else {})
                     elif name == "view_file":
-                        name = "browser_get_text"
+                        name = "browser_get_text"  # maps to "Reading"; detail=path below
                         args = {"path": (tc.get("args") or {}).get("AbsolutePath", ""),
                                 "toolAction": (tc.get("args") or {}).get("toolAction", ""),
                                 "toolSummary": (tc.get("args") or {}).get("toolSummary", "")}
@@ -1065,7 +1099,7 @@ class AgentRunner:
                         # agy's built-in toolAction when that's the generic "Calling
                         # (MCP) tool" noise — only fall back to agy's label if it's a
                         # SPECIFIC one (e.g. "Read file", "Search web"). Last resort:
-                        # a clean "Calling MCP tool" (never the raw tool name).
+                        # a clean "Using tool" (never the raw tool name / "calling mcp server").
                         _agy_lbl = (args.get("toolAction") or args.get("toolSummary") or "").strip()
                         _generic = (not _agy_lbl) or _agy_lbl.lower() in (
                             "calling mcp tool", "calling tool", "running tool",
@@ -1167,7 +1201,6 @@ class AgentRunner:
             self.messages.append({"ts": time.time(), "role": "assistant", "text": text})
 
     def reset_session(self, bot: str = "") -> dict:
-        self._sticky_desktop = False
         """Forget stored session id(s) + the shared transcript so the next task
         starts a fresh conversation (wired to the operator's clear/trash button)."""
         if bot:
@@ -1186,8 +1219,10 @@ class AgentRunner:
         self._stopped = True  # so _flush_agy drops agy's interrupt-noise stdout
         if p and self.is_running():
             import signal as _sig
-            # kill the whole process GROUP — the agent spawns children (MCP, node) that
-            # keep emitting traces after a bare terminate() of just the leader.
+            # kill the whole process GROUP — codex/agy spawns children (the MCP server,
+            # node, bwrap) that keep running + emitting traces after a bare terminate()
+            # of just the leader (the "stop doesn't fully stop" bug). SIGTERM the group,
+            # then SIGKILL anything still alive a moment later.
             try:
                 _pgid = os.getpgid(p.pid)
                 os.killpg(_pgid, _sig.SIGTERM)
@@ -1197,7 +1232,7 @@ class AgentRunner:
                     try: os.killpg(pgid, _sig.SIGKILL)
                     except Exception: pass
                 threading.Thread(target=_hard_kill, daemon=True).start()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — fall back to terminating the leader
                 try: p.terminate()
                 except Exception: pass
             self.state = "idle"

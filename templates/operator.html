@@ -321,15 +321,15 @@
   .op-man-note { margin: 0.35rem 0.1rem 0; font: 500 0.6rem/1.4 'Plus Jakarta Sans', sans-serif;
     color: var(--muted); padding: 0.4rem 0.55rem; background: var(--bg-2);
     border: 1px solid var(--border); border-radius: 8px; }
-  /* Demo-mode card — same shape as the Manual-mode card; demo only (.op-demo). */
+  /* Demonstration-mode card — same shape as the Manual-mode card; demo only (.op-demo). */
   .op-demo-note { margin: 0.35rem 0.1rem 0.1rem; padding: 0.4rem 0.55rem; background: var(--bg-2);
     border: 1px solid var(--border); border-radius: 8px; }
   .op-demo-note .op-man-head { color: var(--fg); }
   .op-demo-note .op-man-line { margin-top: 0.15rem; }
   #op-demo-note { display: none; }
   .op-demo #op-demo-note { display: block; }
-  .op:has(#op-man-note:not([hidden])) #op-demo-note { display: none; }
-  .op:has(.op-log:not(:empty)) #op-demo-note { display: none; }   /* clear the demo card once the conversation starts */
+  .op:has(#op-man-note:not([hidden])) #op-demo-note { display: none; }   /* hide demo card while the Manual-mode card is up  */
+  .op:has(.op-log:not(:empty)) #op-demo-note { display: none; }   /* clear the demo card once the conversation starts  */
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
   .op-action-sub { font: 500 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
@@ -362,6 +362,7 @@
   .op-log:empty::after { content: "Type a message, or use the browser to steer Operator.";
     color: var(--muted); font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif;
     padding: 0; margin: 0; letter-spacing: -.003em; }
+
   .op-msg { animation: op-msg-in .42s cubic-bezier(.16,1,.3,1); }
   @keyframes op-msg-in{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:none}}
   .op-msg .bubble { animation: op-bubble-in .42s cubic-bezier(.16,1,.3,1); transform-origin: bottom; }
@@ -637,14 +638,15 @@
     background: radial-gradient(circle at 50% 40%, var(--bg-2), var(--bg)); }
   .op[data-state="connecting"] .op-overlay, .op[data-state="idle"] .op-overlay,
   .op[data-state="error"] .op-overlay, .op.op-signal-lost .op-overlay { display: flex; }
-  /* SIGNAL LOST (6s): spinner + label, no triangle (avoids the old flicker). */
-  .op.op-signal-lost #op-overlay-text { letter-spacing: .12em; font-weight: 600;
-    color: var(--muted); }
-  /* SIGNAL LOST: NO spinner — static symbol + label only (spinner stays for "connecting"). */
+  /* SIGNAL LOST: NO spinner — a static symbol above + the label only . */
   .op.op-signal-lost .op-spinner { display: none; }
   .op.op-signal-lost .op-overlay { flex-direction: column; gap: 0.5rem; }
+  .op.op-signal-lost #op-overlay-text { letter-spacing: .12em; font-weight: 600;
+    color: var(--muted); }
+  /* static "no signal" symbol above the SIGNAL LOST label (broken-feed glyph). */
   .op.op-signal-lost .op-overlay::before {
-    content: ""; width: 26px; height: 26px; opacity: .5; background: var(--muted);
+    content: ""; width: 26px; height: 26px; opacity: .5;
+    background: var(--muted);
     -webkit-mask: var(--op-nosignal-mask) center/contain no-repeat;
             mask: var(--op-nosignal-mask) center/contain no-repeat; }
   .op { --op-nosignal-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 8.82a15 15 0 0 1 4.17-2.65'/><path d='M10.66 5c4.01-.36 8.14.9 11.34 3.76'/><path d='M16.85 11.25a10 10 0 0 1 2.22 1.68'/><path d='M5 13a10 10 0 0 1 5.24-2.76'/><path d='M8.53 16.11a6 6 0 0 1 6.95 0'/><path d='M12 20h.01'/><path d='M2 2l20 20'/></svg>"); }
@@ -766,7 +768,7 @@
     /* caret pinned right, same as expanded */
     .op[data-sheet="peek"] .op-action .op-status-min { display: inline-flex; flex: 0 0 auto; margin-left: auto; }
     /* peek + minimized-pill BOTH set -> peek wins: undo the status-min absolute float
-       + text-hide so the peek status bar shows normally (was mangled, no text). */
+       + text-hide so the peek status bar shows normally . */
     .op[data-sheet="peek"][data-status-min="1"] .op-action {
        position: static; top: auto; left: auto; height: auto; min-height: 0;
        width: 100%; padding: 0.5rem 0.75rem; z-index: auto; }
@@ -878,11 +880,11 @@
   [data-theme="light"] .op-act-lab { color: var(--fg); }
   [data-theme="light"] .op-msg.sys .body { color: #3a424d; }
   .op-disclaimer-info { display: block; max-height: 0; overflow: hidden; opacity: 0;
-    transform: translateY(-2px); transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem; }   /* collapsed: zero height + slight up-offset */
+    transform: translateY(-2px); transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem; }   /* a smidge smaller than the disclaimer; collapsed: zero height + slight up-offset */
   /* revealed: gap as margin-top (outside the overflow box, collapses cleanly), NOT
      transitioned → no 1px end-jump. Only max-height+opacity animate. */
   .op-disclaimer:hover .op-disclaimer-info,
-  .op[data-mode="man"] .op-disclaimer-info { max-height: 1.4rem; opacity: 0.85; transform: translateY(0); margin-top: 0.2rem; }   /* slide down + fade in; height matches 1 line */
+  .op[data-mode="man"] .op-disclaimer-info { max-height: 1.4rem; opacity: 0.85; transform: translateY(0); margin-top: 0.2rem; }   /* slide down + fade in; height matches 1 line (1:1, no step) */
   /* enable the reveal transition only AFTER first paint (op-ready) so a refresh can't
      animate the info open→closed (the flash on load). */
   .op.op-ready .op-disclaimer-info { transition: max-height .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, transform .28s cubic-bezier(.22,.61,.36,1); }   /* ease-out: height resolves smoothly; opacity leads; subtle slide */
@@ -1625,7 +1627,7 @@
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>')
-      .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g,
+      .replace(/!\[([^\]]*)\]\(((?:https?:\/\/|\/?operator\/shot\/)[^\s)]+)\)/g,
                '<img src="$2" alt="$1" class="op-md-img" loading="lazy">')
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
                '<a href="$2" target="_blank" rel="noopener">$1</a>')
@@ -1694,9 +1696,19 @@
         if (ev) { ev.preventDefault(); ev.stopPropagation(); }   // iPad: stop the log/parent eating the tap
         if (_busy) return; _busy=true;
         const code=pre.querySelector('code'); const txt=code? code.textContent : pre.textContent;
-        try { await navigator.clipboard.writeText(txt); }
-        catch(_){ try{const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');ta.remove();}catch(__){} }
-        btn.classList.add('copied'); btn.replaceChildren(mk(CHECK_D));   // confirm: SVG check (no animation)
+        let ok=false;
+        // 1) async Clipboard API — only available in a secure context (https/localhost)
+        if (navigator.clipboard && window.isSecureContext) {
+          try { await navigator.clipboard.writeText(txt); ok=true; } catch(_){}
+        }
+        // 2) execCommand fallback — works in non-secure contexts (e.g. plain-http LAN)
+        if (!ok) {
+          try { const ta=document.createElement('textarea'); ta.value=txt;
+            ta.style.position='fixed'; ta.style.top='0'; ta.style.left='0'; ta.style.opacity='0';
+            document.body.appendChild(ta); ta.focus(); ta.select();
+            ok=document.execCommand('copy'); ta.remove(); } catch(__){}
+        }
+        btn.classList.add('copied'); btn.replaceChildren(mk(CHECK_D));   // always confirm (SVG check)
         setTimeout(()=>{ btn.classList.remove('copied'); btn.replaceChildren(mk(COPY_D)); _busy=false; }, 1200);
       }
       btn.addEventListener('click', doCopy);
@@ -1809,12 +1821,12 @@
     Resize:'📐', 'Handle dialog':'💬', 'Read console':'🖥️', 'Inspect network':'📡', 'Save PDF':'📄',
     Searching:'🔍', Fetching:'🔗', 'Running command':'⌨️', 'Reading file':'📄',
     'Searching files':'🔍', 'Finding files':'📁', 'Writing file':'✏️', 'Editing file':'✏️',
-    
-    'Searching web':'🌐', 'Searching the web':'🌐', 'Searching memory':'🧠',
-    Recalling:'🧠', 'Checking memory':'🧠', 'Fetching messages':'💬',
-    Listing:'📋', 'Listing resources':'📋', 'Reading resource':'📖',
-    'Reading console':'🖥️', 'Reading docs':'📚',
-    Replying:'💬', 'Sending message':'💬', Reacting:'😀', Downloading:'📥',
+    'Checking data':'📈', 'Checking data':'📊',
+    'Searching web':'🌐', 'Searching the web':'🌐', 'Searching memory':'🧠', 'Searching files':'🔍',
+    Recalling:'🧠', 'Checking memory':'🧠', Fetching:'🔗', 'Fetching messages':'💬',
+    Listing:'📋', 'Listing resources':'📋', 'Listing files':'📁', 'Reading resource':'📖',
+    'Reading console':'🖥️', 'Reading docs':'📚', 'Reading file':'📄',
+    Replying:'💬', 'Sending message':'💬', Reacting:'😀', Downloading:'📥', 'Setting presence':'🟢',
     Delegating:'🤝', 'Updating todos':'✅', 'Looking up library':'📚', 'Using tool':'🛠️',
     'Calling MCP tool':'🛠️', Getting:'📥', Creating:'✨', Making:'✨', Updating:'✏️',
     Deleting:'🗑️', Removing:'🗑️', Adding:'➕', Loading:'⏳', Saving:'💾',
@@ -1826,6 +1838,8 @@
   function actEmoji(label){
     if (!label) return '⚙️';
     if (ACT_EMOJI[label]) return ACT_EMOJI[label];
+    // fall back on the leading verb so unseen variants still get a sensible icon
+    // ("Searching web/files/memory" -> Searching's 🔍-family; "Reading X" -> 📖, etc.)
     const first = label.split(' ')[0];
     return ACT_EMOJI[first] || '⚙️';
   }
@@ -1980,7 +1994,7 @@
                       'Scoured','Sifted','Crunched','Hustled','Toiled','Labored',
                       'Schemed','Plotted','Computed','Reckoned','Wondered'];
   function _fmtDur(secs){
-    if (secs <= 0) return 'a second';
+    if (secs <= 0) return 'a second';                       // sub-second turn — "0s" looks broken
     return secs >= 60 ? (Math.floor(secs/60)+'m '+(secs%60)+'s') : (secs+'s');
   }
   function finishTask(failed, labelOverride) {

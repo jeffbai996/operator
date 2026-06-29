@@ -24,7 +24,7 @@ from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
 
 import os as _os_cfg
-# DEMO isolation the public demo: a second instance runs with OPERATOR_DEMO=1 and
+# DEMO isolation the demo: a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
 # unset for the owner live cockpit (-> no behavior change); set only by demo_server.py.
 DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
@@ -110,7 +110,7 @@ class _Streamer:
         except Exception:  # noqa: BLE001
             pass
         time.sleep(2)
-        attach = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse", "chrome-attach.sh")
+        attach = os.path.expanduser("~/agents/browse/chrome-attach.sh")
         if os.path.exists(attach):
             try:
                 subprocess.Popen(["bash", attach], stdin=subprocess.DEVNULL,
@@ -142,7 +142,7 @@ class _Streamer:
             alive = False
         if alive:
             return
-        attach = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse", "chrome-attach.sh")
+        attach = os.path.expanduser("~/agents/browse/chrome-attach.sh")
         if not os.path.exists(attach):
             return
         # if a wedged Chrome process is lingering, kill it first so the relaunch takes.
@@ -794,6 +794,33 @@ def operator_tab_new():
     return jsonify(_streamer.new_tab())
 
 
+# screenshot dir the computer-use MCP writes into (same knob as playwright-mcp.sh).
+# Served read-only so a screenshot the agent references inline (![](file://.../x.png))
+# can render in the chat instead of being stripped to a text note.
+_SHOT_DIR = _os_cfg.path.realpath(_os_cfg.path.expanduser(
+    _os_cfg.environ.get("COMPUTER_USE_OUTPUT_DIR")
+    or _os_cfg.environ.get("PLAYWRIGHT_OUTPUT_DIR")
+    or "~/.cache/computer-use"))
+
+
+@bp.route("/operator/shot/<path:name>")
+def operator_shot(name):
+    """Serve an agent screenshot PNG/JPG by basename from the computer-use output
+    dir. Basename-only + extension whitelist + realpath containment → no traversal."""
+    from flask import send_from_directory, abort
+    base = _os_cfg.path.basename(name)            # strip any path components
+    if not base or base != name or base.startswith("."):
+        abort(404)
+    if _os_cfg.path.splitext(base)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+        abort(404)
+    target = _os_cfg.path.realpath(_os_cfg.path.join(_SHOT_DIR, base))
+    if _os_cfg.path.commonpath([target, _SHOT_DIR]) != _SHOT_DIR or not _os_cfg.path.isfile(target):
+        abort(404)
+    resp = send_from_directory(_SHOT_DIR, base)
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
 @bp.route("/operator/status")
 def operator_status():
     _streamer.last_view = time.monotonic()
@@ -899,15 +926,6 @@ def operator_dispatch():
         return jsonify(ok=False, error="empty task"), 400
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
-    mode = (data.get("mode") or "").strip()
-    if not mode:
-        try:
-            _u = (_streamer.url or "")
-            if (":6902" in _u or "winstream" in _u.lower() or "novnc" in _u.lower()):
-                _streamer.desktop_session = True
-            mode = "desktop" if getattr(_streamer, "desktop_session", False) else "browser"
-        except Exception:
-            mode = "browser"
     if DEMO:
         # public demo: GPT-only, effort locked per preset (5.4->medium, 5.5->low);
         # ignore any client-sent bot. demo=True strips the app context/identity/tools.
@@ -915,9 +933,9 @@ def operator_dispatch():
         effort = "medium"   # demo: effort pinned to medium for both presets
         if model not in ("gpt-5.4", "gpt-5.5"):
             model = "gpt-5.4"
-        r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True, mode=mode)
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True)
     else:
-        r = operator_agent.runner.start(bot, task, model=model, effort=effort, mode=mode)
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
@@ -1097,7 +1115,7 @@ def _live_bots() -> set:
     except Exception:
         pass
     # gpt is a service bot (always-on if its unit is active) — but it can't drive
-    # reliably (one MCP slot), so we do not mark it live for driving.
+    # reliably (one MCP slot, a broker), so we don't mark it live for driving.
     return live
 
 
