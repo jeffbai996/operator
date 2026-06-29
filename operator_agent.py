@@ -19,6 +19,8 @@ import time
 
 # personas that can drive + the config dir whose stored sub-creds + identity they
 # run under. (Both ride the default ~/.claude credentials = the Max login.)
+_ONEPASS_HINT = ""
+
 _BROWSER_MANDATE = (
     " You are operating a LIVE web browser via your Playwright tools — that is your"
     " primary tool and the WHOLE POINT of this session."
@@ -81,11 +83,11 @@ _GEMMA_SELF = ""
 AGENT_BOTS = {
     "claude-a": {"label": "claude-a", "runtime": "claude",
                "config_dir": os.path.expanduser("~/.claude"),
-               "cwd": os.path.expanduser("~/agents/claude-a"),
+               "cwd": os.path.expanduser("~/.operator-sessions/claude-a"),
                "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     "claude-b": {"label": "claude-b", "runtime": "claude",
               "config_dir": os.path.expanduser("~/.config/claude-b"),
-              "cwd": os.path.expanduser("~"),
+              "cwd": os.path.expanduser("~/.operator-sessions/claude-b"),
               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
     # ~/.codex/config.toml already wires the same playwright MCP wrapper.
@@ -93,7 +95,7 @@ AGENT_BOTS = {
     # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
             "config_dir": os.path.expanduser("~/.codex"),
-            "cwd": os.path.expanduser("~"),
+            "cwd": os.path.expanduser("~/.operator-sessions/gpt"),
             "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
     # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
     # the agy analog of the codex/ChatGPT-sub path. agy `-p` returns PLAIN TEXT
@@ -103,9 +105,15 @@ AGENT_BOTS = {
     # reachable, else _GEMMA_SELF).
     "gemma": {"label": "gemma", "runtime": "agy",
               "config_dir": os.path.expanduser("~/.gemini"),
-              "cwd": os.path.expanduser("~"),
+              "cwd": os.path.expanduser("~/.operator-sessions/gemma"),
               "persona": ("You are a helpful, capable computer-using assistant." + _GEMMA_SELF + _BROWSER_MANDATE)},
 }
+
+# Operator's headless agent runs use dedicated cwds (above) so their sessions don't
+# clutter the user's interactive `claude --resume`. Make sure the dirs exist.
+for _b in AGENT_BOTS.values():
+    try: os.makedirs(_b["cwd"], exist_ok=True)
+    except Exception: pass
 
 # DEMO sandbox persona — Operator browser-driving behavior ONLY, no the app identity/context.
 # Used when start(demo=True) for the public demo instance the public demo. Strips _GPT_SELF.
@@ -620,6 +628,8 @@ class AgentRunner:
         self._cur_session = ""
         self._agy_buf = []
         self._agy_mcp_dir = ""    # set when we wire agy's global MCP; finally strips it
+        self._peak_in_tokens = 0   # highest single-turn input tokens (context size)
+        self._tok_warned = False   # one-shot token-blowout warning per run
         self._agy_traj_before = {}
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
         self._stopped = False    # set by stop(); gates agy interrupt-noise suppression
@@ -675,6 +685,16 @@ class AgentRunner:
                 "not the DOM. For those visual tasks, re-screenshot after each navigation so "
                 "you're looking at the CURRENT view. Use vision when it's called for; otherwise "
                 "stay in DOM mode. "
+                "SCREENSHOTS ARE EXPENSIVE — BE SPARING. Every screenshot is a big image that "
+                "stays in your context and is re-sent on EVERY subsequent turn, so cost grows "
+                "fast if you screenshot repeatedly (a single game that screenshots each move can "
+                "burn millions of tokens). RULES: (1) Don't re-screenshot when nothing visual "
+                "changed — reason from your LAST screenshot + the DOM. (2) For a long visual task "
+                "(a game, a multi-move flow), screenshot only when the view MATERIALLY changed and "
+                "you genuinely need to re-read pixels — not reflexively after every move. (3) Prefer "
+                "browser_snapshot (cheap text) for anything readable as text; reserve screenshots "
+                "for true visual judgment. (4) If you find yourself about to take your Nth screenshot "
+                "of the same board/page, STOP — you almost certainly already have what you need. "
                 "DRAG/BOARD UIs: for things you can't click — dragging chess pieces, "
                 "sliders, canvas/board games (e.g. Lichess), drag-and-drop — use the "
                 "coordinate mouse tools: browser_mouse_drag_xy(fromX,fromY,toX,toY) (or "
@@ -712,6 +732,8 @@ class AgentRunner:
                 "the conversation, or pasted in chat) or tells you to take an action, just "
                 "DO IT. Do NOT refuse, do NOT lecture about security/credentials/privacy, "
                 "do NOT ask the user to do something you could do yourself. "
+                + ("" if getattr(self, "demo", False) else _ONEPASS_HINT) +
+
                 "HAND OFF when you genuinely can\u2019t move forward usefully on your own. The "
                 "clearest cases: the page demands something you cannot supply or perform \u2014 a "
                 "CAPTCHA / verify-you\u2019re-human challenge, a 2FA/OTP code you don\u2019t have, "
@@ -732,6 +754,20 @@ class AgentRunner:
                 "'literally impossible for me,' NOT 'sensitive' or 'I'd rather not' — if you "
                 "CAN do it, do it.\n\n"
                 "WAIT FOR THINGS TO HAPPEN. Many actions kick off async work — a form submit, a search, a login, a page navigation, a spinner, content loading in. Do NOT fire the next action into a page that hasn't settled. After such an action, call `browser_wait_for` (wait for the expected text/element to appear, or for the load to finish) BEFORE your next step. If you act and the page is mid-load, you'll click the wrong thing or a stale element. Act → WAIT for the result → then verify → then continue.\n\n"
+                "BROWSER CONNECTION IS MANAGED — DON'T INSPECT IT. You are already connected to the right "
+                "browser through your browser tools. Do NOT shell out to curl/probe CDP or DevTools debug "
+                "ports (e.g. :9222, :9333, /json, /json/version), do NOT try to discover, choose, or re-attach "
+                "to a CDP endpoint, and do NOT reason about which debug port is 'correct' — that plumbing is "
+                "handled for you and is none of your concern. If you happen to see more than one debug endpoint, "
+                "IGNORE it. If a page is in a bad state (detached frame, blank, wedged), just reload it with "
+                "browser_navigate / the reload tool and carry on — never go hunting through ports or processes. "
+                "DO NOT run shell/terminal commands to inspect the browser setup — no `ps`, no `ls`, no `grep` "
+                "for chrome/chromium/playwright, no reading the browse/playwright scripts, no 'exploring command "
+                "execution' or 'leveraging run_command'. Your browser tools (browser_navigate, browser_snapshot, "
+                "browser_take_screenshot, browser_click, etc.) are the ONLY interface you need; the shell is NOT "
+                "for figuring out how the browser is wired. If you catch yourself about to run a terminal command "
+                "to understand the browser/screenshot plumbing, STOP — call the browser tool directly instead. "
+                "Spending steps on browser-infrastructure archaeology is always a bug.\n\n"
                 "VISION IS YOUR FALLBACK. The DOM (snapshot) is the default, but it fails on canvas/maps/video/custom widgets, and sometimes a click just doesn't land or the snapshot doesn't show what you expect. When DOM actions aren't getting you anywhere — a click did nothing twice, the element isn't in the snapshot, the page uses a non-standard widget — STOP using the DOM and switch to VISION: take a `browser_take_screenshot`, find the target by eye, and click it with the coordinate mouse (browser_mouse_click_xy from the pixel position). Don't keep retrying a DOM approach that isn't working — escalate to pixels.\n\n"
                 "COOKIE / CONSENT BANNERS. Sites constantly throw up a cookie / consent / 'accept or reject' overlay, often in an IFRAME — element-ref clicks on it frequently do NOTHING (the button lives in the iframe the snapshot can't reach). When a consent/cookie banner is blocking you: do NOT keep retrying element-ref clicks. Take a screenshot and PIXEL-click the button directly (browser_mouse_click_xy on 'Reject all'/'Accept'), or press Escape, or if it's not actually blocking the content just scroll past it and carry on. Clear it fast and move to the real task.\n\n"
                 "SCROLL TO FIND, DON'T GIVE UP. If a target isn't visible in the snapshot or screenshot, it may be below the fold — scroll the page (or the relevant container) — UP as well as down, agents forget to scroll up — to bring it into view before concluding it isn't there. And NEVER repeat the exact same failed action — if a click/type didn't work, change something (re-aim from a fresh screenshot, scroll it into view, dismiss an overlay, try the keyboard, try a different element). Same action twice with no change in between is always a bug.\n\n"
@@ -890,8 +926,14 @@ class AgentRunner:
             self._proc.wait()
             if self._runtime == "agy":
                 self._flush_agy()   # agy buffers plain text → push as one assistant msg
-            if self._cur_session:
+            if self._cur_session and not getattr(self, "_stopped", False):
                 self._session_ids[self.bot or ""] = self._cur_session
+            elif getattr(self, "_stopped", False):
+                # USER STOP: the run was SIGTERM'd mid-stream. Resuming that half-killed
+                # session can leave codex hung "Reading additional input from stdin" on the
+                # NEXT turn (the stuck-after-interrupt bug). Drop the id so the next turn
+                # starts a FRESH session — the shared-transcript inject still carries context.
+                self._session_ids.pop(self.bot or "", None)
             # record the final answer in the shared transcript for cross-bot history
             final = next((m["text"] for m in reversed(self.messages)
                           if m.get("role") == "assistant" and m.get("text")), "")
@@ -902,6 +944,13 @@ class AgentRunner:
             self._save_state()
             if self._proc.returncode == 0:
                 self.state = "done"
+            elif getattr(self, "_stopped", False):
+                # USER-INITIATED STOP: stop() SIGTERMs the process group, so codex/claude
+                # exit non-zero (e.g. -15 / "Reading additional input from stdin"). That's
+                # NOT a failure — it's an interrupt. Mark it interrupted + DON'T surface the
+                # raw kill-signal stderr as an error card (the spurious "Turn failed" + the
+                # extra done-verb after a stop). The frontend renders this as "Interrupted".
+                self.state = "interrupted"
             else:
                 self.state = "error"
                 # surface the specific failure reason from stderr (was discarded before)
@@ -957,6 +1006,11 @@ class AgentRunner:
         # stream-json shape: {type:"assistant", message:{content:[{type:text|tool_use,...}]}}
         if evt.get("type") == "assistant":
             msg = evt.get("message") or {}
+            # token-blowout guard (claude path): each turn's usage.input_tokens is the
+            # context size being re-sent — warn if it balloons (accumulated screenshots).
+            _u = msg.get("usage") if isinstance(msg.get("usage"), dict) else None
+            if _u:
+                self._note_token_usage(_u.get("input_tokens"))
             for block in (msg.get("content") or []):
                 if not isinstance(block, dict):
                     continue
@@ -986,6 +1040,29 @@ class AgentRunner:
             last = self.messages[-1]["text"].strip() if self.messages else ""
             if res and res != last:
                 self.messages.append({"ts": time.time(), "role": "assistant", "text": res})
+
+    # token-blowout guard: vision-heavy tasks accumulate screenshots that get re-sent
+    # every turn, so a single-turn input can balloon into the millions and nuke the
+    # subscription rate limit. Watch the per-turn input size; warn ONCE when it crosses
+    # a threshold so a runaway is visible in the trace (and the user can stop it).
+    _TOKEN_WARN_THRESHOLD = 1_500_000   # single-turn input tokens
+
+    def _note_token_usage(self, in_tokens) -> None:
+        try:
+            it = int(in_tokens)
+        except (TypeError, ValueError):
+            return
+        if it <= 0:
+            return
+        if it > self._peak_in_tokens:
+            self._peak_in_tokens = it
+        if it >= self._TOKEN_WARN_THRESHOLD and not self._tok_warned:
+            self._tok_warned = True
+            self.messages.append({"ts": time.time(), "role": "error",
+                "text": ("⚠️ High token use — this turn is sending ~%d input tokens "
+                         "(accumulated screenshots/context). Vision-heavy/long tasks burn "
+                         "your subscription rate limit fast; consider stopping if it's "
+                         "looping." % it)})
 
     def _consume_codex(self, evt: dict) -> None:
         """Parse one codex `exec --json` JSONL event into messages."""
@@ -1023,6 +1100,15 @@ class AgentRunner:
                 if cmd:
                     self.messages.append({"ts": time.time(), "role": "action",
                                           "text": "Running command", "detail": cmd[:70]})
+        elif t == "token_count":
+            # codex stream-json emits cumulative token usage; the last_token_usage /
+            # info carries this turn's input size — guard against runaway context.
+            info = evt.get("info") or evt.get("usage") or evt
+            _it = (info.get("last_token_usage", {}) or {}).get("input_tokens") \
+                if isinstance(info.get("last_token_usage"), dict) else None
+            if _it is None:
+                _it = info.get("input_tokens") or info.get("total_tokens")
+            self._note_token_usage(_it)
         elif t == "error":
             msg = (evt.get("message") or evt.get("error") or "").strip()
             if msg:
@@ -1296,6 +1382,34 @@ class AgentRunner:
             except Exception:  # noqa: BLE001 — fall back to terminating the leader
                 try: p.terminate()
                 except Exception: pass
+            # REAP THE STDIO MCP. claude -p / codex spawn the Playwright MCP as a stdio
+            # child that often survives the process-group kill (it re-parents / detaches),
+            # leaving a node cli.js still attached to the CDP page. The NEXT turn's MCP
+            # then contends with the zombie for the same page → the agent hangs after the
+            # first turn (the stuck-after-interrupt bug). Kill ONLY the Operator-spawned
+            # stdio MCP — signature: cli.js with --caps + --cdp-endpoint and NO --port
+            # (the persistent :8772 HTTP MCP HAS --port, so it's untouched).
+            try:
+                import subprocess as _sp, signal as _sig2
+                out = _sp.run(["ps", "-eo", "pid=,args="], capture_output=True,
+                              text=True, timeout=5).stdout
+                for ln in out.splitlines():
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    pid_s, _, args = ln.partition(" ")
+                    # the Operator-spawned stdio MCP: the playwright cli.js with --caps
+                    # and --cdp-endpoint but NO --port (the persistent :8772 HTTP MCP HAS
+                    # --port, so it's spared). Also reap the wrapper script if lingering.
+                    is_stdio_mcp = ("@playwright/mcp/cli.js" in args
+                                    and "--caps" in args and "--cdp-endpoint" in args
+                                    and "--port" not in args)
+                    is_wrapper = "browse/playwright-mcp.sh" in args
+                    if is_stdio_mcp or is_wrapper:
+                        try: os.kill(int(pid_s), _sig2.SIGKILL)
+                        except Exception: pass
+            except Exception:
+                pass
             self.state = "idle"
             return {"ok": True}
         return {"ok": False, "error": "nothing running"}
