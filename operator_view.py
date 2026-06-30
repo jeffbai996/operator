@@ -58,6 +58,7 @@ class _Streamer:
     detail: str = ""
     vw: int = 0                   # live viewport size (for click coord scaling)
     vh: int = 0
+    cur_url: str = ""             # URL cached by the async grab loop; read by sync status route
     last_click: tuple = (0.0, 0.0, 0.0)   # (norm_x, norm_y, monotonic_ts) — agent cursor
     zoom: float = 1.0                      # CSS zoom factor for the page (chrome control)
     _thread: threading.Thread | None = None
@@ -216,9 +217,15 @@ class _Streamer:
                     f"document.addEventListener('DOMContentLoaded',()=>{{document.documentElement.style.zoom='{self.zoom}';}});")
         except Exception:
             pass
-        # also install on the CURRENTLY-open page (init script only covers future loads)
+        # also install on the CURRENTLY-open page (init script only covers future loads).
+        # WRAP IN A TIMEOUT: evaluate() on a privileged page (chrome://new-tab-page) or a
+        # busy/heavy page (e.g. Bloomberg mid-load) can BLOCK FOREVER with no built-in
+        # timeout, wedging _attach before it ever sets status="live" — the streamer then
+        # sits in "connecting" indefinitely and the browser pane never paints. Bounding it
+        # means a hostile current page degrades gracefully (no click-hook on it) instead of
+        # taking the whole streamer down.
         try:
-            await self._page.evaluate("""
+            await asyncio.wait_for(self._page.evaluate("""
                 (function(){
                   if (window.__opClickHooked) return; window.__opClickHooked = true;
                   function rec(e){ try {
@@ -228,7 +235,7 @@ class _Streamer:
                   window.addEventListener('pointerdown', rec, true);
                   window.addEventListener('click', rec, true);
                 })();
-            """)
+            """), timeout=2.5)
         except Exception:
             pass
         self._update_viewport()
@@ -255,11 +262,14 @@ class _Streamer:
                 break
             try:
                 self._refresh_active_page()
+                await self._follow_active_tab()
                 async with self._iolock():
                     png = await self._grab(self._page)
                 if png:
                     self.frame = png
                     self.frame_ts = time.monotonic()
+                    try: self.cur_url = self._page.url or ""
+                    except Exception: pass
                     _misses = 0
                 else:
                     _misses += 1
@@ -276,15 +286,33 @@ class _Streamer:
                     # CDP-attached pages have NO Playwright viewport_size (it's None for
                     # connect_over_cdp), so the sync helper leaves vw/vh=0 → manual click
                     # mapping breaks. Read the REAL viewport via JS innerWidth/innerHeight.
+                    # BOUND IT: page.evaluate() has no built-in timeout and can block
+                    # FOREVER on a page whose JS world isn't responsive (observed: a
+                    # connect_over_cdp page reporting url=='' yet still screenshottable).
+                    # Unbounded, this froze the grab loop after the first frame — the
+                    # stream delivered one buffered burst then went silent (status "live",
+                    # vw stuck at 0). Bound + CDP-layout fallback so the loop never stalls.
                     try:
-                        _vp = await self._page.evaluate(
-                            "({w: window.innerWidth, h: window.innerHeight})")
+                        _vp = await asyncio.wait_for(self._page.evaluate(
+                            "({w: window.innerWidth, h: window.innerHeight})"), timeout=1.0)
                         if _vp and _vp.get("w"):
                             self.vw, self.vh = int(_vp["w"]), int(_vp["h"])
                         else:
                             self._update_viewport()
                     except Exception:
-                        self._update_viewport()
+                        # JS world slow/unavailable → CDP layout metrics, then sync helper.
+                        try:
+                            sess = self._cdp or await self._page.context.new_cdp_session(self._page)
+                            self._cdp = sess
+                            m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"), timeout=1.0)
+                            vv = (m or {}).get("visualViewport") or {}
+                            cw, ch = int(vv.get("clientWidth") or 0), int(vv.get("clientHeight") or 0)
+                            if cw and ch:
+                                self.vw, self.vh = cw, ch
+                            else:
+                                self._update_viewport()
+                        except Exception:
+                            self._update_viewport()
             except Exception as e:  # noqa: BLE001
                 self.detail = str(e)
                 # A single transient capture error is normal during navigation —
@@ -371,6 +399,58 @@ class _Streamer:
                 self._page = switch_to
                 self._cdp = None
                 self._update_viewport()
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _follow_active_tab(self) -> None:
+        """Stream whichever tab the AGENT (or user) actually has in the FOREGROUND —
+        not just the newest one. _refresh_active_page only switches when the tab COUNT
+        changes (and always to the last tab), so an agent that flips between already-
+        open tabs (clicks a link that activates an existing tab, or switches back to
+        tab 1) left the view frozen on the stale tab . Here we poll
+        each open page's document.visibilityState — only the foreground tab reports
+        'visible' — and follow it. Throttled (every ~0.8s) + bounded per check so it
+        never stalls the grab loop, and only does work when there's >1 tab."""
+        try:
+            now = time.monotonic()
+            if now - getattr(self, "_tab_check_ts", 0.0) < 0.8:
+                return
+            self._tab_check_ts = now
+            ctx = self._browser.contexts[0]
+            live = [p for p in ctx.pages if not p.is_closed()]
+            if len(live) < 2:
+                return  # single tab → nothing to follow
+            # current page already visible? then don't churn.
+            async def _vis(pg):
+                try:
+                    s = await asyncio.wait_for(
+                        pg.evaluate("document.visibilityState"), timeout=0.5)
+                    return s
+                except Exception:
+                    # JS world unavailable → fall back to CDP visibility metric
+                    try:
+                        sess = await pg.context.new_cdp_session(pg)
+                        r = await asyncio.wait_for(
+                            sess.send("Runtime.evaluate", {
+                                "expression": "document.visibilityState",
+                                "returnByValue": True}), timeout=0.5)
+                        return (r.get("result") or {}).get("value")
+                    except Exception:
+                        return None
+            # if the page we're on is still visible, keep it (avoid flapping)
+            if self._page in live:
+                cur_vis = await _vis(self._page)
+                if cur_vis == "visible":
+                    return
+            # find a foreground tab and switch to it
+            for pg in reversed(live):   # prefer the newest visible one
+                if pg is self._page:
+                    continue
+                if await _vis(pg) == "visible":
+                    self._page = pg
+                    self._cdp = None
+                    self._update_viewport()
+                    return
         except Exception:  # noqa: BLE001
             pass
 
@@ -526,6 +606,49 @@ class _Streamer:
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
 
+    def _safe_url(self, p) -> str:
+        """p.url is a sync property but on a desynced connect_over_cdp page it can
+        return '' (handle out of sync). Never raises; returns '' on trouble."""
+        try:
+            return p.url or ""
+        except Exception:
+            return ""
+
+    async def _cdp_session(self, p):
+        """Reusable CDP session for raw input/screenshot ops. Rebuilt if missing."""
+        sess = getattr(self, "_cdp", None)
+        if sess is None:
+            sess = await p.context.new_cdp_session(p)
+            self._cdp = sess
+        return sess
+
+    async def _cdp_click(self, p, x: float, y: float, button: str = "left",
+                         clicks: int = 1) -> None:
+        """Click at CSS-px (x,y) via raw CDP Input.dispatchMouseEvent, bypassing
+        Playwright's high-level page.mouse (which blocks indefinitely on a desynced
+        connect_over_cdp handle). Each op is timeout-bounded so a wedged page can
+        never hold _io_lock and freeze the grab loop. Also stamps last_click so the
+        UI cursor overlay shows even if the page's own __opClick JS hook is slow."""
+        sess = await self._cdp_session(p)
+        async def _send(typ, **extra):
+            args = {"type": typ, "x": float(x), "y": float(y)}
+            args.update(extra)
+            await asyncio.wait_for(sess.send("Input.dispatchMouseEvent", args), timeout=4)
+        # glide a couple of moves in so it isn't a zero-movement instant click
+        await _send("mouseMoved")
+        await asyncio.sleep(0.02)
+        for n in range(1, clicks + 1):
+            await _send("mousePressed", button=button, clickCount=n)
+            await asyncio.sleep(0.03)
+            await _send("mouseReleased", button=button, clickCount=n)
+        # stamp the cursor overlay from the normalized coords we were handed
+        try:
+            d = await self._viewport_dims(p)
+            if d.get("w") and d.get("h"):
+                self.last_click = (x / d["w"], y / d["h"], time.monotonic())
+        except Exception:
+            pass
+
     async def _viewport_dims(self, p):
         """CSS-pixel viewport {w,h} for mapping normalized click coords. Uses CDP
         getLayoutMetrics (immune to page eval-blocking, e.g. Amex CSP). Falls back
@@ -576,22 +699,22 @@ class _Streamer:
                 dims = await self._viewport_dims(p)
                 x = float(action.get("x", 0)) * dims["w"]
                 y = float(action.get("y", 0)) * dims["h"]
-                # human-ish: glide the cursor in (steps) + a short settle, so it
-                # isn't a zero-movement instant click (a bot-detection tell).
-                await p.mouse.move(x, y, steps=12)
-                await asyncio.sleep(0.05)
-                if kind == "dblclick_at":
-                    await p.mouse.dblclick(x, y)
-                else:
-                    await p.mouse.down(); await asyncio.sleep(0.04); await p.mouse.up()
-                return {"ok": True, "url": p.url, "title": await p.title(),
-                        "px": [round(x), round(y)]}
+                # Drive the click via RAW CDP Input.dispatchMouseEvent, not
+                # p.mouse.*. With Playwright 1.60 + headless Chrome the connect_over_cdp
+                # page wrapper intermittently desyncs (url=='' , JS world dead) — its
+                # high-level mouse/evaluate/title calls then BLOCK with no timeout,
+                # holding _io_lock and freezing the grab loop (the "click crashes the
+                # feed, no cursor" bug). Raw CDP bypasses the broken page model — it's
+                # the same layer _grab uses for screenshots, which never broke.
+                clicks = 2 if kind == "dblclick_at" else 1
+                await self._cdp_click(p, x, y, button="left", clicks=clicks)
+                _u = self._safe_url(p); self.cur_url = _u or self.cur_url
+                return {"ok": True, "url": _u, "px": [round(x), round(y)]}
             elif kind == "rclick_at":              # right-click at normalized x,y (context menu)
                 dims = await self._viewport_dims(p)
                 x = float(action.get("x", 0)) * dims["w"]
                 y = float(action.get("y", 0)) * dims["h"]
-                await p.mouse.move(x, y, steps=10)
-                await p.mouse.click(x, y, button="right")
+                await self._cdp_click(p, x, y, button="right", clicks=1)
             elif kind == "type":
                 await p.keyboard.type(val, delay=35)
             elif kind == "key":
@@ -644,7 +767,8 @@ class _Streamer:
                     await p.mouse.down()
                 else:
                     await p.mouse.up()
-                return {"ok": True, "url": p.url, "title": await p.title(), "px": [round(x), round(y)]}
+                _u = self._safe_url(p); self.cur_url = _u or self.cur_url
+                return {"ok": True, "url": _u, "px": [round(x), round(y)]}
             elif kind == "drag":          # atomic click-drag: down at (x0,y0) → up at (x1,y1)
                 dims = await self._viewport_dims(p)
                 x0 = float(action.get("x0", 0)) * dims["w"]
@@ -657,8 +781,8 @@ class _Streamer:
                 await p.mouse.move(x1, y1, steps=20)   # glide so the page sees a drag
                 await asyncio.sleep(0.05)
                 await p.mouse.up()
-                return {"ok": True, "url": p.url, "title": await p.title(),
-                        "px": [round(x1), round(y1)]}
+                _u = self._safe_url(p); self.cur_url = _u or self.cur_url
+                return {"ok": True, "url": _u, "px": [round(x1), round(y1)]}
             elif kind == "find":          # ⌘F find-on-page
                 await p.keyboard.press("Control+f")
             elif kind == "select_all":
@@ -692,7 +816,8 @@ class _Streamer:
                     self._update_viewport()
             else:
                 return {"ok": False, "error": f"unknown action '{kind}'"}
-            return {"ok": True, "url": p.url, "title": await p.title()}
+            _u = self._safe_url(p); self.cur_url = _u or self.cur_url
+            return {"ok": True, "url": _u}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
         finally:
@@ -854,12 +979,7 @@ def operator_status():
     _streamer.last_view = time.monotonic()
     fresh = (_streamer.frame is not None
              and (time.monotonic() - _streamer.frame_ts) < 6.5)
-    cur_url = ""
-    try:
-        if _streamer._page is not None:
-            cur_url = _streamer._page.url or ""
-    except Exception:
-        cur_url = ""
+    cur_url = _streamer.cur_url
     lx, ly, lt = _streamer.last_click
     click = None
     if lt and (time.monotonic() - lt) < 1.2:
@@ -873,7 +993,17 @@ def operator_status():
 def operator_steer():
     data = request.get_json(silent=True) or request.form
     action = {"kind": data.get("kind"), "value": data.get("value", ""),
-              "x": data.get("x", 0), "y": data.get("y", 0)}
+              "x": data.get("x", 0), "y": data.get("y", 0),
+              # dx/dy carry the wheel/touch scroll delta (kind=="scroll"). Must default
+              # to None, NOT 0 — _do_action tells "a real delta was sent" apart from
+              # "no delta, use the up/down/top/bottom keyword" via isinstance(dy, (int,
+              # float)), and 0 is itself an int. This dict used to whitelist only
+              # kind/value/x/y, silently dropping dx/dy off every scroll request, so
+              # _do_action always fell through to the keyword branch with val=="" (the
+              # wheel handler never sends `value`) → amt defaulted to 600 (down) no
+              # matter which way the wheel actually moved. That's why wheel-up did
+              # nothing while wheel-down "worked" .
+              "dx": data.get("dx"), "dy": data.get("dy")}
     if not action["kind"]:
         return jsonify(ok=False, error="missing action kind"), 400
     return jsonify(_streamer.run_action(action))
@@ -939,7 +1069,7 @@ def operator_drivers():
     """The pickable drivers — the operator runs them headless. In demo mode this is
     a single generic 'gpt' driver (never leak the app bot names to a public visitor)."""
     if DEMO:
-        return jsonify(drivers=[{"key": "gpt", "label": "gpt"}])
+        return jsonify(drivers=[{"key": "bot", "label": "bot"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
 
 
@@ -963,12 +1093,11 @@ def operator_dispatch():
     except Exception:
         pass
     if DEMO:
-        # public demo: GPT-only, effort locked per preset (5.4->medium, 5.5->low);
-        # ignore any client-sent bot. demo=True strips the app context/identity/tools.
-        bot = "gpt"
-        effort = "medium"   # demo: effort pinned to medium for both presets
-        if model not in ("gpt-5.4", "gpt-5.5"):
-            model = "gpt-5.4"
+        # public demo: Sonnet 4.6 via gemma/agy runtime, effort locked to medium.
+        # ignore any client-sent bot/model. demo=True strips the app context/identity/tools.
+        bot = "gemma"
+        model = "Claude Sonnet 4.6 (Thinking)"
+        effort = "medium"
         r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True)
     else:
         r = operator_agent.runner.start(bot, task, model=model, effort=effort)
@@ -1161,7 +1290,7 @@ def _live_bots() -> set:
 # when a family's latest version changes (the only manual touch-point).
 OPERATOR_MODELS = [
     {"value": "opus", "label": "Opus 4.8"},
-    {"value": "sonnet", "label": "Sonnet 4.6"},
+    {"value": "claude-sonnet-5", "label": "Sonnet 5"},
     {"value": "haiku", "label": "Haiku 4.5"},
 ]
 # codex/gpt models (default gpt-5.5 medium per the owner).
@@ -1175,17 +1304,15 @@ OPERATOR_MODELS_GPT = [
 # agy --model display string, e.g. "Gemini 3.5 Flash (High)".
 OPERATOR_MODELS_GEMMA = [
     {"value": "Gemini 3.5 Flash", "label": "3.5 Flash"},
-    {"value": "Gemini 3.1 Pro", "label": "3.1 Pro"},
     {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
     {"value": "Claude Opus 4.6 (Thinking)", "label": "Opus 4.6"},
     {"value": "GPT-OSS 120B (Medium)", "label": "GPT-OSS 120B"},
 ]
 
 
-# public demo: exactly two presets (effort is locked per model in the dispatch route).
+# public demo: single model preset (Sonnet via gemma/agy runtime).
 OPERATOR_MODELS_DEMO = [
-    {"value": "gpt-5.4", "label": "GPT-5.4"},
-    {"value": "gpt-5.5", "label": "GPT-5.5"},
+    {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
 ]
 
 

@@ -45,10 +45,18 @@ _BROWSER_MANDATE = (
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
 def _squad_boot_context(bot: str = "gpt") -> str:
-    """The SAME the app context the Claude bots load at SessionStart (SQUAD.md rulebook
-    + SYSTEM.md roster/infra + the memories/journal/files digest), so gpt has real
-    PARITY rather than a hand-written blurb. Imported lazily + fail-soft: if host-app
-    isn't importable (e.g. the OSS build), gpt just runs without it."""
+    """Slim the app context for Operator runs (browser tasks don't need the full digest).
+
+    Loads:
+    - SQUAD.md rulebook (behavioral rules, ~5.7k tokens)
+    - SYSTEM.md roster + endpoints (~731 tokens)
+    - Feedback memories — full bodies (behavioral rules must be pre-loaded)
+    - Memory INDEX only for everything else (names + tags, ~2k tokens)
+    - Instruction to use host-app recall / search for deeper lookup
+
+    The full digest (format_store_digest) loads ~18.9k tokens of memory bodies that
+    a browser-task agent rarely needs. Index + search covers it at ~1/10th the cost.
+    Fail-soft: if host-app isn't importable, gpt/gemma runs without it."""
     try:
         import sys as _sys
         _ss = os.path.expanduser("~/.host-app")
@@ -63,12 +71,38 @@ def _squad_boot_context(bot: str = "gpt") -> str:
                     parts.append(v)
             except Exception:
                 pass
+        # Feedback memories: full bodies (behavioral rules must be pre-loaded)
         try:
-            dig = _store.format_store_digest(bot)
-            if dig:
-                parts.append(dig)
+            fb = _store.format_memories_for_prompt(bot=bot, types=["feedback"])
+            if fb:
+                parts.append(fb)
         except Exception:
             pass
+        # All other memories: index only (name + tags + one-liner description)
+        try:
+            idx = _store.format_memories_index(bot=bot, exclude_types=["feedback"])
+            if idx:
+                parts.append(idx)
+        except Exception:
+            pass
+        # Journal (recent) + files index
+        try:
+            jou = _store.format_journal_for_prompt(days=3)
+            if jou:
+                parts.append(jou)
+        except Exception:
+            pass
+        try:
+            fi = _store.format_files_index(bot=bot)
+            if fi:
+                parts.append(fi)
+        except Exception:
+            pass
+        parts.append(
+            "MEMORY ACCESS: The above is an index. To read a specific memory's full "
+            "text: `host-app memory show <id>`. To search by topic: "
+            "`host-app recall \"<query>\"` (semantic) or search MCP tool if available."
+        )
         return "\n\n".join(parts)
     except Exception:
         return ""
@@ -458,6 +492,10 @@ def _clean_gemma_text(text: str) -> str:
             t = _re.sub(r'<\|channel\|>\s*(?:analysis|commentary)\s*<\|message\|>.*?(?=<\||$)', '', t, flags=_re.S)
             t = _re.sub(r'<\|[a-z_]+\|>', '', t)
             t = _re.sub(r'(?m)^\s*(?:analysis|commentary|final|assistant)\s*$', '', t)
+    # strip Gemini's native thinking-block header line ("**Thought for Ns:**" or
+    # "Thinking with [effort] effort...") — agy injects these at the top of the
+    # PLANNER_RESPONSE thinking field; they duplicate our narrator's own indicator.
+    t = _re.sub(r'(?m)^\s*\*?\*?(?:Thought for \d+s?:?|Thinking with \[[^\]]+\] effort\.{0,3})\*?\*?\s*\n?', '', t, count=1)
     # drop "🛑 Task started:" (and bare "Task started:") progress lines
     t = _re.sub(r'(?m)^\s*(?:🛑|🟢|▶️?)?\s*Task started:.*$', '', t)
     # ![alt](file:///.../shot.png) -> rewrite to the cockpit's screenshot route so it
@@ -687,10 +725,10 @@ class AgentRunner:
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
             self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
-            # default the claude runtime to Sonnet 4.6 / medium when nothing was picked
+            # default the claude runtime to Sonnet 5 / medium when nothing was picked
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
-                if not self.model:  self.model = "sonnet"
+                if not self.model:  self.model = "claude-sonnet-5"
                 if not self.effort: self.effort = "medium"
             elif b.get("runtime") == "codex":
                 # gpt/codex: default effort to medium too. Without this, an unset effort
@@ -982,7 +1020,37 @@ class AgentRunner:
                 "action. Do NOT batch multiple tool calls into one turn or pre-plan the "
                 "whole sequence — that makes your trace dump out all at once at the end "
                 "instead of streaming. One action, observe, next action. Keep going until "
-                "the task is done.\n\n")
+                "the task is done.\n\n"
+                # CANVAS / GAME CLICKS : gemma defaults to selector-based
+                # browser_click, which finds NOTHING on a <canvas> game (RuneScape/OpenRSC,
+                # maps, drawing apps) — there are no DOM elements to select, so it stalls.
+                # claude/claude-b plays these fine because it uses coordinate clicks off a
+                # screenshot; gemma has the SAME tools (--caps vision) but picks the wrong
+                # one. Force the right behavior explicitly.
+                "CANVAS & GAME PAGES: if the page is a <canvas> game or visual app "
+                "(e.g. RuneScape/OpenRSC, a map, a drawing tool) there are NO clickable "
+                "DOM elements — selector/text clicks (browser_click) will find nothing. "
+                "You MUST: take a screenshot, find the target by its PIXEL location in the "
+                "image, then click with the COORDINATE tool (browser_mouse_click_xy / the "
+                "x,y click), NOT browser_click. Re-screenshot after each click to see the "
+                "result before the next one.\n\n"
+                # IFRAME COORDINATE-SPACE : the real bug behind gemma's
+                # "I clicked (405,785) but nothing changed, screen hasn't changed" loop on
+                # embedded games (247freepoker etc. run the game in an iframe). gemma was
+                # measuring the IFRAME's internal dimensions (e.g. 893x1131) and clicking in
+                # iframe-relative coords — but the coordinate-click tool fires at the TOP-LEVEL
+                # page viewport, so the clicks landed in the wrong place and never registered.
+                # sonnet doesn't do this — it reads coords straight off the screenshot. Tell
+                # gemma to do the same and STOP analyzing frame/canvas geometry.
+                "COORDINATES ARE SCREENSHOT PIXELS — NOTHING ELSE: the screenshot you receive "
+                "IS the full page at the exact pixel scale the click tool uses. To click "
+                "something, read its (x,y) DIRECTLY off that screenshot image and click those "
+                "same pixels. DO NOT measure or reason about iframe dimensions, canvas size, "
+                "frame offsets, or 'absolute positioning' — embedded games sit in an iframe but "
+                "the screenshot already shows them in page space, so iframe-relative coords are "
+                "WRONG and your click won't register. If a click doesn't change the screen, your "
+                "coordinates were off — re-read them off the latest screenshot and retry; do NOT "
+                "start analyzing the page's frame geometry.\n\n")
             prompt = (_persona
                       + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
                       + "\n\n" + _stepwise + "Task: " + task)
@@ -1593,6 +1661,13 @@ class AgentRunner:
             "started_ts": self.started_ts, "ended_ts": self.ended_ts,
             "messages": [m for m in self.messages if m["ts"] > since_ts],
             "final": final,
+            # `alive` = the agent subprocess is genuinely still running (poll()==None),
+            # not just "state says running." The client's stall watchdog uses this to
+            # tell a SILENT-BUT-WORKING agent (a long reasoning step, a slow page, a
+            # natural mid-convo pause) from a truly DEAD/wedged one. Only the latter
+            # should trip "the agent stalled" — a live process is making progress even
+            # when it emits no new message line for a while.
+            "alive": self.is_running(),
             "handoff": self.handoff,   # #4: {reason, ts} when the agent asks for a takeover
         }
 
