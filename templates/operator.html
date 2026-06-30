@@ -1062,7 +1062,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.8</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.9</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -2221,7 +2221,7 @@
       let savedModel = (typeof _sess!=='undefined' && _sess) ? _sess.model : '';
       if (!savedModel) { try { const _sv = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (_sv) savedModel = _sv.model || ''; } catch {} }
       const _demo = document.body.classList.contains('op-demo');
-      const want = (driver === 'gpt') ? (_demo ? 'gpt-5.4' : 'gpt-5.5') : (driver === 'gemma') ? 'Gemini 3.5 Flash' : 'sonnet';
+      const want = (driver === 'gpt') ? (_demo ? 'gpt-5.4' : 'gpt-5.5') : (driver === 'gemma') ? 'Gemini 3.5 Flash' : 'claude-sonnet-5';
       if (savedModel && [].some.call(sel.options, o=>o.value===savedModel)) sel.value = savedModel;
       else if ([].some.call(sel.options, o=>o.value===want)) sel.value = want;
       if (typeof syncEffort === 'function') syncEffort();
@@ -2237,7 +2237,7 @@
   // no xhigh, Haiku = no effort support. Picker reacts to the chosen model.
   const EFFORT_BY_MODEL = {
     opus:   ["low", "medium", "high", "xhigh", "max"],
-    sonnet: ["low", "medium", "high", "max"],
+    "claude-sonnet-5": ["low", "medium", "high", "max"],
     haiku:  [],   // Haiku 4.5 has no effort support
     "gpt-5.5": ["low", "medium", "high", "xhigh"],
     "gpt-5.4": ["low", "medium", "high", "xhigh"],
@@ -2404,6 +2404,7 @@
   let _lastAssistant = '';
   let _lastActionEmoji = '💭', _lastActionVerb = 'Thinking';
   let _runProgressTs = 0;
+  let _runSawProgress = false;   // has THIS run emitted at least one progress msg yet?
   let _handledState = '';
   let _postSteerUntil = 0;
   let _steering = false;     // true from a steer until the NEW run is confirmed 'running' —
@@ -2451,7 +2452,7 @@
         }
       });
       _agentSince = maxTs;
-      if (msgs.length) _runProgressTs = Date.now();   // any new msg = progress
+      if (msgs.length) { _runProgressTs = Date.now(); _runSawProgress = true; }   // any new msg = progress
       // terminal states must be handled ONCE — not re-fired every poll (that
       // looped "agent stopped" after a stop). Reset when a fresh run starts.
       // While interrupting (user hit Stop), do NOT let a lingering 'running' poll from
@@ -2490,13 +2491,22 @@
       if (d.state !== 'running') _handledState = d.state;
       if (d.state === 'running') { op.dataset.busy='1'; setCardText(actTxt, 'Working');
         setCardSub(d.bot||'', _lastActionVerb.toLowerCase(), _lastActionEmoji); op.dataset.agent='running'; setInFlight(true);
-        if (!_runProgressTs) _runProgressTs = Date.now();
-        // watchdog: if a "running" turn makes zero progress for 120s, treat it as
-        // failed rather than spinning forever.
-        if (Date.now() - _runProgressTs > 120000) {
+        if (!_runProgressTs) { _runProgressTs = Date.now(); _runSawProgress = false; }
+        // watchdog: only declare a turn STALLED when the agent subprocess is actually
+        // DEAD/wedged — never just because it's been silent. The old version tripped
+        // on 120s of no new *message*, but a healthy agent legitimately goes quiet for
+        // >2min: a long reasoning step, a slow page load, a cold start spinning up the
+        // subprocess+MCP, or a natural pause mid-conversation. Those were all getting
+        // false-killed with "the agent stalled" . The server now reports `alive` (subprocess poll()==None); we gate the
+        // watchdog on it. A long timeout (8min) stays as a backstop for a process that's
+        // alive but truly hung, so we never spin forever — but a working agent is never
+        // killed for being quiet.
+        const _dead = d.alive === false;            // subprocess gone but state stuck "running" → real crash
+        const _hung = Date.now() - _runProgressTs > 480000;  // 8min backstop: alive but wedged
+        if ((_dead && Date.now() - _runProgressTs > 15000) || _hung) {
           op.dataset.busy='0'; setCardText(actTxt, 'Failed');
           setCardSub(d.bot||'', 'stalled'); op.dataset.agent='errored';
-          turnError('Turn failed', 'No response for 2 minutes — the agent stalled and was stopped.'); finishTask(true); setInFlight(false);
+          turnError('Turn failed', 'The agent stopped responding and was ended.'); finishTask(true); setInFlight(false);
           try { fetch(STOP_URL, {method:'POST'}); } catch {}
           _runProgressTs = 0;
         }
