@@ -19,6 +19,7 @@ import asyncio
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
@@ -39,8 +40,21 @@ IDLE_STOP_AFTER = 90.0
 bp = Blueprint("operator", __name__,
                 template_folder="templates", static_folder="static")
 
-
 import base64 as _b64ph
+
+# chrome://new-tab-page renders BLANK under --headless=new + --disable-gpu (the demo's
+# launch flags) — Chromium's WebUI new-tab surface needs a GPU compositing path that
+# isn't there, so the "reset" silently produces an empty page instead of an error.
+# A local data: URL bypasses Chrome's internal NTP entirely — no navigation/rendering-
+# path quirks — so it always paints. Loaded via RAW CDP Page.navigate, not Playwright's
+# page.set_content()/page.goto() — those wait on the page's own lifecycle-event
+# machinery, which (like page.mouse/page.evaluate elsewhere in this file) can hang
+# indefinitely on a desynced connect_over_cdp page handle. Page.navigate fire-and-forget
+# bounded by asyncio.wait_for never blocks the grab loop.
+_NEWTAB_HTML = (Path(__file__).parent / "templates" / "newtab.html").read_text()
+_NEWTAB_DATA_URL = "data:text/html;base64," + _b64ph.b64encode(_NEWTAB_HTML.encode()).decode()
+
+
 # tiny dark placeholder frame (matches --bg) so the MJPEG stream always has
 # valid data and the <img> never shows the broken-image glyph before/between
 # real captures.
@@ -106,19 +120,47 @@ class _Streamer:
             if self.status == "live":
                 self.status = "idle"
 
+    @staticmethod
+    def _chrome_attach_script() -> str:
+        """Path to the (re)launcher for the active mode — the demo's isolated
+        headless Chrome under DEMO, the owner logged-in GUI Chrome otherwise."""
+        import os
+        if DEMO:
+            return os.path.expanduser("~/operator-demo/op-demo-chrome.sh")
+        return os.path.expanduser("~/agents/browse/chrome-attach.sh")
+
+    @staticmethod
+    def _kill_stray_chrome() -> None:
+        """Best-effort kill of a wedged Chrome before relaunching. The main GUI
+        Chrome lives on the Windows host (Stop-Process via powershell.exe); DEMO's
+        headless Chrome is a native Linux process on this box (pkill by CDP port —
+        op-demo-chrome.sh's own idempotency check can't tell wedged from live)."""
+        import subprocess
+        if DEMO:
+            try:
+                from urllib.parse import urlparse
+                port = urlparse(CDP_URL).port or 9333
+                subprocess.run(["pkill", "-f", f"remote-debugging-port={port}"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=10)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                subprocess.run(["powershell.exe", "-NoProfile", "-Command",
+                                "Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=10)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _hard_relaunch_chrome(self) -> None:
-        """Kill any (possibly wedged) Chrome + relaunch the logged-in one. Used when
-        the browser is alive but its CDP page ops hang (screenshots time out)."""
+        """Kill any (possibly wedged) Chrome + relaunch it. Used when the browser is
+        alive but its CDP page ops hang (screenshots time out)."""
         import os, subprocess
-        try:
-            subprocess.run(["powershell.exe", "-NoProfile", "-Command",
-                            "Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force"],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=10)
-        except Exception:  # noqa: BLE001
-            pass
+        self._kill_stray_chrome()
         time.sleep(2)
-        attach = os.path.expanduser("~/agents/browse/chrome-attach.sh")
+        attach = self._chrome_attach_script()
         if os.path.exists(attach):
             try:
                 subprocess.Popen(["bash", attach], stdin=subprocess.DEVNULL,
@@ -135,10 +177,13 @@ class _Streamer:
                 continue
 
     def _ensure_chrome_alive(self, relaunch: bool = False) -> None:
-        """If CDP is unreachable, OPTIONALLY relaunch the logged-in Chrome via
-        chrome-attach.sh. relaunch=False (the passive streamer path) only checks
-        liveness — it must NOT resurrect a Chrome the USER closed manually .
-        relaunch=True is the explicit-intent path (a task dispatch) that may spawn it.
+        """If CDP is unreachable, OPTIONALLY relaunch Chrome. relaunch=False (the
+        passive streamer path) only checks liveness on the MAIN/GUI Chrome — it must
+        NOT resurrect a Chrome the owner closed manually (2026-06-28: don't auto-restart
+        on a manual close, only on an explicit action). relaunch=True is the
+        explicit-intent path (a task dispatch) that may spawn it.
+        DEMO's headless Chrome is automated infra nobody closes by hand, so there —
+        and only there — the passive path also self-heals .
         Blocking + best-effort; runs in the streamer thread before an attach."""
         import os, subprocess, urllib.request, json as _json
         alive = False
@@ -153,25 +198,22 @@ class _Streamer:
         if alive:
             self._user_closed = False   # it's up → clear any manual-close latch
             return
-        if not relaunch:
-            # passive path: Chrome is down and nobody explicitly asked to (re)launch.
-            # Treat as a manual close — surface it, latch it, and DON'T resurrect it.
+        if not relaunch and not DEMO:
+            # passive path on the main GUI Chrome: Chrome is down and nobody
+            # explicitly asked to (re)launch. Treat as a manual close — surface it,
+            # latch it, and DON'T resurrect it.
             self._user_closed = True
             self.status, self.detail = "idle", "browser closed — start a task to relaunch"
             return
-        attach = os.path.expanduser("~/agents/browse/chrome-attach.sh")
+        attach = self._chrome_attach_script()
         if not os.path.exists(attach):
             return
         self._user_closed = False
-        # if a wedged Chrome process is lingering, kill it first so the relaunch takes.
-        try:
-            subprocess.run(["powershell.exe", "-NoProfile", "-Command",
-                            "Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force"],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=10)
-            time.sleep(1.5)
-        except Exception:  # noqa: BLE001
-            pass
+        # if a wedged/stale Chrome process is lingering, kill it first so the
+        # relaunch takes (DEMO's launcher only skips relaunch when CDP already
+        # answers — a wedged-but-alive process would otherwise squat the port).
+        self._kill_stray_chrome()
+        time.sleep(1.5)
         try:
             self.detail = "relaunching Chrome…"
             subprocess.Popen(["bash", attach], stdin=subprocess.DEVNULL,
@@ -547,15 +589,14 @@ class _Streamer:
                 # never close the LAST tab — that kills the browser / leaves the
                 # viewer with nothing + no way to reopen. Navigate it to Google.
                 if len(pages) <= 1:
-                    # last tab: don't close it (that kills the browser) — reset it to a
-                    # blank start page. chrome://newtab/ doesn't exist in bundled
-                    # chromium, so try a few and fall back to about:blank.
-                    for _u in ("chrome://new-tab-page/", "chrome://newtab/", "about:blank"):
-                        try:
-                            await closing.goto(_u, wait_until="domcontentloaded", timeout=8000)
-                            break
-                        except Exception:  # noqa: BLE001
-                            continue
+                    # last tab: don't close it (that kills the browser) — reset it to
+                    # our own New Tab page instead of chrome://new-tab-page (which
+                    # renders blank under headless+no-GPU — see _NEWTAB_HTML comment).
+                    self._cdp = None
+                    try:
+                        await self._cdp_navigate(closing, _NEWTAB_DATA_URL)
+                    except Exception:  # noqa: BLE001
+                        pass
                     self._page = closing; self._cdp = None; self._update_viewport()
                     return {"ok": True, "reset": True}
                 await closing.close()
@@ -565,7 +606,8 @@ class _Streamer:
                     # open a fresh one so the demo/cockpit always has a live page.
                     try:
                         newp = await ctx.new_page()
-                        await newp.goto("about:blank", wait_until="domcontentloaded", timeout=8000)
+                        self._cdp = None
+                        await self._cdp_navigate(newp, _NEWTAB_DATA_URL)
                         live = [newp]
                     except Exception:  # noqa: BLE001
                         live = []
@@ -587,7 +629,8 @@ class _Streamer:
         try:
             ctx = self._browser.contexts[0]
             pg = await ctx.new_page()
-            await pg.goto("chrome://newtab/", wait_until="domcontentloaded", timeout=15000)
+            self._cdp = None
+            await self._cdp_navigate(pg, _NEWTAB_DATA_URL)
             self._page = pg; self._cdp = None; self._update_viewport()
             return {"ok": True}
         except Exception as e:  # noqa: BLE001
@@ -648,6 +691,15 @@ class _Streamer:
                 self.last_click = (x / d["w"], y / d["h"], time.monotonic())
         except Exception:
             pass
+
+    async def _cdp_navigate(self, p, url: str, timeout: float = 4) -> None:
+        """Navigate via raw CDP Page.navigate, bypassing Playwright's
+        page.goto()/set_content() (which wait on lifecycle events that can hang
+        indefinitely on a desynced connect_over_cdp handle — same bug class as
+        page.mouse/page.evaluate, see _cdp_click). Caller must null self._cdp
+        first if p differs from the page the cached session is bound to."""
+        sess = await self._cdp_session(p)
+        await asyncio.wait_for(sess.send("Page.navigate", {"url": url}), timeout=timeout)
 
     async def _viewport_dims(self, p):
         """CSS-pixel viewport {w,h} for mapping normalized click coords. Uses CDP
@@ -805,7 +857,7 @@ class _Streamer:
                 await p.reload(timeout=20000)
                 await p.keyboard.press("Control+Shift+r")
             elif kind == "home":
-                await p.goto("chrome://newtab/", wait_until="domcontentloaded", timeout=20000)
+                await self._cdp_navigate(p, _NEWTAB_DATA_URL)
             elif kind == "tab_next":                    # cycle to the next tab
                 ctx = self._browser.contexts[0]
                 live = [pg for pg in ctx.pages if not pg.is_closed()]

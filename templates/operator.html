@@ -2233,11 +2233,13 @@
     } catch {}
   }
 
-  // effort tiers per model (authoritative, claude docs): Opus = all 5, Sonnet =
-  // no xhigh, Haiku = no effort support. Picker reacts to the chosen model.
+  // effort tiers per model (authoritative, claude docs): Opus and Sonnet 5 both
+  // get the full 5-tier scale (xhigh added 2026-06-30 — Sonnet 5 supports it,
+  // this list was stale from when it was written for Sonnet 4.6). Haiku = no
+  // effort support. Picker reacts to the chosen model.
   const EFFORT_BY_MODEL = {
     opus:   ["low", "medium", "high", "xhigh", "max"],
-    "claude-sonnet-5": ["low", "medium", "high", "max"],
+    "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
     haiku:  [],   // Haiku 4.5 has no effort support
     "gpt-5.5": ["low", "medium", "high", "xhigh"],
     "gpt-5.4": ["low", "medium", "high", "xhigh"],
@@ -2442,8 +2444,16 @@
           taskVerb(actCont(m.text) + '\u2026');
           _lastActionEmoji = actEmoji(m.text); _lastActionVerb = actCont(m.text);
         } else if (m.role === 'assistant') {
-          // reasoning step; remember it — the LAST one becomes the final reply bubble
+          // a genuine final-answer step; remember it — the LAST one becomes the reply bubble
           _lastAssistant = m.text;
+          taskStep(m.text);
+          taskVerb('Thinking\u2026');
+        } else if (m.role === 'thinking') {
+          // scratch reasoning (agy/gemma's per-step "thinking" field) -- show it live in
+          // the trace same as 'assistant', but NEVER let it become the reply bubble: a
+          // turn that ends (or is cut off mid-loop) without a real answer should fall
+          // through to the "no summary" card below, not leak a raw work-summary/checklist
+          // .
           taskStep(m.text);
           taskVerb('Thinking\u2026');
         } else if (m.role === 'error') {

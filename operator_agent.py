@@ -521,6 +521,10 @@ def _clean_gemma_text(text: str) -> str:
     t = _re.sub(r'!\[([^\]]*)\]\((file://[^)]*)\)', _shot_sub, t)
     # any other ![](non-http, non-route) image -> drop it (keep nothing; non-renderable)
     t = _re.sub(r'!\[[^\]]*\]\((?!https?://|/?operator/shot/)[^)]*\)', '', t)
+    # [label](file:///...) plain (non-image) link -> a browser can't load file:// either;
+    # keep just the label text so a self-narrated checklist ("see [trace.json](file:///...)")
+    # doesn't leave a dead link in the reply .
+    t = _re.sub(r'(?<!!)\[([^\]]*)\]\(file://[^)]*\)', lambda m: m.group(1) or '', t)
     # strip a trailing files=[...] literal (single or multi-line)
     t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)
     # wrap contiguous +---+ / | ascii-table blocks in a fenced code block so they align
@@ -762,6 +766,10 @@ class AgentRunner:
         self._tok_warned = False   # one-shot token-blowout warning per run
         self._agy_traj_before = {}
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
+        self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
+                                          # tool_calls, no content) — the "overthink loop"
+                                          # counter 
+        self._agy_loop_warned = False    # one-shot stuck-in-a-loop warning per run
         self._stopped = False    # set by stop(); gates agy interrupt-noise suppression
         # Continuity: inject the shared transcript whenever this turn has NO live
         # native session to resume — i.e. the user switched bots/drivers, OR we
@@ -1223,6 +1231,13 @@ class AgentRunner:
     # a threshold so a runaway is visible in the trace (and the user can stop it).
     _TOKEN_WARN_THRESHOLD = 1_500_000   # single-turn input tokens
 
+    # overthink-loop guard: a PLANNER_RESPONSE step with no tool_calls and no final
+    # `content` is pure scratch reasoning (agy "thinking out loud" without acting).
+    # A long unbroken run of these is the stuck-in-a-loop pattern (#40, e.g. Flash
+    # 3.5 re-describing a PDF instead of scrolling it). Warn once when the streak
+    # crosses this; never auto-kill the run .
+    _AGY_LOOP_WARN_STREAK = 6   # consecutive no-progress planner steps
+
     def _note_token_usage(self, in_tokens) -> None:
         try:
             it = int(in_tokens)
@@ -1402,8 +1417,18 @@ class AgentRunner:
                 if isinstance(think, str) and think.strip():
                     _ck = _clean_gemma_text(think.strip())
                     if _ck:
-                        self.messages.append({"ts": time.time(), "role": "assistant",
+                        # role="thinking", NOT "assistant": this is scratch reasoning, not
+                        # a final answer. snapshot()'s `final` picker and the client's
+                        # reply-bubble logic both key off role=="assistant", so tagging it
+                        # separately keeps it showing live in the trace (the client still
+                        # needs a branch for this role) while making it structurally
+                        # impossible for raw thinking/work-summary text — including any
+                        # checklist + file:// links — to become the user-visible reply if
+                        # the turn ends (or is cut off mid-loop) before a real `content`
+                        # answer ever arrives .
+                        self.messages.append({"ts": time.time(), "role": "thinking",
                                               "text": _ck})
+                _had_tool_calls = bool(o.get("tool_calls"))
                 # tool_calls: list of {name, args} — same shape _action_label wants.
                 for tc in (o.get("tool_calls") or []):
                     if not isinstance(tc, dict):
@@ -1484,6 +1509,7 @@ class AgentRunner:
                         self.messages.append({"ts": time.time(), "role": "action",
                                               "text": label, "detail": detail})
                 ans = o.get("content")
+                _had_answer = False
                 if isinstance(ans, str) and ans.strip():
                     txt, _reason = _extract_handoff(_clean_gemma_text(ans.strip()))
                     if _reason is not None and not self.handoff:
@@ -1491,6 +1517,19 @@ class AgentRunner:
                     if txt:
                         self.messages.append({"ts": time.time(), "role": "assistant", "text": txt})
                         got_answer = True
+                        _had_answer = True
+                if _had_tool_calls or _had_answer:
+                    self._agy_noprogress_streak = 0
+                else:
+                    self._agy_noprogress_streak += 1
+                    if (self._agy_noprogress_streak >= self._AGY_LOOP_WARN_STREAK
+                            and not self._agy_loop_warned):
+                        self._agy_loop_warned = True
+                        self.messages.append({"ts": time.time(), "role": "error",
+                            "text": ("⚠️ This looks stuck in a loop — %d steps of reasoning "
+                                      "in a row with no tool call or answer. Consider "
+                                      "stopping if it doesn't recover."
+                                      % self._agy_noprogress_streak)})
             elif not any_planner_tools:
                 # No planner tool_calls in this run → surface standalone MODEL non-planner
                 # steps (RUN_COMMAND, or a future browser/MCP step type) as actions. The
