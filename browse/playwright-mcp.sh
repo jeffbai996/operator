@@ -21,8 +21,20 @@ elif (command -v curl >/dev/null && curl -sf "http://127.0.0.1:${PORT}/json/vers
   EP="http://127.0.0.1:${PORT}"
 fi
 
+# ── image governor: downscale oversized screenshot blocks on the server→client
+# side of the pipe before the model ingests them — accumulated screenshots
+# re-sent every turn are the dominant vision-task token cost. Fail-open: the
+# script passes bytes through untouched when sharp isn't installed, and we fall
+# back to plain exec if it's absent. Knobs: OPERATOR_IMG_MAX_EDGE (0 disables),
+# OPERATOR_IMG_JPEG_Q.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GOV="$HERE/mcp_image_governor.js"
+_gov() {
+  if [ -f "$GOV" ] && command -v node >/dev/null 2>&1; then exec node "$GOV"; else exec cat; fi
+}
+
 if [ -n "$EP" ]; then
-  exec npx -y @playwright/mcp@latest --caps vision,pdf --output-dir "$OUT" --cdp-endpoint "$EP"
+  exec npx -y @playwright/mcp@latest --caps vision,pdf --output-dir "$OUT" --cdp-endpoint "$EP" | _gov
 fi
 # no logged-in Chrome up → let the MCP launch its own (fresh) browser
-exec npx -y @playwright/mcp@latest --caps vision,pdf --output-dir "$OUT" --viewport-size "$VIEWPORT" --headless
+exec npx -y @playwright/mcp@latest --caps vision,pdf --output-dir "$OUT" --viewport-size "$VIEWPORT" --headless | _gov

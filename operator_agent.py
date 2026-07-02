@@ -582,6 +582,19 @@ def _fmt_duration(secs: float) -> str:
     return parts
 
 
+def _tok_caps() -> tuple[int, int]:
+    """Governor hard caps (#34 phase A): (per-turn, per-run) input-token stops.
+    Read from env at call time so caps are live-tunable without a server
+    restart; garbage or unset falls back to defaults, 0 disables that cap."""
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return max(0, int(os.environ.get(name, "")))
+        except (TypeError, ValueError):
+            return default
+    return (_env_int("OPERATOR_TOKEN_TURN_STOP", 3_000_000),
+            _env_int("OPERATOR_TOKEN_RUN_STOP", 20_000_000))
+
+
 def _resolve_codex() -> str | None:
     from shutil import which
     c = which("codex")
@@ -662,6 +675,11 @@ class AgentRunner:
         self._session_ids: dict = {}      # bot -> last claude session id (resume)
         self._transcript: list = []
         self._last_bot: str | None = None
+        # governor token accounting — also reset per-run in _run()
+        self._peak_in_tokens: int = 0
+        self._tok_warned: bool = False
+        self._cum_in_tokens: int = 0
+        self._tok_stop_fired: bool = False
         self._load_state()
 
     def _load_state(self) -> None:
@@ -764,6 +782,8 @@ class AgentRunner:
         self._agy_live_traj = ""  # the run's locked trajectory (live-poll streaming)
         self._peak_in_tokens = 0   # highest single-turn input tokens (context size)
         self._tok_warned = False   # one-shot token-blowout warning per run
+        self._cum_in_tokens = 0    # sum of every reported turn-input this run (burn)
+        self._tok_stop_fired = False  # one-shot governor cap-stop per run (#34)
         self._agy_traj_before = {}
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
         self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
@@ -1231,6 +1251,10 @@ class AgentRunner:
     # a threshold so a runaway is visible in the trace (and the user can stop it).
     _TOKEN_WARN_THRESHOLD = 1_500_000   # single-turn input tokens
 
+    # governor hard caps (#34 phase A) live in module-level _tok_caps() —
+    # env-tunable per call (no server restart): OPERATOR_TOKEN_TURN_STOP /
+    # OPERATOR_TOKEN_RUN_STOP; 0 disables (back to warn-only).
+
     # overthink-loop guard: a PLANNER_RESPONSE step with no tool_calls and no final
     # `content` is pure scratch reasoning (agy "thinking out loud" without acting).
     # A long unbroken run of these is the stuck-in-a-loop pattern (#40, e.g. Flash
@@ -1247,6 +1271,7 @@ class AgentRunner:
             return
         if it > self._peak_in_tokens:
             self._peak_in_tokens = it
+        self._cum_in_tokens += it
         if it >= self._TOKEN_WARN_THRESHOLD and not self._tok_warned:
             self._tok_warned = True
             self.messages.append({"ts": time.time(), "role": "error",
@@ -1254,6 +1279,33 @@ class AgentRunner:
                          "(accumulated screenshots/context). Vision-heavy/long tasks burn "
                          "your subscription rate limit fast; consider stopping if it's "
                          "looping." % it)})
+        # governor hard cap (#34 phase A): the warn above fired during the 89M-token
+        # lichess run and protected nothing — nobody watches a headless trace. On a
+        # cap trip, stop the run exactly like a human Stop tap, reason in the trace.
+        if self._tok_stop_fired:
+            return
+        turn_cap, run_cap = _tok_caps()
+        reason = ""
+        if turn_cap and it >= turn_cap:
+            reason = ("this turn re-sent ~%s input tokens (per-turn cap %s)"
+                      % (f"{it:,}", f"{turn_cap:,}"))
+        elif run_cap and self._cum_in_tokens >= run_cap:
+            reason = ("this run has consumed ~%s cumulative input tokens (per-run cap %s)"
+                      % (f"{self._cum_in_tokens:,}", f"{run_cap:,}"))
+        if not reason:
+            return
+        self._tok_stop_fired = True
+        self.messages.append({"ts": time.time(), "role": "error",
+            "text": ("⛔ Token cap hit — auto-stopping the run: " + reason +
+                     ". Tune with OPERATOR_TOKEN_TURN_STOP / OPERATOR_TOKEN_RUN_STOP "
+                     "(0 disables).")})
+        try:
+            self.stop()
+        except Exception:  # noqa: BLE001 — a failed stop must not kill the reader thread
+            pass
+        # AFTER stop() — it clears handoff; the banner must survive the stop.
+        self.handoff = {"reason": "Token cap auto-stop: " + reason,
+                        "ts": time.time()}
 
     def _consume_codex(self, evt: dict) -> None:
         """Parse one codex `exec --json` JSONL event into messages."""
