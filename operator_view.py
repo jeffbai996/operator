@@ -23,6 +23,7 @@ from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, render_template, request
 import operator_agent  # the headless-claude agent runner (option 1)
+import operator_tasks as operator_tasks_store  # saved-task store (#30)
 
 import os as _os_cfg
 # DEMO isolation the demo: a second instance runs with OPERATOR_DEMO=1 and
@@ -1029,6 +1030,13 @@ def operator_shot(name):
 @bp.route("/operator/status")
 def operator_status():
     _streamer.last_view = time.monotonic()
+    # cockpit is open and polling → any finished-run badge is "seen"
+    if not DEMO:
+        try:
+            import operator_schedule as _os_mod
+            _os_mod.clear_unseen()
+        except Exception:
+            pass
     fresh = (_streamer.frame is not None
              and (time.monotonic() - _streamer.frame_ts) < 6.5)
     cur_url = _streamer.cur_url
@@ -1039,6 +1047,19 @@ def operator_status():
     return jsonify(status=_streamer.status, detail=_streamer.detail,
                    has_frame=fresh, vw=_streamer.vw, vh=_streamer.vh, url=cur_url,
                    click=click)
+
+
+@bp.route("/operator/unseen")
+def operator_unseen():
+    """Finished-runs-you-haven't-looked-at count — feeds a red nav badge.
+    Always 0 in the demo (no scheduler there)."""
+    if DEMO:
+        return jsonify(count=0)
+    try:
+        import operator_schedule as _os_mod
+        return jsonify(count=_os_mod.unseen_count())
+    except Exception:
+        return jsonify(count=0)
 
 
 @bp.route("/operator/steer", methods=["POST"])
@@ -1154,6 +1175,125 @@ def operator_dispatch():
     else:
         r = operator_agent.runner.start(bot, task, model=model, effort=effort)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
+
+
+# ── Saved tasks (#30) ──────────────────────────────────────────────────────
+# A saved task = a named, re-runnable dispatch bundle (prompt + preferred sites
+# + default bot/model/effort + optional start_url). v1: no scheduling, and
+# preferred-sites is a prompt HINT not a hard sandbox (both deferred — see the
+# handoff spec). Persistence + slug logic live in operator_tasks.py; these routes
+# are thin wrappers that, on /run, do exactly what /operator/dispatch does.
+# LIVE COCKPIT ONLY — never exposed in the public demo (would leak/enumerate the
+# owner's saved tasks + let a visitor run arbitrary stored prompts).
+
+
+def _task_public(slug: str, t: dict) -> dict:
+    """The safe outward shape of a saved task for the UI (slug + the fields the
+    dispatch box needs to populate, plus stamps)."""
+    return {
+        "slug": slug,
+        "name": t.get("name", ""),
+        "prompt": t.get("prompt", ""),
+        "sites": t.get("sites", []),
+        "bot": t.get("bot", ""),
+        "model": t.get("model", ""),
+        "effort": t.get("effort", ""),
+        "start_url": t.get("start_url", ""),
+        "schedule": t.get("schedule", ""),
+        "created": t.get("created"),
+        "last_run": t.get("last_run"),
+    }
+
+
+@bp.route("/operator/tasks", methods=["GET", "POST"])
+def operator_tasks():
+    """GET → list saved tasks. POST → create/update (body = data-model fields);
+    validates non-empty name+prompt; returns the slug."""
+    if DEMO:
+        return jsonify(ok=False, error="not available"), 404
+    if request.method == "GET":
+        tasks = operator_tasks_store.load_tasks()
+        items = [_task_public(s, t) for s, t in sorted(tasks.items())]
+        return jsonify(ok=True, tasks=items)
+    # POST create/update
+    data = request.get_json(silent=True) or request.form
+    slug, err = operator_tasks_store.save_task({
+        "slug": (data.get("slug") or "").strip(),
+        "name": data.get("name"),
+        "prompt": data.get("task") or data.get("prompt"),
+        "sites": data.get("sites"),
+        "bot": data.get("bot"),
+        "model": data.get("model"),
+        "effort": data.get("effort"),
+        "start_url": data.get("start_url"),
+        "schedule": data.get("schedule"),
+    })
+    if err:
+        return jsonify(ok=False, error=err), 400
+    return jsonify(ok=True, slug=slug)
+
+
+@bp.route("/operator/tasks/<slug>/run", methods=["POST"])
+def operator_task_run(slug):
+    """Load a saved task and dispatch it — mirrors /operator/dispatch exactly,
+    plus: optional nav to start_url first, and a preferred-sites prompt preamble.
+    Stamps last_run. Body may override bot/model/effort (the UI's editable path);
+    absent overrides fall back to the task's stored defaults."""
+    if DEMO:
+        return jsonify(ok=False, error="not available"), 404
+    data = request.get_json(silent=True) or request.form or {}
+    r, status = _dispatch_saved_task(slug, data)
+    return jsonify(r), status
+
+
+def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict, int]:
+    """The shared saved-task dispatch path — the ▶ run route and the scheduler
+    (operator_schedule) both come through here."""
+    overrides = overrides or {}
+    t = operator_tasks_store.get_task(slug)
+    if not t:
+        return {"ok": False, "error": "no such task"}, 404
+    bot = (overrides.get("bot") or t.get("bot") or "").strip()
+    model = (overrides.get("model") or t.get("model") or "").strip()
+    effort = (overrides.get("effort") or t.get("effort") or "").strip()
+    prompt = (t.get("prompt") or "").strip()
+    if not prompt:
+        return {"ok": False, "error": "task has empty prompt"}, 400
+
+    # Same Chrome-ensure as /dispatch: intent to run → bring the browser back.
+    try:
+        _streamer._user_closed = False
+        _streamer._ensure_chrome_alive(relaunch=True)
+        _streamer.ensure_running()
+    except Exception:
+        pass
+
+    # Optional: navigate to the task's start_url before handing off to the agent.
+    start_url = (t.get("start_url") or "").strip()
+    if start_url:
+        try:
+            _streamer.run_action({"kind": "goto", "value": start_url})
+        except Exception:
+            pass
+
+    # v1 preferred-sites = prompt hint (not a hard sandbox).
+    preamble = operator_tasks_store.sites_preamble(t.get("sites", []))
+    task_prompt = f"{preamble}{prompt}" if preamble else prompt
+
+    r = operator_agent.runner.start(bot, task_prompt, model=model, effort=effort)
+    if r.get("ok"):
+        operator_tasks_store.mark_run(slug)
+        return r, 200
+    return r, 409
+
+
+@bp.route("/operator/tasks/<slug>", methods=["DELETE"])
+def operator_task_delete(slug):
+    """Remove a saved task."""
+    if DEMO:
+        return jsonify(ok=False, error="not available"), 404
+    return jsonify(ok=operator_tasks_store.delete_task(slug))
+
 
 
 @bp.route("/operator/agent")
@@ -1378,3 +1518,16 @@ def operator_models():
     if driver == "gemma":
         return jsonify(models=OPERATOR_MODELS_GEMMA)
     return jsonify(models=OPERATOR_MODELS)
+
+
+# ── background housekeeping (#2 scheduled tasks + #3 completion pings) ────────
+# Started at import (the server imports this module once); the thread is a
+# daemon and a no-op when OPERATOR_SCHEDULER=0. Never in the demo — a public
+# instance must not fire stored prompts on a clock.
+if not DEMO:
+    try:
+        import operator_schedule as _op_sched
+        _op_sched.start(run_fn=lambda slug: _dispatch_saved_task(slug)[0],
+                        runner=operator_agent.runner)
+    except Exception:  # noqa: BLE001 — housekeeping must never block the app
+        pass

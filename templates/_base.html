@@ -46,3 +46,21 @@
   </script>
 </body>
 </html>
+// Same treatment for finished operator runs: red badge on the operator nav
+// tab, cleared server-side the moment the cockpit is viewed/polling.
+(function () {
+  const badge = document.getElementById("operator-badge");
+  if (!badge) return;
+  const base = "{{ url_for('operator.operator_unseen') }}";
+  async function refresh() {
+    try {
+      const r = await fetch(base, { cache: "no-store" });
+      const d = await r.json();
+      const n = d.count || 0;
+      if (n > 0) { badge.textContent = n > 99 ? "99+" : n; badge.hidden = false; }
+      else { badge.hidden = true; }
+    } catch (e) { /* leave as-is on a blip */ }
+  }
+  refresh();
+  setInterval(refresh, 12000);
+})();

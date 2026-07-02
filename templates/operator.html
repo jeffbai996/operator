@@ -54,6 +54,11 @@
     --bg: #eef1f5; --bg-2: #e4e8ee; --bg-3: #dde2e9; --bg-4: #d3d9e2;
     --border: rgba(0,0,0,.14); --border-2: rgba(0,0,0,.20); }
   [data-theme="light"] .op.op-flat .op-rail, [data-theme="light"] .op.op-flat .op-browser, [data-theme="light"] .op.op-flat .op-tabs { background: #eef1f5 !important; backdrop-filter: none !important; }
+  /* default (non-flat) dark: the site-wide surfaces read a touch light for an
+     app chrome — pull each operator surface one notch darker.
+     Same specificity as the [data-theme=light] .op override further down, which
+     comes LATER in the file, so light mode still wins there. */
+  .op:not(.op-flat) { --bg: #050609; --bg-2: #0b0d11; --bg-3: #12141a; --bg-4: #1a1d24; }
 
   /* operator is a computer UI — lock the PAGE from scrolling (no rubber-band,
      no scroll-past-bottom). Only inner regions (.op-log, .op-stage) scroll. */
@@ -141,7 +146,8 @@
   .op-titlewrap { display: inline-flex; flex-direction: column; justify-content: center;
     line-height: 1.1; margin-left: 2px; margin-right: 0.15rem; margin-top: -2px; position: relative; z-index: 0;
     transform-origin: left center;
-    transition: max-width .3s cubic-bezier(.2,1,.3,1), transform .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .24s ease; max-width: 240px; }
+    transition: max-width .3s cubic-bezier(.2,1,.3,1), transform .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .24s ease; max-width: 240px;
+    min-width: 0; overflow: hidden; }   /* tight header (low zoom): clip the wordmark instead of letting the MAN/AUTO pill paint over the version */
   .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
   .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans',sans-serif; color: var(--fg);
@@ -372,9 +378,11 @@
   .op[data-mode="man"] .op-log { opacity: 0.5; filter: grayscale(0.35);
     transition: opacity .3s ease, filter .3s ease; pointer-events: none; }
   .op-log { transition: opacity .3s ease, filter .3s ease; }
-  .op-log:empty::after { content: "Type a message, or use the browser to steer Operator.";
+  .op-log:empty::after { content: "Type a message, or use the browser to steer Operator. Tip: type / for saved tasks.";
     color: var(--muted); font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif;
     padding: 0; margin: 0; letter-spacing: -.003em; }
+  /* demo has no saved tasks (routes 404, palette hidden) — keep its copy tip-free */
+  .op-demo .op-log:empty::after { content: "Type a message, or use the browser to steer Operator."; }
 
   .op-msg { animation: op-msg-in .42s cubic-bezier(.16,1,.3,1); }
   @keyframes op-msg-in{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:none}}
@@ -598,6 +606,25 @@
   .op-lock.secure { color: var(--live); }
   .op-lock.insecure { color: var(--muted); }
   .op-url-wrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+  /* nav status dot (#5): green = loaded, amber pulse = loading, red = nav failed /
+     browser disconnected. Fed by act()'s nav path. */
+  .op-dotstat { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--live); box-shadow: 0 0 5px rgba(63,185,80,.5);
+    transition: background .2s, box-shadow .2s; }
+  .op-dotstat.loading { background: #f5c542; box-shadow: 0 0 5px rgba(245,197,66,.55);
+    animation: op-dot-pulse 1s ease-in-out infinite; }
+  .op-dotstat.err { background: #e5534b; box-shadow: 0 0 5px rgba(229,83,75,.55); }
+  @keyframes op-dot-pulse { 50% { opacity: .45; } }
+  /* loading hairline (#5): indeterminate sweep pinned under the url pill */
+  .op-nav-hairline { position: absolute; left: 12px; right: 12px; bottom: -2px; height: 2px;
+    border-radius: 2px; overflow: hidden; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .op-nav-hairline.on { opacity: 1; }
+  .op-nav-hairline::after { content: ""; display: block; height: 100%; width: 34%;
+    border-radius: 2px; background: var(--accent);
+    animation: op-hairline-sweep 1.1s cubic-bezier(.4,.2,.6,.8) infinite; }
+  @keyframes op-hairline-sweep { from { transform: translateX(-120%); } to { transform: translateX(400%); } }
+  /* tab favicons (#5) */
+  .op-tab-fav { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 3px; display: block; }
   .op-url { font: 500 0.7rem/1.3 'JetBrains Mono', monospace; color: var(--fg-2);
     white-space: nowrap; flex: 1 1 auto; min-width: 0; outline: none;
     background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
@@ -809,19 +836,30 @@
   .op-ubtn:hover { background: var(--bg-3); color: var(--fg); }
   .op-ubtn svg { display: block; flex: 0 0 auto; width: auto; height: auto; }   /* don't let flex crush the icon horizontally (was rendering ~4px wide) */
   .op-ham { position: relative; flex: 0 0 auto; }
+  /* hamburger menu — quieter, palette-matched (the old full
+     accent-fill hover read harsh; take the slash-palette's language instead:
+     bg-2 sheet, soft bg-4 hover, chip-styled shortcut keys). */
   .op-ham-menu { position: fixed; z-index: 200;
-    background: var(--bg-4); border: 1px solid var(--border-2); border-radius: 10px;
-    box-shadow: 0 12px 30px -10px rgba(0,0,0,.8); padding: 4px; min-width: 140px;
-    display: flex; flex-direction: column; gap: 1px; }
+    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 11px;
+    box-shadow: 0 12px 34px -8px rgba(0,0,0,.7), 0 2px 8px rgba(0,0,0,.35);
+    padding: 5px; min-width: 168px;
+    display: flex; flex-direction: column; gap: 1px;
+    transform-origin: top right;
+    animation: op-ham-in .16s cubic-bezier(.2,1,.3,1); }
+  @keyframes op-ham-in { from{opacity:0;transform:scale(.96) translateY(-4px)} to{opacity:1;transform:none} }
   .op-ham-menu[hidden] { display: none; }
-  .op-ham-item { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem;
+  .op-ham-item { display: flex; align-items: center; justify-content: space-between; gap: 1.4rem;
     background: transparent; border: none; color: var(--fg-2); cursor: pointer;
-    text-align: left; border-radius: 6px; padding: 0.42rem 0.65rem;
-    font: 500 0.76rem/1 'Plus Jakarta Sans', sans-serif; }
-  .op-ham-item:hover { background: var(--accent); color: #0b0e18; }
-  .op-ham-item .k { color: var(--muted); font: 500 0.72rem/1 'JetBrains Mono', monospace; flex: 0 0 auto; }
-  .op-ham-item:hover .k { color: #0b0e18; }
-  .op-ham-sep { height: 1px; background: var(--border); margin: 3px 6px; }
+    text-align: left; border-radius: 8px; padding: 0.44rem 0.6rem;
+    font: 500 0.74rem/1 'Plus Jakarta Sans', sans-serif;
+    transition: background .12s ease, color .12s ease; }
+  .op-ham-item:hover { background: var(--bg-4); color: var(--fg); }
+  .op-ham-item .k { flex: 0 0 auto; background: var(--bg-4); border: 1px solid var(--border-2);
+    border-radius: 4px; padding: 0.1rem 0.3rem; color: var(--muted);
+    font: 500 0.6rem/1.2 'JetBrains Mono', monospace;
+    transition: color .12s ease, background .12s ease; }
+  .op-ham-item:hover .k { color: var(--fg-2); background: var(--bg-3); }
+  .op-ham-sep { height: 1px; background: var(--border); margin: 4px 8px; }
 
   /* tabs — modern, compact, hidden until toggled */
   .op-tabs[hidden] { display: none; }
@@ -835,8 +873,9 @@
     white-space: nowrap; box-shadow: none; }
   .op-tab:hover { background: var(--bg-4); color: var(--fg-2); }
   .op-tab.active { background: var(--bg); color: var(--fg); border-color: #ededea; }
-  .op-tab { cursor: grab; }
-  .op-tab.dragging { opacity: 0.5; cursor: grabbing; }
+  .op-tab { cursor: grab; touch-action: none; }   /* none: pointer-drag must own touch gestures (strip still wheel/trackpad-scrolls) */
+  .op-tab.dragging { opacity: 0.55; cursor: grabbing; transform: scale(1.04);
+    box-shadow: 0 4px 14px rgba(0,0,0,.5); z-index: 2; }
   .op-tab .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .op-tab-x { flex: 0 0 auto; width: 15px; height: 15px; display: inline-flex; align-items: center;
     justify-content: center; color: var(--muted); border-radius: 4px;
@@ -911,6 +950,176 @@
     visibility: hidden; }   /* revealed once loadModels sets the saved model — avoids default-flash on refresh */
   .op-modelrow.op-ready { visibility: visible; }
   .op-mini:disabled { opacity: 0.45; cursor: default; }
+  /* ── Slash palette (#30 v2): saved tasks summoned by typing "/" in the composer.
+     Zero standing chrome — the palette floats above the inputbox only while the
+     draft starts with "/". Same tokens as everything else; never in the demo. ── */
+  .op-inputbox { position: relative; }
+  .op-pal { position: absolute; left: -1px; right: -1px; bottom: calc(100% + 8px);
+    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 11px;
+    box-shadow: 0 -8px 30px rgba(0,0,0,.55); overflow: hidden; z-index: 30;
+    animation: op-pal-in .18s cubic-bezier(.2,1,.3,1); }
+  @keyframes op-pal-in { from{opacity:0;transform:translateY(6px) scale(.99)} to{opacity:1;transform:none} }
+  .op-pal[hidden] { display: none; }
+  .op-pal-head { display: flex; justify-content: space-between; padding: 0.45rem 0.65rem;
+    font: 700 calc(0.54rem * var(--chat-scale))/1 var(--chat-font); color: var(--muted);
+    letter-spacing: .08em; border-bottom: 1px solid var(--border); }
+  .op-pal-list { max-height: 205px; overflow-y: auto; }
+  .op-pal-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem;
+    cursor: pointer; }
+  .op-pal-item.sel { background: var(--bg-4); }
+  .op-pal-name { font: 700 calc(0.66rem * var(--chat-scale))/1.2 var(--chat-font);
+    color: var(--fg); white-space: nowrap; }
+  .op-pal-prompt { font: 500 calc(0.58rem * var(--chat-scale))/1.2 var(--chat-font);
+    color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .op-pal-empty { padding: 0.55rem 0.65rem; font: 500 calc(0.6rem * var(--chat-scale))/1.4 var(--chat-font);
+    color: var(--muted); }
+  .op-pal-key { flex: 0 0 auto; background: var(--bg-4); border: 1px solid var(--border-2);
+    border-radius: 4px; padding: 0.06rem 0.3rem; color: var(--fg-2);
+    font: 600 calc(0.54rem * var(--chat-scale))/1.3 var(--chat-font); }
+  .op-pal-del { flex: 0 0 auto; background: transparent; border: none; cursor: pointer;
+    color: var(--muted); font-size: 0.7rem; padding: 0.05rem 0.2rem; visibility: hidden; }
+  .op-pal-item.sel .op-pal-del, .op-pal-item:hover .op-pal-del { visibility: visible; }
+  .op-pal-del:hover { color: var(--fg); }
+  .op-pal-del.arm { color: #e5534b; visibility: visible; }
+  .op-pal-foot { display: flex; gap: 0.8rem; padding: 0.4rem 0.65rem; border-top: 1px solid var(--border);
+    font: 600 calc(0.54rem * var(--chat-scale))/1.6 var(--chat-font); color: var(--muted); flex-wrap: wrap; }
+  .op-pal-foot[hidden] { display: none; }   /* same [hidden]-vs-flex trap as the save row */
+  .op-pal-save { display: flex; gap: 0.4rem; padding: 0.5rem 0.65rem; align-items: center; }
+  .op-pal-save[hidden] { display: none; }   /* the class's display:flex would beat the hidden attr */
+  .op-pal-save input { flex: 1 1 auto; min-width: 0; background: var(--bg-3);
+    border: 1px solid var(--border-2); border-radius: 6px; color: var(--fg);
+    font: 500 calc(0.62rem * var(--chat-scale))/1.4 var(--chat-font); padding: 0.28rem 0.45rem; }
+  .op-pal-save input::placeholder { color: var(--muted); }
+  .op-pal-save input:focus { outline: none; border-color: var(--accent); }
+  .op-pal-save .op-pal-sites { flex: 0 1 38%; }
+  .op-demo .op-pal { display: none !important; }   /* never in the public demo */
+  /* ── New-task modal (#30 v2b): OpenAI-Operator-style save dialog — name,
+     "What would you like Operator to do?", websites/apps/MCPs. Opened from the
+     💾 urlbar button (and prefilled from the draft or last dispatch). ── */
+  .op-veil { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.55);
+    backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center;
+    animation: op-veil-in .18s ease; }
+  @keyframes op-veil-in { from{opacity:0} to{opacity:1} }
+  .op-veil[hidden] { display: none; }
+  .op-nt { width: 400px; max-width: 92vw; background: var(--bg-2);
+    border: 1px solid var(--border-2); border-radius: 14px; padding: 1rem 1.05rem;
+    box-shadow: 0 24px 70px -18px rgba(0,0,0,.85), 0 4px 16px rgba(0,0,0,.4);
+    display: flex; flex-direction: column; gap: 0.45rem;
+    animation: op-nt-in .22s cubic-bezier(.2,1,.3,1); }
+  @keyframes op-nt-in { from{opacity:0;transform:translateY(8px) scale(.97)} to{opacity:1;transform:none} }
+  .op-nt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem; }
+  .op-nt-title { font: 700 calc(0.85rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); }
+  .op-nt-x { background: transparent; border: none; color: var(--muted); cursor: pointer;
+    width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; }
+  .op-nt-x:hover { background: var(--bg-4); color: var(--fg); }
+  .op-nt-lbl { font: 600 calc(0.6rem * var(--chat-scale))/1.3 var(--chat-font);
+    color: var(--fg-2); margin-top: 0.35rem; }
+  .op-nt-input { width: 100%; box-sizing: border-box; background: var(--bg-3);
+    border: 1px solid var(--border-2); border-radius: 8px; color: var(--fg);
+    font: 500 calc(0.68rem * var(--chat-scale))/1.45 var(--chat-font);
+    padding: 0.42rem 0.55rem; }
+  .op-nt-input::placeholder { color: var(--muted); }
+  .op-nt-input:focus { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(184,192,204,.14); }
+  textarea.op-nt-input { resize: vertical; min-height: 4.4em; }
+  .op-nt-hint { font: 500 calc(0.54rem * var(--chat-scale))/1.4 var(--chat-font); color: var(--muted); }
+  /* pill input (#6): sites/tools as removable chips + icon autocomplete */
+  .op-nt-pillwrap { position: relative; }
+  .op-nt-pills { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+    background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px;
+    padding: 0.32rem 0.45rem; cursor: text; }
+  .op-nt-pills:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.14); }
+  .op-nt-pill { display: inline-flex; align-items: center; gap: 0.3rem;
+    background: var(--bg-4); border: 1px solid var(--border-2); border-radius: 999px;
+    padding: 0.18rem 0.28rem 0.18rem 0.45rem; color: var(--fg);
+    font: 600 calc(0.6rem * var(--chat-scale))/1.2 var(--chat-font); white-space: nowrap;
+    animation: op-pill-in .16s cubic-bezier(.2,1.3,.4,1); }
+  @keyframes op-pill-in { from{opacity:0;transform:scale(.85)} to{opacity:1;transform:none} }
+  .op-nt-pill img { width: 13px; height: 13px; border-radius: 3px; display: block; }
+  .op-nt-pill svg { display: block; color: var(--fg-2); }
+  .op-nt-pill-x { display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; border-radius: 50%; color: var(--muted); cursor: pointer;
+    transition: background .12s, color .12s; }
+  .op-nt-pill-x:hover { background: var(--bad, #e5534b); color: #fff; }
+  .op-nt-pill-in { flex: 1 1 90px; min-width: 90px; background: transparent; border: none;
+    outline: none; color: var(--fg); font: 500 calc(0.66rem * var(--chat-scale))/1.4 var(--chat-font);
+    padding: 0.12rem 0.1rem; }
+  .op-nt-pill-in::placeholder { color: var(--muted); }
+  .op-nt-sug { position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 5;
+    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 9px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.55); max-height: 158px; overflow-y: auto; padding: 3px;
+    animation: op-pal-in .15s cubic-bezier(.2,1,.3,1); }
+  .op-nt-sug[hidden] { display: none; }
+  .op-nt-sug-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.34rem 0.5rem;
+    border-radius: 7px; cursor: pointer; color: var(--fg-2);
+    font: 500 calc(0.64rem * var(--chat-scale))/1.3 var(--chat-font); }
+  .op-nt-sug-row:hover { background: var(--bg-4); color: var(--fg); }
+  .op-nt-sug-row img { width: 14px; height: 14px; border-radius: 3px; display: block; }
+  .op-nt-sug-row svg { display: block; color: var(--fg-2); flex: 0 0 auto; }
+  .op-nt-sug-add { margin-left: auto; color: var(--muted); font-weight: 700; padding: 0 0.2rem;
+    border-radius: 5px; }
+  .op-nt-sug-row:hover .op-nt-sug-add { color: var(--fg); }
+  .op-nt-sug-kind { margin-left: 0.15rem; font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font);
+    color: var(--muted); background: var(--bg-4); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.06rem 0.26rem; }
+  .op-nt-foot { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.7rem; }
+  .op-nt-btn { border-radius: 8px; cursor: pointer; padding: 0.42rem 0.85rem;
+    font: 600 calc(0.66rem * var(--chat-scale))/1.2 var(--chat-font);
+    background: var(--bg-3); border: 1px solid var(--border-2); color: var(--fg-2);
+    transition: background .14s, color .14s, filter .14s; }
+  .op-nt-btn:hover { background: var(--bg-4); color: var(--fg); }
+  .op-nt-btn.primary { background: #ededea; border-color: transparent; color: #0b0e18; }
+  .op-nt-btn.primary:hover { background: #dedcd6; filter: none; }
+  .op-demo #op-save-task, .op-demo .op-veil { display: none !important; }
+  /* ── Launchpad (#1): saved tasks as cards on the idle stage — the OpenAI-
+     Operator homepage pattern. Shown only on a fresh session (empty log, no
+     run); disappears for good the moment the conversation starts. ── */
+  .op-lp { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1rem; padding: 1.5rem;
+    background:
+      radial-gradient(120% 95% at 50% 42%, transparent 42%, rgba(0,0,0,.42) 100%),
+      color-mix(in srgb, var(--bg-2) 82%, transparent);
+    backdrop-filter: blur(3px); }
+  /* a whisper of grain so the launchpad floats on texture, not flat black */
+  .op-lp::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .045;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"); }
+  .op-lp > * { position: relative; z-index: 1; }
+  .op-lp[hidden] { display: none; }
+  .op[data-mode="man"] .op-lp, .op-demo .op-lp { display: none !important; }
+  .op-lp-title { font: 700 calc(0.62rem * var(--chat-scale))/1 var(--chat-font);
+    color: var(--muted); letter-spacing: .14em; }
+  .op-lp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 218px));
+    gap: 0.75rem; justify-content: center; max-width: 760px; width: 100%; }
+  .op-lp-card { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 12px;
+    padding: 0.75rem 0.8rem; display: flex; flex-direction: column; gap: 0.4rem;
+    position: relative; cursor: pointer; text-align: left;
+    transition: border-color .15s, transform .15s, box-shadow .15s;
+    animation: op-lp-pop .3s cubic-bezier(.2,1.1,.35,1) backwards; }
+  .op-lp-card:nth-child(2) { animation-delay: .04s; } .op-lp-card:nth-child(3) { animation-delay: .08s; }
+  .op-lp-card:nth-child(4) { animation-delay: .12s; } .op-lp-card:nth-child(5) { animation-delay: .16s; }
+  @keyframes op-lp-pop { from{opacity:0;transform:translateY(6px) scale(.96)} to{opacity:1;transform:none} }
+  .op-lp-card:hover { border-color: var(--accent); transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(0,0,0,.4); }
+  .op-lp-name { font: 700 calc(0.7rem * var(--chat-scale))/1.25 var(--chat-font); color: var(--fg); }
+  .op-lp-prompt { font: 500 calc(0.58rem * var(--chat-scale))/1.45 var(--chat-font); color: var(--muted);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .op-lp-meta { display: flex; align-items: center; gap: 0.3rem; margin-top: 0.1rem; min-height: 17px; }
+  .op-lp-site { background: var(--bg-4); border: 1px solid var(--border); border-radius: 5px;
+    font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg-2);
+    padding: 0.12rem 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+    display: inline-flex; align-items: center; gap: 0.24rem; }
+  .op-lp-site img { width: 11px; height: 11px; border-radius: 2.5px; display: block; }
+  .op-lp-bot { margin-left: auto; font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font);
+    color: var(--muted); white-space: nowrap; }
+  .op-lp-run { position: absolute; top: 0.55rem; right: 0.55rem; background: var(--bg-4);
+    border: 1px solid var(--border-2); color: var(--fg); border-radius: 7px;
+    font: 700 calc(0.56rem * var(--chat-scale))/1.2 var(--chat-font); padding: 0.22rem 0.45rem;
+    opacity: 0; transition: opacity .15s; pointer-events: none; }
+  .op-lp-card:hover .op-lp-run { opacity: 1; }
+  .op-lp-new { border-style: dashed; align-items: center; justify-content: center;
+    color: var(--muted); font: 600 calc(0.62rem * var(--chat-scale))/1.5 var(--chat-font);
+    text-align: center; display: flex; min-height: 92px; }
+  .op-lp-new:hover { color: var(--fg-2); }
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
   .op-anim-ready .op-mini { transition: opacity .2s ease; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
@@ -1062,7 +1271,7 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.6.8</span></span>
+      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.7.0</span></span>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -1116,6 +1325,16 @@
 
 
     <div class="op-inputbox">
+      <div class="op-pal" id="op-pal" hidden>
+        <div class="op-pal-head"><span id="op-pal-title">SAVED TASKS</span><span>type to filter</span></div>
+        <div class="op-pal-list" id="op-pal-list"></div>
+        <div class="op-pal-save" id="op-pal-save" hidden>
+          <input type="text" id="op-pal-save-name" placeholder="task name" autocomplete="off" spellcheck="false">
+          <input type="text" class="op-pal-sites" id="op-pal-save-sites" placeholder="preferred sites (optional)" autocomplete="off" spellcheck="false">
+          <span class="op-pal-key">↵ save</span>
+        </div>
+        <div class="op-pal-foot" id="op-pal-foot"><span><span class="op-pal-key">↑↓</span> pick</span><span><span class="op-pal-key">↵</span> run as stored</span><span><span class="op-pal-key">Tab</span> load &amp; edit</span><span><span class="op-pal-key">/save</span> save last task</span><span><span class="op-pal-key">Esc</span> close</span></div>
+      </div>
       <div class="op-steer">
         <textarea class="op-input" id="op-input" rows="1" autocomplete="off" spellcheck="false" placeholder="Message Operator"></textarea>
         <button class="op-send" id="op-send" title="send (Enter)" aria-label="send"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v5a3 3 0 0 1-3 3H5"></path><path d="M8 9l-3 3 3 3"></path></svg></button>
@@ -1134,16 +1353,19 @@
   <section class="op-browser">
     <div class="op-tabs" id="op-tabs" hidden></div>
     <div class="op-urlbar">
-      <button class="op-ubtn" id="op-tabs-toggle" title="show tabs" aria-label="show tabs"><svg viewBox="0 0 20 20" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="2.2"></rect><path d="M10 3v14M3 10h14"></path></svg></button>
-      <button class="op-ubtn" data-kind="back" title="back" aria-label="back"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"></path></svg></button>
-      <button class="op-ubtn" data-kind="forward" title="forward" aria-label="forward"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"></path></svg></button>
+      <button class="op-ubtn" id="op-tabs-toggle" title="show tabs" aria-label="show tabs"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="2.2"></rect><path d="M10 3v14M3 10h14"></path></svg></button>
+      <button class="op-ubtn" id="op-save-task" title="save a task" aria-label="save a task"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h9.6L17 6.4V16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M6.8 3v3.6h6V3"></path><path d="M6.2 17v-5.4h7.6V17"></path></svg></button>
+      <button class="op-ubtn" data-kind="back" title="back" aria-label="back"><svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l-5 5 5 5"></path></svg></button>
+      <button class="op-ubtn" data-kind="forward" title="forward" aria-label="forward"><svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"></path></svg></button>
+      <span class="op-dotstat" id="op-dotstat" title="page status"></span>
       <div class="op-url-wrap">
         <span class="op-lock" id="op-lock" aria-hidden="true" title=""></span>
         <input class="op-url" id="op-url" autocomplete="off" spellcheck="false" placeholder="enter a URL and press Enter" value="">
         <button class="op-ubtn op-url-reload" id="op-reload" data-kind="reload" title="reload" aria-label="reload"><svg class="ic-reload" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 6a7 7 0 1 0 1.5 5"></path><path d="M16.5 3v3.2H13.3"></path></svg><svg class="ic-stop" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l8 8M14 6l-8 8"></path></svg></button>
+        <div class="op-nav-hairline" id="op-nav-hairline" aria-hidden="true"></div>
       </div>
       <div class="op-ham" id="op-ham">
-        <button class="op-ubtn" id="op-ham-btn" title="more" aria-label="more"><svg viewBox="0 0 20 20" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6h14M3 10h14M3 14h14"></path></svg></button>
+        <button class="op-ubtn" id="op-ham-btn" title="more" aria-label="more"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6h14M3 10h14M3 14h14"></path></svg></button>
         <div class="op-ham-menu" id="op-ham-menu" hidden>
           <button class="op-ham-item" data-kind="back"><span>Back</span><span class="k">←</span></button>
           <button class="op-ham-item" data-kind="forward"><span>Forward</span><span class="k">→</span></button>
@@ -1168,6 +1390,10 @@
     </div>
     <div class="op-stage" id="op-stage" tabindex="0" aria-label="live browser — click to interact, focus to type">
       <img class="op-view" id="op-view" alt="">
+      <div class="op-lp" id="op-lp" hidden>
+        <div class="op-lp-title">SAVED TASKS</div>
+        <div class="op-lp-grid" id="op-lp-grid"></div>
+      </div>
       <span class="op-kbhint">tap to focus/steer · type to send keys</span>
       <div class="op-agent-cursor" id="op-agent-cursor" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="18" height="18" style="margin:-2px 0 0 -3px"><path d="M5 3l14 7-6 1.6L9.7 18 5 3z" fill="#fff" stroke="#0a0c14" stroke-width="1.3" stroke-linejoin="round"/></svg>
@@ -1178,6 +1404,33 @@
       </div>
     </div>
   </section>
+
+  <!-- New-task modal (#30 v2b) — OpenAI-Operator-style save dialog, opened by 💾 -->
+  <div class="op-veil" id="op-nt-veil" hidden>
+    <div class="op-nt" role="dialog" aria-modal="true" aria-labelledby="op-nt-title">
+      <div class="op-nt-head">
+        <span class="op-nt-title" id="op-nt-title">Save task</span>
+        <button type="button" class="op-nt-x" id="op-nt-close" title="close" aria-label="close"><svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+      </div>
+      <label class="op-nt-lbl" for="op-nt-name">Task name</label>
+      <input type="text" class="op-nt-input" id="op-nt-name" placeholder="e.g. Lunch order" autocomplete="off" spellcheck="false">
+      <label class="op-nt-lbl" for="op-nt-prompt">What would you like Operator to do?</label>
+      <textarea class="op-nt-input" id="op-nt-prompt" rows="4" placeholder="e.g. Order my usual chicken burrito bowl from Chipotle on DoorDash, deliver to home."></textarea>
+      <label class="op-nt-lbl" for="op-nt-sites">What tools or websites would you like Operator to use?</label>
+      <div class="op-nt-pillwrap">
+        <div class="op-nt-pills" id="op-nt-pills">
+          <input type="text" class="op-nt-pill-in" id="op-nt-sites" placeholder="Type a site or tool and press Enter…" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="op-nt-sug" id="op-nt-sug" hidden></div>
+      </div>
+      <label class="op-nt-lbl" for="op-nt-sched">Schedule <span style="color:var(--muted);font-weight:500">— optional, cron</span></label>
+      <input type="text" class="op-nt-input" id="op-nt-sched" placeholder="e.g. 15 6 * * 1-5  (weekdays 6:15am) — leave empty for manual only" autocomplete="off" spellcheck="false">
+      <div class="op-nt-foot">
+        <button type="button" class="op-nt-btn" id="op-nt-cancel">Cancel</button>
+        <button type="button" class="op-nt-btn primary" id="op-nt-save">Save task</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1603,13 +1856,30 @@
       const body = '<rect x="3" y="7" width="10" height="7" rx="1.4"></rect>';
       const closed = '<path d="M5 7V5a3 3 0 0 1 6 0v2"></path>';   // full shackle
       const open = '<path d="M5 7V5a3 3 0 0 1 5.2-2"></path>';      // open shackle
-      lockEl.innerHTML = (https || http)
+      const padlock = (https || http)
         ? '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
           + (https ? closed : open) + body + '</svg>'
         : '';
+      // live site favicon in the lock slot; falls back to the padlock when the
+      // icon can't load. Cache the host so the img doesn't reflash every poll.
+      let host = '';
+      try { host = (https || http) ? new URL(url).hostname : ''; } catch {}
+      if (host && lockEl.dataset.favHost !== host) {
+        lockEl.dataset.favHost = host;
+        lockEl.innerHTML = '';
+        const fv = document.createElement('img');
+        fv.width = 13; fv.height = 13; fv.alt = '';
+        fv.style.borderRadius = '3px'; fv.style.display = 'block';
+        fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=32';
+        fv.addEventListener('error', () => { lockEl.innerHTML = padlock; });
+        lockEl.appendChild(fv);
+      } else if (!host) {
+        lockEl.dataset.favHost = '';
+        lockEl.innerHTML = padlock;
+      }
       lockEl.className = 'op-lock' + (https ? ' secure' : (http ? ' insecure' : ''));
       lockEl.title = '';   // suppress native tooltip; we render a styled one
-      lockEl.dataset.tip = https ? 'Secured with HTTPS' : (http ? 'Not secure' : '');
+      lockEl.dataset.tip = (host ? host + ' — ' : '') + (https ? 'Secured with HTTPS' : (http ? 'Not secure' : ''));
     }
     // urlEl is an editable input; don't clobber it while the user is typing in it
     if (document.activeElement === urlEl) return;
@@ -2208,7 +2478,352 @@
       if (_sv && _sv.bot && [].some.call(caretSel.options, o=>o.value===_sv.bot)) caretSel.value = _sv.bot;
     } catch {}
     await loadModels(selectedBot());
+    initSlashTasks();
+    initNewTaskModal();
+    initLaunchpad();
   })();
+  // ── Launchpad (#1): saved-task cards on the idle stage, OpenAI-Operator
+  // homepage style. Fresh sessions only — the overlay vanishes for good the
+  // moment the conversation starts (any log entry), and never renders in MAN
+  // mode or the demo (CSS-gated too).
+  function initLaunchpad(){
+    const lp = document.getElementById('op-lp');
+    const grid = document.getElementById('op-lp-grid');
+    if (!lp || !grid || op.classList.contains('op-demo')) return;
+    if (log.children.length) return;             // conversation already going
+    const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
+    (async () => {
+      let tasks = [];
+      try { const d = await (await fetch(TASKS_URL)).json(); tasks = d.ok ? (d.tasks || []) : []; } catch {}
+      if (log.children.length) return;           // something started while fetching
+      grid.textContent = '';
+      tasks.slice(0, 7).forEach(t => {
+        const c = document.createElement('button'); c.type = 'button'; c.className = 'op-lp-card';
+        const nm = document.createElement('div'); nm.className = 'op-lp-name'; nm.textContent = t.name; c.appendChild(nm);
+        const pr = document.createElement('div'); pr.className = 'op-lp-prompt'; pr.textContent = t.prompt; c.appendChild(pr);
+        const meta = document.createElement('div'); meta.className = 'op-lp-meta';
+        (t.sites || []).slice(0, 2).forEach(s => {
+          const chip = document.createElement('span'); chip.className = 'op-lp-site';
+          if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)) {   // looks like a domain → favicon
+            const fv = document.createElement('img'); fv.alt = '';
+            fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(s) + '&sz=32';
+            fv.addEventListener('error', () => fv.remove());
+            chip.appendChild(fv);
+          }
+          const tx = document.createElement('span'); tx.textContent = s; chip.appendChild(tx);
+          meta.appendChild(chip);
+        });
+        const who = document.createElement('span'); who.className = 'op-lp-bot';
+        who.textContent = [t.bot, t.model].filter(Boolean).join(' · '); meta.appendChild(who);
+        c.appendChild(meta);
+        const run = document.createElement('span'); run.className = 'op-lp-run'; run.textContent = '▶ Run'; c.appendChild(run);
+        c.addEventListener('click', () => { lp.hidden = true; if (window._opRunSavedTask) window._opRunSavedTask(t); });
+        grid.appendChild(c);
+      });
+      const add = document.createElement('button'); add.type = 'button'; add.className = 'op-lp-card op-lp-new';
+      add.textContent = '＋ Save a task';
+      add.addEventListener('click', () => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
+      grid.appendChild(add);
+      lp.hidden = false;
+      new MutationObserver((m, obs) => {
+        if (log.children.length) { lp.hidden = true; obs.disconnect(); }
+      }).observe(log, { childList: true });
+    })();
+  }
+  // ── New-task modal (#30 v2b) — the 💾 urlbar button opens an OpenAI-Operator-
+  // style save dialog: name / prompt / websites+apps+MCPs. Prefill order: the
+  // composer draft (if it isn't a /command), else the last dispatched task.
+  // Saves through the same POST as the /save palette row; current bot/model/
+  // effort are captured silently, exactly like a dispatch would use them.
+  function initNewTaskModal(){
+    const veil = document.getElementById('op-nt-veil');
+    const btn  = document.getElementById('op-save-task');
+    if (!veil || !btn || op.classList.contains('op-demo')) return;
+    const name = document.getElementById('op-nt-name');
+    const prompt = document.getElementById('op-nt-prompt');
+    const sitesIn = document.getElementById('op-nt-sites');
+    const pillsEl = document.getElementById('op-nt-pills');
+    const sugEl = document.getElementById('op-nt-sug');
+    const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
+
+    // ── sites/tools pill input (#6): chips + icon autocomplete ──
+    // Common picks get real favicons (Google's s2 endpoint — this page has
+    // network); MCP/tool entries get a plug glyph and save WITHOUT the label
+    // suffix. Typing + Enter pills anything; Backspace on empty pops the last.
+    const PLUG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v4M10 2v4"></path><path d="M4 6h8v2.5a4 4 0 0 1-8 0z"></path><path d="M8 12.5V15"></path></svg>';
+    const COMMON = [
+      {v:'bloomberg.com'}, {v:'reuters.com'}, {v:'finviz.com'},
+      {v:'booking.com'}, {v:'zillow.com'},
+      {v:'amazon.ca'}, {v:'doordash.com'}, {v:'ubereats.com'},
+      {v:'youtube.com'}, {v:'x.com'}, {v:'github.com'}, {v:'gmail.com', ico:'mail.google.com'},
+      {v:'lichess.org'}, {v:'wikipedia.org'},
+      {v:'playwright', tool:true}, {v:'filesystem', tool:true}, {v:'web-search', tool:true},
+    ];
+    let _pills = [];
+    function fav(d){ return 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(d) + '&sz=32'; }
+    function pillIcon(entry){
+      if (entry.tool) { const s = document.createElement('span'); s.innerHTML = PLUG; return s.firstChild; }
+      const im = document.createElement('img'); im.alt = '';
+      im.src = fav(entry.ico || entry.v);
+      im.addEventListener('error', () => im.remove());   // no favicon → text-only pill
+      return im;
+    }
+    function addPill(val, entry){
+      val = (val || '').trim().replace(/,+$/, '');
+      if (!val || _pills.some(p => p.v === val)) return;
+      const meta = entry || COMMON.find(c => c.v === val) || {v: val, guess: true};
+      _pills.push({ v: val });
+      const pill = document.createElement('span'); pill.className = 'op-nt-pill'; pill.dataset.v = val;
+      if (meta.tool || /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(val) || meta.ico)
+        pill.appendChild(pillIcon(meta.tool ? meta : {v: val, ico: meta.ico}));
+      const tx = document.createElement('span'); tx.textContent = val; pill.appendChild(tx);
+      const x = document.createElement('span'); x.className = 'op-nt-pill-x';
+      x.innerHTML = '<svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"></path></svg>';
+      x.addEventListener('click', () => { _pills = _pills.filter(p => p.v !== val); pill.remove(); renderSug(); });
+      pill.appendChild(x);
+      pillsEl.insertBefore(pill, sitesIn);
+      sitesIn.value = ''; renderSug();
+    }
+    function renderSug(){
+      const q = sitesIn.value.trim().toLowerCase();
+      const rows = COMMON.filter(c => !_pills.some(p => p.v === c.v)
+                                   && (!q || c.v.toLowerCase().includes(q)));
+      sugEl.textContent = '';
+      if (!rows.length) { sugEl.hidden = true; return; }
+      rows.forEach(c => {
+        const r = document.createElement('div'); r.className = 'op-nt-sug-row';
+        r.appendChild(pillIcon(c));
+        const t = document.createElement('span'); t.textContent = c.v; r.appendChild(t);
+        if (c.tool) { const k = document.createElement('span'); k.className = 'op-nt-sug-kind'; k.textContent = 'MCP'; r.appendChild(k); }
+        const plus = document.createElement('span'); plus.className = 'op-nt-sug-add'; plus.textContent = '＋';
+        r.appendChild(plus);
+        r.addEventListener('mousedown', e => { e.preventDefault(); addPill(c.v, c); sitesIn.focus(); });
+        sugEl.appendChild(r);
+      });
+      sugEl.hidden = document.activeElement !== sitesIn;
+    }
+    sitesIn.addEventListener('focus', renderSug);
+    sitesIn.addEventListener('input', renderSug);
+    sitesIn.addEventListener('blur', () => setTimeout(() => { sugEl.hidden = true; }, 120));
+    sitesIn.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addPill(sitesIn.value); }
+      else if (e.key === 'Backspace' && !sitesIn.value && _pills.length) {
+        const last = _pills[_pills.length - 1];
+        _pills.pop();
+        const el = pillsEl.querySelector('.op-nt-pill[data-v="' + (window.CSS && CSS.escape ? CSS.escape(last.v) : last.v) + '"]');
+        if (el) el.remove(); renderSug();
+      }
+    });
+    pillsEl.addEventListener('mousedown', e => { if (e.target === pillsEl) { e.preventDefault(); sitesIn.focus(); } });
+
+    function openModal(){
+      const draft = input.value.trim();
+      prompt.value = (draft && !draft.startsWith('/')) ? draft
+        : ((window._opLastDispatch || {}).task || '');
+      name.value = ''; sitesIn.value = '';
+      const schedEl = document.getElementById('op-nt-sched'); if (schedEl) schedEl.value = '';
+      _pills = []; pillsEl.querySelectorAll('.op-nt-pill').forEach(p => p.remove());
+      veil.hidden = false;
+      setTimeout(() => name.focus(), 0);
+    }
+    function closeModal(){ veil.hidden = true; }
+    async function save(){
+      const n = name.value.trim(), p = prompt.value.trim();
+      if (!n) { name.focus(); return; }
+      if (!p) { prompt.focus(); return; }
+      if (sitesIn.value.trim()) addPill(sitesIn.value);   // pending text counts
+      const body = { name: n, task: p, sites: _pills.map(x => x.v).join(', '),
+        schedule: (document.getElementById('op-nt-sched')||{}).value || '',
+        bot: (typeof selectedBot === 'function') ? selectedBot() : '',
+        model: (document.getElementById('op-model')||{}).value || '',
+        effort: (document.getElementById('op-effort')||{}).value || '' };
+      try { const d = await (await fetch(TASKS_URL, { method:'POST',
+          headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
+        if (d.ok) { logRes('saved “' + n + '”', true); closeModal(); }
+        else logRes(d.error || 'save failed', false); }
+      catch { logRes('save failed', false); }
+    }
+    window._opOpenSaveModal = openModal;   // launchpad's ＋ card opens the dialog too
+    btn.addEventListener('click', openModal);
+    document.getElementById('op-nt-close').addEventListener('click', closeModal);
+    document.getElementById('op-nt-cancel').addEventListener('click', closeModal);
+    document.getElementById('op-nt-save').addEventListener('click', save);
+    veil.addEventListener('mousedown', e => { if (e.target === veil) closeModal(); });
+    veil.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+      // Enter saves from the name field; the textarea keeps Enter for newlines
+      // and the pill input consumes Enter itself (adds a pill).
+      if (e.key === 'Enter' && e.target !== prompt && e.target !== sitesIn) { e.preventDefault(); save(); }
+    });
+  }
+  // ── Slash palette — saved tasks (#30 v2) ──────────────────────────────────
+  // Summoned by typing "/" in the composer; no standing chrome. Filter mode
+  // lists tasks (↑↓ pick, ↵ run-as-stored, Tab load-and-edit, hover 🗑 delete
+  // with click-again-to-confirm); "/save" switches to save mode, storing the
+  // LAST DISPATCHED bundle (prompt+bot+model+effort — the draft is gone by
+  // save time) under an inline name + optional sites. All state lives here;
+  // the composer only consults window._opPalKeydown while a draft starts "/".
+  function initSlashTasks(){
+    const pal   = document.getElementById('op-pal');
+    const list  = document.getElementById('op-pal-list');
+    const foot  = document.getElementById('op-pal-foot');
+    const saveRow   = document.getElementById('op-pal-save');
+    const saveName  = document.getElementById('op-pal-save-name');
+    const saveSites = document.getElementById('op-pal-save-sites');
+    const title = document.getElementById('op-pal-title');
+    if (!pal || !list || op.classList.contains('op-demo')) return;   // demo: routes 404 anyway
+    const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
+    const RUN_URL   = "{{ url_for('operator.operator_task_run', slug='__S__') }}";
+    const DEL_URL   = "{{ url_for('operator.operator_task_delete', slug='__S__') }}";
+    let _tasks = [];        // fetched list (public shape)
+    let _sel = 0;           // selected index into the FILTERED view
+    let _view = [];         // current filtered slugs
+    let _mode = '';         // '' closed | 'list' | 'save'
+    let _armedDel = '';     // slug whose 🗑 is armed for confirm
+
+    async function refresh(){
+      try { const d = await (await fetch(TASKS_URL)).json();
+        _tasks = d.ok ? (d.tasks || []) : []; } catch { _tasks = []; }
+    }
+    function open(){ pal.hidden = false; }
+    function close(){ pal.hidden = true; _mode=''; _armedDel=''; saveRow.hidden = true; foot.hidden = false; }
+    function filterText(){ return input.value.trim().slice(1).toLowerCase(); }
+
+    function render(){
+      const q = filterText();
+      _view = _tasks.filter(t => !q || (t.name||'').toLowerCase().includes(q)
+                                    || (t.prompt||'').toLowerCase().includes(q));
+      if (_sel >= _view.length) _sel = Math.max(0, _view.length - 1);
+      list.textContent = '';
+      if (!_view.length) {
+        const e = document.createElement('div'); e.className = 'op-pal-empty';
+        e.textContent = _tasks.length ? 'no saved task matches — keep typing or Esc'
+                                      : 'no saved tasks yet — run something, then type /save';
+        list.appendChild(e); return;
+      }
+      _view.forEach((t, i) => {
+        const row = document.createElement('div');
+        row.className = 'op-pal-item' + (i === _sel ? ' sel' : '');
+        const nm = document.createElement('span'); nm.className = 'op-pal-name'; nm.textContent = t.name;
+        const pr = document.createElement('span'); pr.className = 'op-pal-prompt'; pr.textContent = t.prompt;
+        row.appendChild(nm); row.appendChild(pr);
+        if (i === _sel) { const k = document.createElement('span'); k.className = 'op-pal-key'; k.textContent = '↵ run'; row.appendChild(k); }
+        const del = document.createElement('button'); del.type = 'button';
+        del.className = 'op-pal-del' + (_armedDel === t.slug ? ' arm' : '');
+        del.title = _armedDel === t.slug ? 'click again to delete' : 'delete task';
+        del.textContent = _armedDel === t.slug ? 'sure?' : '🗑';
+        del.addEventListener('mousedown', ev => { ev.preventDefault(); ev.stopPropagation(); tapDelete(t.slug); });
+        row.appendChild(del);
+        row.addEventListener('mousedown', ev => { ev.preventDefault(); _sel = i; runSelected(); });
+        row.addEventListener('mousemove', () => { if (_sel !== i) { _sel = i; render(); } });
+        list.appendChild(row);
+      });
+      const s = list.querySelector('.sel'); if (s) s.scrollIntoView({ block: 'nearest' });
+    }
+
+    async function tapDelete(slug){
+      if (_armedDel !== slug) { _armedDel = slug; render(); return; }
+      _armedDel = '';
+      try { const d = await (await fetch(DEL_URL.replace('__S__', encodeURIComponent(slug)), { method: 'DELETE' })).json();
+        if (d.ok) { await refresh(); logRes('deleted', true); } } catch {}
+      render();
+    }
+
+    // shared saved-task runner — the palette (↵) and the launchpad cards both
+    // dispatch through here; the server applies the task's stored bundle.
+    window._opRunSavedTask = async function(t){
+      if (_inFlight) { logRes('agent is busy — stop it or steer first, then re-run the saved task', false); return; }
+      logUser('▶ ' + t.name);
+      op.dataset.busy = '1'; setCardText(actTxt, 'Starting up'); setCardSub(t.bot || selectedBot(), '');
+      try { const d = await (await fetch(RUN_URL.replace('__S__', encodeURIComponent(t.slug)), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+        if (d.ok) { _lastAssistant = ''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
+        else { logRes(d.error || 'failed to run task', false); settleAction(false); } }
+      catch { logRes('failed to run task', false); settleAction(false); }
+    };
+    async function runSelected(){
+      const t = _view[_sel]; if (!t) return;
+      input.value = ''; autoGrow(); refreshSendButton(); close();
+      window._opRunSavedTask(t);
+    }
+
+    function loadSelected(){
+      const t = _view[_sel]; if (!t) return;
+      input.value = t.prompt || ''; autoGrow(); refreshSendButton();
+      (async () => {
+        if (t.bot && [].some.call(caretSel.options, o => o.value === t.bot)) {
+          caretSel.value = t.bot; await loadModels(t.bot);
+        }
+        const ms = document.getElementById('op-model'), es = document.getElementById('op-effort');
+        if (ms && t.model) { ms.value = t.model; if (typeof syncEffort === 'function') syncEffort(); }
+        if (es && t.effort) es.value = t.effort;
+      })();
+      close(); input.focus();
+    }
+
+    function enterSaveMode(){
+      const last = window._opLastDispatch;
+      _mode = 'save'; open(); list.textContent = ''; foot.hidden = true;
+      if (!last || !last.task) {
+        const e = document.createElement('div'); e.className = 'op-pal-empty';
+        e.textContent = 'nothing to save yet — dispatch a task first, then /save';
+        list.appendChild(e); saveRow.hidden = true;
+        title.textContent = 'SAVE TASK'; return;
+      }
+      const e = document.createElement('div'); e.className = 'op-pal-empty';
+      e.textContent = '💾 “' + (last.task.length > 90 ? last.task.slice(0, 90) + '…' : last.task)
+        + '”  ·  ' + (last.bot || '') + (last.model ? ' · ' + last.model : '');
+      list.appendChild(e);
+      title.textContent = 'SAVE TASK';
+      saveRow.hidden = false; saveName.value = ''; saveSites.value = '';
+      setTimeout(() => saveName.focus(), 0);
+    }
+
+    async function doSave(){
+      const last = window._opLastDispatch; if (!last || !last.task) return;
+      const name = saveName.value.trim();
+      if (!name) { saveName.focus(); return; }
+      const body = { name, task: last.task, sites: saveSites.value,
+                     bot: last.bot || '', model: last.model || '', effort: last.effort || '' };
+      try { const d = await (await fetch(TASKS_URL, { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+        if (d.ok) { await refresh(); logRes('saved “' + name + '”', true); }
+        else logRes(d.error || 'save failed', false); }
+      catch { logRes('save failed', false); }
+      input.value = ''; autoGrow(); refreshSendButton(); close(); input.focus();
+    }
+    [saveName, saveSites].forEach(el => el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+      if (e.key === 'Escape') { e.preventDefault(); input.value=''; autoGrow(); refreshSendButton(); close(); input.focus(); }
+    }));
+
+    // Composer input drives open/filter/close. Runs alongside autoGrow's listener.
+    input.addEventListener('input', async () => {
+      const v = input.value;
+      if (!v.startsWith('/')) { if (_mode) close(); return; }
+      if (/^\/save(\s|$)/i.test(v)) { if (_mode !== 'save') enterSaveMode(); return; }
+      if (_mode !== 'list') { _mode = 'list'; _sel = 0; title.textContent = 'SAVED TASKS';
+        saveRow.hidden = true; foot.hidden = false; await refresh(); open(); }
+      _armedDel = '';
+      render();
+    });
+    // Key routing while the palette is up — called FIRST by the composer's
+    // keydown handler; return true = the palette consumed the key.
+    window._opPalKeydown = function(e){
+      if (!_mode) return false;
+      if (e.key === 'Escape') { e.preventDefault(); input.value=''; autoGrow(); refreshSendButton(); close(); return true; }
+      if (_mode !== 'list') return false;   // save mode: fields have their own handlers
+      if (e.key === 'ArrowDown') { e.preventDefault(); _sel = Math.min(_sel + 1, Math.max(0, _view.length - 1)); render(); return true; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); _sel = Math.max(_sel - 1, 0); render(); return true; }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runSelected(); return true; }
+      if (e.key === 'Tab')       { e.preventDefault(); loadSelected(); return true; }
+      return false;
+    };
+    // Click-away closes (mousedown inside the palette is preventDefault'ed above).
+    document.addEventListener('mousedown', e => {
+      if (_mode && !pal.contains(e.target) && e.target !== input) close();
+    });
+  }
   // (re)load the model list for a driver — Claude models for claude-a/claude-b, GPT
   // models for gpt. Defaults: Sonnet for Claude bots, GPT-5.5 for gpt.
   async function loadModels(driver){
@@ -2633,22 +3248,77 @@
       tabs.forEach(t => {
         const el = document.createElement('div');
         el.className = 'op-tab' + (t.active ? ' active' : '');
-        el.draggable = true;
-        el.addEventListener('dragstart', e => { _dragTab = el; el.classList.add('dragging');
-          try { e.dataTransfer.effectAllowed='move'; } catch {} });
-        el.addEventListener('dragend', () => { el.classList.remove('dragging'); _dragTab = null; });
-        el.addEventListener('dragover', e => { e.preventDefault();
-          if (!_dragTab || _dragTab===el) return;
-          const r = el.getBoundingClientRect();
-          const before = (e.clientX - r.left) < r.width/2;
-          el.parentNode.insertBefore(_dragTab, before ? el : el.nextSibling);
+        // drag-to-reorder, POINTER-based (the old HTML5 draggable never fired on
+        // touch — iPad is a primary driver). Pointer capture engages AT pointer-
+        // down (not after the slop threshold): un-captured pointermove events
+        // fire on whatever is under the pointer, so a fast drag would escape the
+        // tab and never reach this listener. With capture, tap-vs-drag is decided
+        // here too — the tab SWITCH happens on a no-drag pointerup instead of a
+        // label click (capture retargets the composed click unreliably across
+        // browsers). Reorder is the strip's own (visual) order; Chrome's real
+        // tab order is untouched. The ✕ keeps its own click path (no capture).
+        el.addEventListener('pointerdown', e => {
+          if (e.target.closest('.op-tab-x')) return;      // the ✕ is not a handle
+          if (e.button !== undefined && e.button !== 0) return;
+          try { el.setPointerCapture(e.pointerId); } catch {}
+          const startX = e.clientX, startY = e.clientY;
+          let dragging = false;
+          const move = ev => {
+            if (!dragging) {
+              if (Math.abs(ev.clientX - startX) < 6 && Math.abs(ev.clientY - startY) < 6) return;
+              dragging = true; _dragTab = el; el.classList.add('dragging');
+            }
+            // classic list-reorder: insert before the first sibling whose midpoint
+            // is right of the pointer; past every midpoint → land at the end
+            // (before the + button). Covers exact-center drops and drops beyond
+            // the last tab — the earlier inside-a-rect-only version missed both.
+            let placed = false;
+            for (const sib of el.parentNode.querySelectorAll('.op-tab')) {
+              if (sib === el) continue;
+              const r = sib.getBoundingClientRect();
+              if (ev.clientX < r.left + r.width/2) {
+                if (el.nextSibling !== sib) el.parentNode.insertBefore(el, sib);
+                placed = true; break;
+              }
+            }
+            if (!placed) {
+              const add = el.parentNode.querySelector('.op-tab-add');
+              if (add && el.nextSibling !== add) el.parentNode.insertBefore(el, add);
+            }
+          };
+          const done = async ev => {
+            el.removeEventListener('pointermove', move);
+            el.removeEventListener('pointerup', done);
+            el.removeEventListener('pointercancel', cancel);
+            try { el.releasePointerCapture(e.pointerId); } catch {}
+            if (dragging) { el.classList.remove('dragging'); _dragTab = null; return; }
+            // plain tap → switch to this tab and collapse the strip
+            try { await fetch("{{ url_for('operator.operator_tab_switch', idx=0) }}".replace('/0','/'+t.i), {method:'POST'}); pollTabs(); } catch {}
+            const tb=document.getElementById('op-tabs'); tb.hidden=true;
+            tabsToggle.classList.remove('active');
+          };
+          const cancel = () => {
+            el.removeEventListener('pointermove', move);
+            el.removeEventListener('pointerup', done);
+            el.removeEventListener('pointercancel', cancel);
+            try { el.releasePointerCapture(e.pointerId); } catch {}
+            if (dragging) { el.classList.remove('dragging'); _dragTab = null; }
+          };
+          el.addEventListener('pointermove', move);
+          el.addEventListener('pointerup', done);
+          el.addEventListener('pointercancel', cancel);
         });
+        // favicon (#5): derived from the tab's url via Google's s2 endpoint —
+        // no backend change; a failed load just removes the img (text-only tab).
+        if (/^https?:\/\//i.test(t.url || '')) {
+          try {
+            const fv = document.createElement('img'); fv.className = 'op-tab-fav'; fv.alt = '';
+            fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(new URL(t.url).hostname) + '&sz=32';
+            fv.addEventListener('error', () => fv.remove());
+            el.appendChild(fv);
+          } catch {}
+        }
         const l = document.createElement('span'); l.className='lbl'; l.textContent = t.title || 'tab';
-        l.addEventListener('click', async () => {
-          try { await fetch("{{ url_for('operator.operator_tab_switch', idx=0) }}".replace('/0','/'+t.i), {method:'POST'}); pollTabs(); } catch {}
-          const tb=document.getElementById('op-tabs'); tb.hidden=true;   // exit the strip on pick
-          tabsToggle.classList.remove('active');
-        });
         const x = document.createElement('span'); x.className='op-tab-x';
         x.innerHTML = '<svg viewBox="0 0 14 14" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7"></path></svg>';
         x.addEventListener('click', async (e) => { e.stopPropagation();
@@ -2758,18 +3428,30 @@
     if (userLabel) logUser(userLabel);
     if (!silent) setAction(action.kind, action.value || '', true);
     const _rl = document.getElementById('op-reload');
+    const _dot = document.getElementById('op-dotstat');
+    const _hl = document.getElementById('op-nav-hairline');
     const _isNav = action && (action.kind === 'goto' || action.kind === 'reload' || action.kind === 'hard_reload' || action.kind === 'back' || action.kind === 'forward');
-    if (_rl && _isNav) _rl.classList.add('loading');
+    if (_isNav) {
+      if (_rl) _rl.classList.add('loading');
+      if (_dot) { _dot.classList.remove('err'); _dot.classList.add('loading'); }
+      if (_hl) _hl.classList.add('on');
+    }
+    const _navDone = ok => {
+      if (!_isNav) { if (!ok && _dot) _dot.classList.add('err'); return; }
+      if (_rl) _rl.classList.remove('loading');
+      if (_hl) _hl.classList.remove('on');
+      if (_dot) { _dot.classList.remove('loading'); _dot.classList.toggle('err', !ok); }
+    };
     try {
       const d = await (await fetch(STEER, { method:'POST',
         headers:{'Content-Type':'application/json'}, body: JSON.stringify(action) })).json();
       if (d.ok) { showUrl(d.url);
         settleAction(true); }
       else { if (!silent) logEvent((d.error||'failed').slice(0,80), false); settleAction(false); }
-      if (_rl && _isNav) _rl.classList.remove('loading');
+      _navDone(!!d.ok);
       return d;
     } catch { logRes('Action failed — browser disconnected', false); settleAction(false);
-      if (_rl && _isNav) _rl.classList.remove('loading'); }
+      _navDone(false); }
   }
 
   function parse(t){ t=t.trim(); if(!t) return null;
@@ -2794,6 +3476,11 @@
   }
   async function dispatchTask(txt){
     const bot = selectedBot();
+    // slash palette (#30 v2): remember the last dispatched bundle so "/save"
+    // can store it as a re-runnable task (the draft is gone by save time).
+    window._opLastDispatch = { task: txt, bot,
+      model: (document.getElementById('op-model')||{}).value || '',
+      effort: (document.getElementById('op-effort')||{}).value || '' };
     // if the user declined a hand-off and just sent a message, dismiss the lingering
     // "Operator needs your input" card and let the agent carry on (its session
     // resumes, so the new message continues where it left off).
@@ -2881,6 +3568,9 @@
   function autoGrow(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight, 84)+'px'; }
   input.addEventListener('input', () => { autoGrow(); refreshSendButton(); });
   input.addEventListener('keydown', e => {
+    // slash palette (#30 v2) owns the keys while open — it's initialized later
+    // in the async boot, so consult it dynamically rather than by listener order.
+    if (window._opPalKeydown && window._opPalKeydown(e)) return;
     if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); submit(); }   // Shift+Enter = newline
   });
 
