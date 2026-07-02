@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.6.8-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.7.0-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -83,6 +83,9 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.7.0** — **saved tasks + the run governor**. The headline: OpenAI-Operator-style **saved tasks** — a **/ slash palette** in the composer (type "/" → filterable list, ↵ runs a task as stored, Tab loads it into the composer with its bot/model/effort applied, inline delete with click-again confirm), a **Save task modal** (name / "What would you like Operator to do?" / a tools-and-websites **pill field** with favicon autocomplete) opened from a floppy button in the urlbar, and a **launchpad** — saved tasks as cards on the idle stage, shown on fresh sessions until the conversation starts. Tasks can carry an optional 5-field **cron schedule**: a background thread dispatches them through the same path as ▶ (stdlib cron matcher, per-minute dedupe), and finished runs feed an **unseen-runs counter** (`/operator/unseen`) you can wire to a nav badge — it clears the moment the cockpit is viewed or polling. **Run governor**: per-run cumulative token tracking with hard caps (default 3M/turn, 20M/run, env-tunable) that auto-stop a runaway vision task like a human Stop tap, and an **image governor** in the MCP pipe (browse/mcp_image_governor.js) that downscales oversized screenshot blocks (long edge >1100px → 1024 JPEG) before the model ingests them — fail-open at every layer, ~2× context headroom on long vision runs (requires `sharp` next to the script; passes through untouched without it). UI: pointer-based **drag-to-reorder tabs** (works on touch — the old HTML5 drag never fired there), per-tab **favicons**, a live **site favicon in the urlbar lock slot**, a green/amber/red **nav status dot** + loading hairline, a quieter hamburger menu (soft hover, chip-styled shortcut keys), slightly darker default-dark surfaces, smaller urlbar icons, restrained entrance animations, and a radial vignette + grain under the launchpad.
+
 
 <details>
 <summary>Version history (click to expand)</summary>
