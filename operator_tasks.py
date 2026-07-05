@@ -2,7 +2,7 @@
 
 A saved task is a stored dispatch: a prompt + preferred sites + default
 bot/model/effort (+ optional start_url), re-runnable later without re-typing.
-This is the "OpenAI-Operator-style reusable task" feature, v1:
+This is the "OpenAI-Operator-style reusable task" ask, v1:
 the prompt+sites+model bundle, no scheduling and no hard tool sandbox (both
 deferred to v2 — see the handoff spec).
 

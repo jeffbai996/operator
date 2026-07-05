@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /* mcp_image_governor.js — transparent stdout-side proxy for the Playwright MCP
- * Sits between the MCP server's stdout and the client:
+ * (#34 phase B). Sits between the MCP server's stdout and the client:
  *
- *   client stdin → playwright MCP → THIS → client
+ *   client stdin → mcp_action_tap.py → cli.js → THIS → client
  *
  * Screenshots come back as inline base64 image blocks and get re-sent with the
  * entire context every subsequent turn, so their pixel size compounds into the
@@ -10,7 +10,7 @@
  * oversized image block in a tools/call result before the model ever ingests
  * it — model-agnostic (claude/codex/agy all read the same MCP stream).
  *
- * Contract / safety:
+ * Contract / safety (mirrors mcp_action_tap.py):
  * - FAIL OPEN, always: sharp missing → raw byte passthrough; a line that isn't
  *   JSON, isn't a result-with-images, or fails processing → forwarded untouched.
  * - Order-preserving: lines are emitted in arrival order even though sharp is

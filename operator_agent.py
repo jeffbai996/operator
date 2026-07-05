@@ -1,6 +1,6 @@
 """operator_agent.py — run a headless Claude Code agent that drives the browser.
 
-Option 1 : the operator IS the agent. We spawn `claude -p` in a
+Option 1: the operator IS the agent. We spawn `claude -p` in a
 background thread, as the chosen persona, with the Playwright MCP pointed at the
 SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTION
 (claude reads ~/.claude/.credentials.json), zero metered API spend. We parse its
@@ -19,7 +19,13 @@ import time
 
 # personas that can drive + the config dir whose stored sub-creds + identity they
 # run under. (Both ride the default ~/.claude credentials = the Max login.)
-_ONEPASS_HINT = ""
+_ONEPASS_HINT = (
+    " 1PASSWORD: this browser has the 1Password extension with the user's saved"
+    " logins. At ANY login, FIRST click the username/email field and look for the"
+    " 1Password inline suggestion (a small key/1Password icon in the field, or a"
+    " popup offering a saved login) — clicking it autofills both username AND"
+    " password, no typing or hunting needed. Try this BEFORE searching for"
+    " credentials anywhere else; it's the fastest path and works on most sites. ")
 
 _BROWSER_MANDATE = (
     " You are operating a LIVE web browser via your Playwright tools — that is your"
@@ -45,7 +51,7 @@ _BROWSER_MANDATE = (
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
 def _squad_boot_context(bot: str = "gpt") -> str:
-    """Slim the app context for Operator runs (browser tasks don't need the full digest).
+    """Slim squad context for Operator runs (browser tasks don't need the full digest).
 
     Loads:
     - SQUAD.md rulebook (behavioral rules, ~5.7k tokens)
@@ -59,7 +65,7 @@ def _squad_boot_context(bot: str = "gpt") -> str:
     Fail-soft: if host-app isn't importable, gpt/gemma runs without it."""
     try:
         import sys as _sys
-        _ss = os.path.expanduser("~/.host-app")
+        _ss = os.path.expanduser("~/agents/host-app")
         if _ss not in _sys.path:
             _sys.path.insert(0, _ss)
         import store as _store  # type: ignore
@@ -126,16 +132,16 @@ AGENT_BOTS = {
     # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
     # ~/.codex-operator/config.toml wires playwright (Operator-only home); the
     # Unlike the Claude bots, codex has no CLAUDE.md / SessionStart hook loading
-    # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
+    # host-app, so we hand gpt its host self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
             "config_dir": os.path.expanduser("~/.codex-operator"),  # Operator-only CODEX_HOME: has playwright; the interactive gpt Discord bot uses ~/.codex (no playwright) — clean platform separation
             "cwd": os.path.expanduser("~/.operator-sessions/gpt"),
             "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
-    # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
+    # gemma drives via agy (Google Antigravity CLI) on a Google subscription —
     # the agy analog of the codex/ChatGPT-sub path. agy `-p` returns PLAIN TEXT
     # (no JSON event stream), so the live action-trace is unavailable; we surface
     # the final text only. Like gpt/codex, agy has no CLAUDE.md / SessionStart
-    # hook, so gemma gets its the app self-context inline (host-app digest if
+    # hook, so gemma gets its host self-context inline (host-app digest if
     # reachable, else _GEMMA_SELF).
     "gemma": {"label": "gemma", "runtime": "agy",
               "config_dir": os.path.expanduser("~/.gemini"),
@@ -149,8 +155,8 @@ for _b in AGENT_BOTS.values():
     try: os.makedirs(_b["cwd"], exist_ok=True)
     except Exception: pass
 
-# DEMO sandbox persona — Operator browser-driving behavior ONLY, no the app identity/context.
-# Used when start(demo=True) for the public demo instance the public demo. Strips _GPT_SELF.
+# DEMO sandbox persona — Operator browser-driving behavior ONLY, no squad identity/context.
+# Used when start(demo=True) for the public demo instance. Strips _GPT_SELF.
 _DEMO_PERSONA = "You are a capable web-browsing assistant operating a live browser." + _BROWSER_MANDATE
 
 _BROWSE = os.path.expanduser("~/agents/browse")
@@ -236,13 +242,13 @@ _NONBROWSER_LABELS = {
     "multiedit": "Editing file", "notebookedit": "Editing notebook",
     "ls": "Listing files", "cat": "Reading file",
     # memory / recall (host-app, search)
-    "recall": "Recalling", "memory": "Checking data", "search": "Searching",
-    "get_corpus": "Searching", "list_corpora": "Checking data",
-    # markets (tool)
-    "get_quote": "Checking data", "quote": "Checking data",
-    "get_positions": "Checking data", "tool_quote": "Checking data",
-    "tool_get_positions": "Checking data", "tool_get_account_summary": "Checking data",
-    "tool_margin": "Checking data", "tool_get_historical_bars": "Pulling data",
+    "recall": "Recalling", "memory": "Checking memory", "search": "Searching memory",
+    "get_corpus": "Searching memory", "list_corpora": "Checking memory",
+    # markets (the data service)
+    "get_quote": "Checking quote", "quote": "Checking quote",
+    "get_positions": "Checking data", "svc_quote": "Checking quote",
+    "svc_get_items": "Checking data", "svc_get_summary": "Checking account",
+    "svc_margin": "Checking margin", "svc_get_history": "Pulling chart data",
     # docs / misc
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
@@ -297,7 +303,8 @@ _SKIP_TOOLS = {"toolsearch", "tooldispatch"}
 
 
 def _mcp_resource_label(name: str) -> str:
-    """Map generic MCP resource/listing ops to a clean verb . Returns '' if nothing fits."""
+    """Map generic MCP resource/listing ops to a clean verb (the owner: 'Listing
+    resources' etc. is fine; map when we can). Returns '' if nothing fits."""
     n = (name or "").lower().rsplit("__", 1)[-1]
     if any(k in n for k in ("list_resources", "listresources", "resources/list", "list_dir",
                             "listdir", "list_directory", "readdir")):
@@ -523,7 +530,7 @@ def _clean_gemma_text(text: str) -> str:
     t = _re.sub(r'!\[[^\]]*\]\((?!https?://|/?operator/shot/)[^)]*\)', '', t)
     # [label](file:///...) plain (non-image) link -> a browser can't load file:// either;
     # keep just the label text so a self-narrated checklist ("see [trace.json](file:///...)")
-    # doesn't leave a dead link in the reply .
+    # doesn't leave a dead link in the reply (agy work-summary leak).
     t = _re.sub(r'(?<!!)\[([^\]]*)\]\(file://[^)]*\)', lambda m: m.group(1) or '', t)
     # strip a trailing files=[...] literal (single or multi-line)
     t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)
@@ -633,7 +640,7 @@ def _resolve_claude() -> str | None:
 
 
 def _resolve_agy() -> str | None:
-    """Google Antigravity CLI (`agy`). Drives the browser on the owner flat Google
+    """Google Antigravity CLI (`agy`). Drives the browser on the owner's flat Google
     sub (no metered API key) — the agy analog of the codex/ChatGPT-sub path."""
     from shutil import which
     a = which("agy")
@@ -643,6 +650,60 @@ def _resolve_agy() -> str | None:
     if os.path.isfile(base) and os.access(base, os.X_OK):
         return base
     return None
+
+
+
+# agy/Gemini step-by-step + behavioral preamble (agy-only; claude/codex stream
+# natively and don't need it). Folded into the `-p` prompt in AgentRunner._run.
+# Extracted to a module constant so the directive text is unit-testable (#40b).
+_AGY_STEPWISE_DIRECTIVE = (
+                "WORK ONE STEP AT A TIME — DO NOT PLAN EVERYTHING UP FRONT. The user is "
+                "watching your steps stream live. Take exactly ONE browser action, wait "
+                "for its result, briefly note what you see, THEN decide the next single "
+                "action. Do NOT batch multiple tool calls into one turn or pre-plan the "
+                "whole sequence — that makes your trace dump out all at once at the end "
+                "instead of streaming. One action, observe, next action. Keep going until "
+                "the task is done.\n\n"
+                # CANVAS / GAME CLICKS: gemma defaults to selector-based
+                # browser_click, which finds NOTHING on a <canvas> game (RuneScape/OpenRSC,
+                # maps, drawing apps) — there are no DOM elements to select, so it stalls.
+                # claude/claude-b plays these fine because it uses coordinate clicks off a
+                # screenshot; gemma has the SAME tools (--caps vision) but picks the wrong
+                # one. Force the right behavior explicitly.
+                "CANVAS & GAME PAGES: if the page is a <canvas> game or visual app "
+                "(e.g. RuneScape/OpenRSC, a map, a drawing tool) there are NO clickable "
+                "DOM elements — selector/text clicks (browser_click) will find nothing. "
+                "You MUST: take a screenshot, find the target by its PIXEL location in the "
+                "image, then click with the COORDINATE tool (browser_mouse_click_xy / the "
+                "x,y click), NOT browser_click. Re-screenshot after each click to see the "
+                "result before the next one.\n\n"
+                # IFRAME COORDINATE-SPACE: the real bug behind gemma's
+                # "I clicked (405,785) but nothing changed, screen hasn't changed" loop on
+                # embedded games (247freepoker etc. run the game in an iframe). gemma was
+                # measuring the IFRAME's internal dimensions (e.g. 893x1131) and clicking in
+                # iframe-relative coords — but the coordinate-click tool fires at the TOP-LEVEL
+                # page viewport, so the clicks landed in the wrong place and never registered.
+                # sonnet doesn't do this — it reads coords straight off the screenshot. Tell
+                # gemma to do the same and STOP analyzing frame/canvas geometry.
+                "COORDINATES ARE SCREENSHOT PIXELS — NOTHING ELSE: the screenshot you receive "
+                "IS the full page at the exact pixel scale the click tool uses. To click "
+                "something, read its (x,y) DIRECTLY off that screenshot image and click those "
+                "same pixels. DO NOT measure or reason about iframe dimensions, canvas size, "
+                "frame offsets, or 'absolute positioning' — embedded games sit in an iframe but "
+                "the screenshot already shows them in page space, so iframe-relative coords are "
+                "WRONG and your click won't register. If a click doesn't change the screen, your "
+                "coordinates were off — re-read them off the latest screenshot and retry; do NOT "
+                "start analyzing the page's frame geometry.\n\n"
+
+                # LOOP-BREAK (#40b,): Flash/agy can fall into a run of
+                # pure-reasoning steps — re-describing the page instead of acting (the
+                # PDF-scroll overthink loop). There is no mid-run input channel to agy
+                # (stdin=DEVNULL), so this standing directive is the preventive half.
+                "DO NOT LOOP ON REASONING: if you notice you have taken several steps of "
+                "thinking/analysis in a row WITHOUT a browser action — e.g. re-describing "
+                "the same screen or re-reading the same content — STOP. Either take ONE "
+                "concrete action now, or if you already have enough to answer, give your "
+                "final answer/conclusion. Re-describing what you already see is not progress.\n\n")
 
 
 class AgentRunner:
@@ -675,7 +736,12 @@ class AgentRunner:
         self._session_ids: dict = {}      # bot -> last claude session id (resume)
         self._transcript: list = []
         self._last_bot: str | None = None
-        # governor token accounting — also reset per-run in _run()
+        # #40b: armed when a run trips the overthink-loop guard; the NEXT agy
+        # prompt prepends a loop-break nudge, then clears it (consume-once).
+        # Deliberately NOT reset in _run() (that's per-run state) — it must
+        # survive from the looping turn to the following one.
+        self._agy_loop_nudge_pending: bool = False
+        # governor (#34) token accounting — also reset per-run in _run()
         self._peak_in_tokens: int = 0
         self._tok_warned: bool = False
         self._cum_in_tokens: int = 0
@@ -746,7 +812,7 @@ class AgentRunner:
             self.started_ts = time.time()
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
-            self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
+            self.demo = bool(demo)   # demo=True → sandboxed: no squad context/identity
             # default the claude runtime to Sonnet 5 / medium when nothing was picked
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
@@ -788,7 +854,7 @@ class AgentRunner:
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
         self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
                                           # tool_calls, no content) — the "overthink loop"
-                                          # counter 
+                                          # counter
         self._agy_loop_warned = False    # one-shot stuck-in-a-loop warning per run
         self._stopped = False    # set by stop(); gates agy interrupt-noise suppression
         # Continuity: inject the shared transcript whenever this turn has NO live
@@ -933,7 +999,7 @@ class AgentRunner:
                 "IF YOU'RE STUCK, CHANGE TACK OR ESCALATE — don't loop. If you've tried a few different approaches to the same step and none worked, STOP repeating: step back and rethink (another route to the goal? a different page/menu/search? did an earlier step go wrong?), or if it's genuinely blocked, say so plainly and ask the user rather than burning turns flailing. Spinning on the same obstacle for many steps is worse than stopping and reporting what's blocking you.\n\n"
                 "USER REQUEST: " + task)
         env = dict(os.environ)
-        env["SQUAD_STORE_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["PATH"] = (os.path.expanduser("~/.local/bin") + ":"
                        + os.path.expanduser("~/.nvm/versions/node/v20.20.2/bin")
                        + ":" + env.get("PATH", ""))
@@ -943,16 +1009,16 @@ class AgentRunner:
             # codex exec: headless, JSONL events, ChatGPT-sub token (no API key).
             # Its ~/.codex/config.toml already wires the playwright MCP, so we just
             # exec it. `codex exec resume <thread_id>` threads context.
-            # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no tool/search/
+            # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no the data service/search/
             # plugins) -> browser is the agent's only tool, satisfying the sandbox spec.
             if getattr(self, "demo", False):
-                env["CODEX_HOME"] = os.path.expanduser(os.environ.get("OPERATOR_DEMO_CODEX_HOME", "~/.operator-sandbox/codex"))
+                env["CODEX_HOME"] = os.path.expanduser("~/operator-demo/codex")
             else:
                 env["CODEX_HOME"] = b["config_dir"]
             # PARITY: on the first turn of a gpt thread (no resume yet), prepend the same
-            # the app boot context the Claude bots get from their SessionStart hook. On
+            # host boot context the Claude bots get from their SessionStart hook. On
             # resumes, codex already threaded it — don't re-send (avoids per-turn bloat).
-            # (Kept full, not compressed: it's ~92% cached after turn 1, and the app/
+            # (Kept full, not compressed: it's ~92% cached after turn 1, and the host/
             # search/store awareness it gives the bot is worth the one-time cold cost.)
             _boot = "" if (resume_id or getattr(self, "demo", False)) else _squad_boot_context("gpt")
             _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
@@ -960,18 +1026,18 @@ class AgentRunner:
                       + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
                       + "\n\nTask: " + task)
             # DEMO: read-only sandbox (codex's own FS sandbox restricts the agent to its
-            # workspace — it CANNOT read ~/repos, ~/.claude, the app files). Non-demo keeps
+            # workspace — it CANNOT read ~/repos, ~/.claude, squad files). Non-demo keeps
             # the bypass (it's the owner's trusted local cockpit). The browser MCP runs as
             # a separate subprocess outside this sandbox, so browsing still works fully.
             if getattr(self, "demo", False):
                 # DEMO: run codex INSIDE a bwrap FS sandbox (sandbox.sh) — tmpfs over
-                # $HOME hides ~/repos, ~/.claude, ~/.codex, the app data; only the empty
+                # $HOME hides ~/repos, ~/.claude, ~/.codex, squad data; only the empty
                 # workspace + auth + browse module are bound. codex's built-in shell/file
-                # tools physically cannot reach owner/the app files. (-s read-only too, as
+                # tools physically cannot reach owner/squad files. (-s read-only too, as
                 # defense-in-depth; the real seal is the OS sandbox.) Verified can't read
                 # the host repo. The browser MCP it spawns inherits the sandbox but still
                 # reaches the isolated Chrome (network) + writes screenshots (bound dir).
-                _sandbox = os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_SCRIPT", "~/.operator-sandbox/sandbox.sh"))
+                _sandbox = os.path.expanduser("~/operator-demo/sandbox.sh")
                 cmd = ["bash", _sandbox, binpath, "exec", "--json",
                        "--skip-git-repo-check",
                        "--dangerously-bypass-approvals-and-sandbox"]
@@ -1031,7 +1097,7 @@ class AgentRunner:
             self._agy_brain_dir = os.path.join(b["config_dir"], "antigravity-cli", "brain")
             self._agy_traj_before = self._agy_snapshot_trajectories()
             # agy has no --append-system-prompt (a claude flag) — FOLD persona +
-            # the app self-context + task into the -p prompt (like the codex branch).
+            # host self-context + task into the -p prompt (like the codex branch).
             _boot = "" if getattr(self, "demo", False) else _squad_boot_context("gemma")
             _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
             # STEP-BY-STEP (agy/Gemini only): Flash one-shots its whole plan — it writes
@@ -1041,44 +1107,9 @@ class AgentRunner:
             # think->act->observe loop so the trajectory grows continuously and the 0.4s
             # live-poll surfaces each step in real time. claude/codex already stream
             # step-by-step, so this directive is agy-only.
-            _stepwise = (
-                "WORK ONE STEP AT A TIME — DO NOT PLAN EVERYTHING UP FRONT. The user is "
-                "watching your steps stream live. Take exactly ONE browser action, wait "
-                "for its result, briefly note what you see, THEN decide the next single "
-                "action. Do NOT batch multiple tool calls into one turn or pre-plan the "
-                "whole sequence — that makes your trace dump out all at once at the end "
-                "instead of streaming. One action, observe, next action. Keep going until "
-                "the task is done.\n\n"
-                # CANVAS / GAME CLICKS : gemma defaults to selector-based
-                # browser_click, which finds NOTHING on a <canvas> game (RuneScape/OpenRSC,
-                # maps, drawing apps) — there are no DOM elements to select, so it stalls.
-                # claude/claude-b plays these fine because it uses coordinate clicks off a
-                # screenshot; gemma has the SAME tools (--caps vision) but picks the wrong
-                # one. Force the right behavior explicitly.
-                "CANVAS & GAME PAGES: if the page is a <canvas> game or visual app "
-                "(e.g. RuneScape/OpenRSC, a map, a drawing tool) there are NO clickable "
-                "DOM elements — selector/text clicks (browser_click) will find nothing. "
-                "You MUST: take a screenshot, find the target by its PIXEL location in the "
-                "image, then click with the COORDINATE tool (browser_mouse_click_xy / the "
-                "x,y click), NOT browser_click. Re-screenshot after each click to see the "
-                "result before the next one.\n\n"
-                # IFRAME COORDINATE-SPACE : the real bug behind gemma's
-                # "I clicked (405,785) but nothing changed, screen hasn't changed" loop on
-                # embedded games (247freepoker etc. run the game in an iframe). gemma was
-                # measuring the IFRAME's internal dimensions (e.g. 893x1131) and clicking in
-                # iframe-relative coords — but the coordinate-click tool fires at the TOP-LEVEL
-                # page viewport, so the clicks landed in the wrong place and never registered.
-                # sonnet doesn't do this — it reads coords straight off the screenshot. Tell
-                # gemma to do the same and STOP analyzing frame/canvas geometry.
-                "COORDINATES ARE SCREENSHOT PIXELS — NOTHING ELSE: the screenshot you receive "
-                "IS the full page at the exact pixel scale the click tool uses. To click "
-                "something, read its (x,y) DIRECTLY off that screenshot image and click those "
-                "same pixels. DO NOT measure or reason about iframe dimensions, canvas size, "
-                "frame offsets, or 'absolute positioning' — embedded games sit in an iframe but "
-                "the screenshot already shows them in page space, so iframe-relative coords are "
-                "WRONG and your click won't register. If a click doesn't change the screen, your "
-                "coordinates were off — re-read them off the latest screenshot and retry; do NOT "
-                "start analyzing the page's frame geometry.\n\n")
+
+            _stepwise = _AGY_STEPWISE_DIRECTIVE
+            task = self._agy_apply_loop_nudge(task)  # #40b: nudge if last run looped
             prompt = (_persona
                       + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
                       + "\n\n" + _stepwise + "Task: " + task)
@@ -1119,7 +1150,7 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=(os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_WORKSPACE", "~/.operator-sandbox/workspace")) if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
+                cmd, cwd=(os.path.expanduser("~/operator-demo/workspace") if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             if self._runtime == "agy":
@@ -1259,7 +1290,7 @@ class AgentRunner:
     # `content` is pure scratch reasoning (agy "thinking out loud" without acting).
     # A long unbroken run of these is the stuck-in-a-loop pattern (#40, e.g. Flash
     # 3.5 re-describing a PDF instead of scrolling it). Warn once when the streak
-    # crosses this; never auto-kill the run .
+    # crosses this; never auto-kill the run.
     _AGY_LOOP_WARN_STREAK = 6   # consecutive no-progress planner steps
 
     def _note_token_usage(self, in_tokens) -> None:
@@ -1306,6 +1337,24 @@ class AgentRunner:
         # AFTER stop() — it clears handoff; the banner must survive the stop.
         self.handoff = {"reason": "Token cap auto-stop: " + reason,
                         "ts": time.time()}
+
+
+    def _agy_apply_loop_nudge(self, task: str) -> str:
+        """#40b reactive half: if the previous agy run tripped the overthink-loop
+        guard, prepend a one-shot nudge to THIS turn's task so the model is told
+        to act-or-answer rather than re-reason. Consume-once: clears the flag so
+        only the immediately-following turn is nudged. No-op when unarmed."""
+        if not getattr(self, "_agy_loop_nudge_pending", False):
+            return task
+        self._agy_loop_nudge_pending = False
+        nudge = (
+            "[Heads-up from the system: on the last turn you got stuck reasoning "
+            "in a loop — several steps in a row with no browser action, re-describing "
+            "what you already saw. This turn: take a concrete action immediately, or "
+            "if you already have enough to answer, just give the answer. Don't "
+            "re-describe the screen instead of acting.]\n\n"
+        )
+        return nudge + task
 
     def _consume_codex(self, evt: dict) -> None:
         """Parse one codex `exec --json` JSONL event into messages."""
@@ -1477,7 +1526,7 @@ class AgentRunner:
                         # impossible for raw thinking/work-summary text — including any
                         # checklist + file:// links — to become the user-visible reply if
                         # the turn ends (or is cut off mid-loop) before a real `content`
-                        # answer ever arrives .
+                        # answer ever arrives (/#40).
                         self.messages.append({"ts": time.time(), "role": "thinking",
                                               "text": _ck})
                 _had_tool_calls = bool(o.get("tool_calls"))
@@ -1577,6 +1626,7 @@ class AgentRunner:
                     if (self._agy_noprogress_streak >= self._AGY_LOOP_WARN_STREAK
                             and not self._agy_loop_warned):
                         self._agy_loop_warned = True
+                        self._agy_loop_nudge_pending = True  # #40b: nudge next turn
                         self.messages.append({"ts": time.time(), "role": "error",
                             "text": ("⚠️ This looks stuck in a loop — %d steps of reasoning "
                                       "in a row with no tool call or answer. Consider "

@@ -1,1268 +1,7 @@
 {% extends "_base.html" %}
 {% block title %}operator — host-app{% endblock %}
 {% block content %}
-<style>
-
-
-
-  /* ── Operator-style page: left conversation/steer rail + right live browser,
-     a live action-status line, and a full-window mode that hides the host-app
-     header . Dark the app tokens for cohesion. ── */
-  .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
-    --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
-    --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
-    --chat-font: 'Plus Jakarta Sans', sans-serif;   /* chat content font (settings) */
-    --live:#3fb950; --live-glow:rgba(63,185,80,.6);
-    --rail-w: minmax(248px, 300px);   /* allow a very narrow chat so the browser can maximize  */
-    display: grid; grid-template-columns: var(--rail-w) 1fr; gap: 0.7rem;
-    margin: 12px 0; box-sizing: border-box; position: relative;
-    height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 380px;
-    -webkit-user-select: none; user-select: none; }   /* app chrome: not selectable */
-  /* genuine TEXT content opts back in: chat bubbles, trace steps, input, title, disclaimer, URL */
-  .op .op-msg .bubble, .op .op-task-step, .op-input, .op-url, .op-title, .op-disclaimer,
-  .op-man-note {
-    -webkit-user-select: text; user-select: text; }
-
-  /* ── FLAT / HIGH-CONTRAST mode  ──────────────────────────────────────
-     A modifier on top of any theme (dark/midnight/light): strips gradients, glows,
-     and soft shadows for a clean modern flat look. Toggle: the contrast button. */
-  .op.op-flat { --glow: transparent; --live-glow: transparent; }
-  /* kill ALL soft shadows + glows across the cockpit chrome */
-  .op.op-flat *, .op.op-flat *::before, .op.op-flat *::after { box-shadow: none !important; }
-  /* the status dot: no glow in any state */
-  .op.op-flat .op-dot { box-shadow: none !important; }
-  /* flatten gradient fills → solid surfaces */
-  .op.op-flat .op-msg.bot .bubble { background: var(--bg-3) !important; }
-  .op.op-flat .op-msg.user .bubble { background: var(--bg-4) !important; }
-  .op.op-flat .op-action, .op.op-flat .op-rail, .op.op-flat .op-browser,
-  .op.op-flat .op-inputbox, .op.op-flat .op-head, .op.op-flat .op-mode {
-    background-image: none !important; }
-  /* focus ring glow on the input → a flat 1px accent border, no halo */
-  .op.op-flat .op-input:focus, .op.op-flat .op-finish-input:focus {
-    box-shadow: none !important; border-color: var(--accent) !important; }
-  /* the connecting/spinner ring + steered glow → no shadow (already covered by * rule) */
-  /* mark the toggle active */
-  .op.op-flat #op-flat { color: var(--accent); border-color: var(--accent); }
-  /* flat + DARK → near-pure black surfaces for true high contrast . data-theme lives
-     on an ancestor (body/html); default (no theme set) is dark, so flat goes black by
-     default and light theme overrides it back below. */
-  .op.op-flat {
-    --bg: #000; --bg-2: #060708; --bg-3: #0c0e11; --bg-4: #14171c;
-    --border: rgba(255,255,255,.10); --border-2: rgba(255,255,255,.14); }
-  .op.op-flat .op-rail, .op.op-flat .op-browser, .op.op-flat .op-tabs { background: #000 !important; backdrop-filter: none !important; }
-  [data-theme="light"] .op.op-flat {
-    --bg: #eef1f5; --bg-2: #e4e8ee; --bg-3: #dde2e9; --bg-4: #d3d9e2;
-    --border: rgba(0,0,0,.14); --border-2: rgba(0,0,0,.20); }
-  [data-theme="light"] .op.op-flat .op-rail, [data-theme="light"] .op.op-flat .op-browser, [data-theme="light"] .op.op-flat .op-tabs { background: #eef1f5 !important; backdrop-filter: none !important; }
-  /* default (non-flat) dark: the site-wide surfaces read a touch light for an
-     app chrome — pull each operator surface one notch darker.
-     Same specificity as the [data-theme=light] .op override further down, which
-     comes LATER in the file, so light mode still wins there. */
-  .op:not(.op-flat) { --bg: #050609; --bg-2: #0b0d11; --bg-3: #12141a; --bg-4: #1a1d24; }
-
-  /* operator is a computer UI — lock the PAGE from scrolling (no rubber-band,
-     no scroll-past-bottom). Only inner regions (.op-log, .op-stage) scroll. */
-  /* page scroll-lock applies on desktop/tablet only — phones scroll normally so the
-     chat isn't trapped at a tiny height (option 3). The browser stage never scrolls
-     regardless (its own touch-action:none). */
-  @media (min-width: 821px) {
-    html.op-locked, body.op-locked { overflow: hidden !important; height: 100%;
-      overscroll-behavior: none; }
-  }
-  /* the page becomes a viewport-tall column: header (natural height) + .wrap fills
-     the rest; .op fills .wrap. So .op's bottom always lands ON the viewport edge,
-     never past it — no clipped bottom border, on any header height / device. */
-  @media (min-width: 821px) {
-    body.op-locked { display: flex; flex-direction: column; height: 100dvh;
-      min-height: 100dvh; width: 100vw; max-width: 100vw; overflow-x: hidden; }
-    body.op-locked > header, body.op-locked > header.site { flex: 0 0 auto; }
-    /* Header is UNIFIED with the rest of the host-app UI : the
-       Operator page used to shrink it (smaller padding/fonts) to sit proportionate
-       to the compact Operator UI, but that made navigating between Operator and other
-       pages jarring. We now inherit the shared header.site size verbatim — only the
-       margin below it is trimmed since the op grid sits right under it. */
-    body.op-locked header.site { margin-bottom: 0.6rem; }
-    body.op-locked header.site .nav-caret { font-size: 0.66em; }
-    body.op-locked .wrap { flex: 1 1 auto; min-height: 0; min-width: 0;
-      width: 100%; max-width: 100%; overflow: hidden;
-      padding-top: 12px; padding-bottom: 9px !important; display: flex; flex-direction: column; }
-    body.op-locked main, body.op-locked .container { overflow: hidden;
-      flex: 1 1 auto; min-height: 0; min-width: 0; width: 100%; max-width: 100%;
-      margin: 0 !important; padding-bottom: 0 !important;   /* no extra bottom gap below the op grid */
-      display: flex; flex-direction: column; }
-    body.op-locked .op { flex: 1 1 auto; min-height: 0; min-width: 0;
-      width: 100%; max-width: 100%; height: auto !important; margin: 0 !important; }
-  }
-
-  /* full-window: hide the site header + let the operator page own the viewport */
-  body.op-full header.site { display: none !important; }
-  body.op-full main, body.op-full .container, body.op-full .wrap {
-    max-width: none !important; margin: 0 !important; padding: 0 !important; }
-  body.op-full { overflow: hidden; background: #0c0e13; }   /* page bg behind the operator (covers any edge gap) */
-  body.op-full:has(.op-flat) { background: #000; }          /* flat fullscreen → pitch black edge-to-edge  */
-  body.op-full .op { position: fixed; inset: 0; height: 100vh; height: 100dvh; width: 100vw;
-    box-sizing: border-box; border-radius: 0; gap: 10px; padding: 10px; background: var(--bg); z-index: 50;
-    box-sizing: border-box; overflow: hidden; }
-  body.op-full .op.op-flat { background: #000; }   /* the operator surface itself, flat fullscreen */
-  body.op-full .op-rail, body.op-full .op-browser { border-radius: 10px; }
-
-  /* ── LEFT RAIL ─────────────────────────────────────────────── */
-  .op-rail { grid-column: 1; grid-row: 1; position: relative; display: flex; flex-direction: column; gap: 0.28rem; min-width: 248px;
-    container-type: inline-size; container-name: rail;
-    min-height: 0; overflow: hidden;   /* enforce grid track → chat log scrolls, box stays fixed */
-    background: var(--bg-2); border: 1px solid var(--border-2);
-    background-clip: padding-box;   /* solid fill (no gradient) + padding-box clip → no corner seam/spill  */
-    border-radius: 16px; padding: 0.7rem; }
-  .op-head { display: flex; align-items: center; gap: 0.22rem; margin-top: -1.5px; }   /* tight so all controls fit one row  */
-  /* As the chat rail narrows (user drags it small to maximize the browser), shed
-     header chrome so all controls stay on one row instead of clipping. */
-  @container rail (max-width: 304px) {
-    .op-head { gap: 0.16rem; }
-    .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }   /* tighten MAN/AUTO labels */
-    .op-fontpill button { width: 17px; }
-  }
-  @container rail (max-width: 273px) {
-    /* shrink the Operator+version unit to nothing (scale, not clip — so no letter gets chopped mid-word) */
-    .op-head .op-titlewrap { transform: scale(0); max-width: 0; opacity: 0; margin-right: 0; margin-left: 0; }
-    .op-head .op-mode { margin-left: 8px; }   /* keep a gap from the status dot once the wordmark is gone */
-  }
-  /* trash + contrast + fullscreen: inline group, pushed right. Sized small so all five
-     controls fit one row  without crushing — never collapse/wrap. */
-  #op-clear { margin-left: auto; }   /* push the icon group to the right edge */
-  /* nudge the trash glyph up + right a hair to center it optically in its box */
-  #op-clear svg { display: block; transform: translate(0.3px, 0px); transform-origin: center; }   /* nudged left 0.25  */
-  #op-flat svg { display: block; transform: translate(-0.25px, 0.5px); transform-origin: center; }   /* contrast: down + left  */
-  #op-full { transform: translate(0.75px, 0.75px); }   /* fullscreen glyph: down + right  */
-  /* no hover zoom — just a smooth shake on clear. keyframes KEEP the base translate so
-     the can doesn't drift lower-left, and rotate around its own center. */
-  #op-clear.op-clearing svg { animation: op-trash-shake .5s ease-in-out; }
-  @keyframes op-trash-shake {
-    0%   { transform: translate(0.3px,-0.5px) rotate(0deg); }
-    20%  { transform: translate(0.3px,-0.5px) rotate(-9deg); }
-    40%  { transform: translate(0.3px,-0.5px) rotate(7deg); }
-    60%  { transform: translate(0.3px,-0.5px) rotate(-5deg); }
-    80%  { transform: translate(0.3px,-0.5px) rotate(3deg); }
-    100% { transform: translate(0.3px,-0.5px) rotate(0deg); } }
-  .op-titlewrap { display: inline-flex; flex-direction: column; justify-content: center;
-    line-height: 1.1; margin-left: 2px; margin-right: 0.15rem; margin-top: -2px; position: relative; z-index: 0;
-    transform-origin: left center;
-    transition: max-width .3s cubic-bezier(.2,1,.3,1), transform .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .24s ease; max-width: 240px;
-    min-width: 0; overflow: hidden; }   /* tight header (low zoom): clip the wordmark instead of letting the MAN/AUTO pill paint over the version */
-  .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
-    opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
-  .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans',sans-serif; color: var(--fg);
-    letter-spacing: -.01em; margin-right: 0.15rem; white-space: nowrap; }
-  .op-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex:0 0 auto;
-    transition: background .3s, box-shadow .3s; }
-  .op-dot { transition: background .35s ease, box-shadow .35s ease; }
-  .op[data-state="live"] .op-dot { background: var(--live); box-shadow: 0 0 7px var(--live-glow); }
-  .op[data-state="hung"] .op-dot { background: #d2a30f; box-shadow: 0 0 7px rgba(210,163,15,.6); }
-  .op[data-state="connecting"] .op-dot { background: #d2a30f; }
-  .op[data-state="error"] .op-dot { background: var(--bad); box-shadow: 0 0 7px rgba(248,81,73,.55); }
-  /* segmented MAN/AUTO toggle: a single thumb slides between the two + crossfades
-     color (orange MAN ⇄ green AUTO). No pop/scale jank. */
-  .op-mode { position: relative; display: inline-flex; align-items: stretch; flex: 0 0 auto;
-    border: 1px solid var(--border-2); border-radius: 8px; overflow: hidden;
-    margin-left: 0; margin-right: 0.4rem; margin-top: 0.75px; transform: translateX(-1px); align-self: center; background: var(--bg); isolation: isolate; position: relative; z-index: 2; transition: margin-left .3s cubic-bezier(.2,1,.3,1); }
-  .op-mode-thumb { position: absolute; top: 0; bottom: 0; left: 0; width: 50%; z-index: 0;
-    border-radius: 7px; background: #f0883e;
-    transition: transform .32s cubic-bezier(.5,1.25,.4,1), background-color .28s ease; }
-  .op-mode.op-mode-noanim .op-mode-thumb { transition: none; }   /* no slide on restore */
-  .op-mode.op-mode-noanim .op-mode-btn { transition: none; }
-  .op-mode[data-mode="auto"] .op-mode-thumb { transform: translateX(100%); background: #3fb950; }
-  .op-mode-btn { position: relative; z-index: 1; background: transparent; border: none; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; flex: 1 1 0;
-    font: 700 0.55rem/1 'Plus Jakarta Sans', sans-serif; letter-spacing: .015em; padding: 0.3rem 0.34rem;
-    color: var(--muted); transition: color .26s ease; }
-  /* active label reads against its thumb color */
-  .op-mode[data-mode="man"] .op-mode-btn[data-mode="man"] { color: #2a1402; }
-  .op-mode[data-mode="auto"] .op-mode-btn[data-mode="auto"] { color: #062611; }
-  .op-mode-btn { text-indent: 2.5px; }   /* nudge MAN/AUTO labels right (text only) */   /* labels centered, no rightward shove */
-  .op-mode-btn:hover { background: transparent; }   /* kill the global button:hover gray pill */
-  .op-mode-btn:not(.active):hover { color: var(--fg-2); background: transparent; }
-  /* the caret slot becomes a compact bot <select> in AUTO */
-  /* bot picker: closed shows just 🤖 (overlay); dropdown shows full names. The
-     select's own text is transparent so the row never reads "🤖 claude-a". */
-  .op-pick-wrap { margin-left: auto; position: relative; flex: 0 0 auto; display: inline-flex; }
-  .op-pick-face { position: absolute; left: calc(50% + 0.75px); top: calc(50% - 0.5px);
-    transform: translate(-50%,-50%); font-size: 0.82rem; pointer-events: none; }
-  .op-pick-face svg { position: relative; left: -0.75px; }   /* nudge gemma's Gemini logo  */
-  select.op-action-caret { background: var(--bg-3); color: transparent;
-    -webkit-appearance: none; appearance: none;
-    border: 1px solid var(--border-2); border-radius: 7px; font: 600 0.82rem/1.4 'Plus Jakarta Sans',sans-serif;
-    width: 2.1em; padding: 0.3rem 0.5rem; cursor: pointer; }   /* no dropdown arrow — the whole chip is the picker */
-  select.op-action-caret option { color: var(--fg); background: var(--bg-2); }   /* names visible in popup */
-  select.op-action-caret:focus { outline: none; border-color: var(--accent); }
-  /* highlight the bot picker on hover so it reads as the interactive driver button */
-  select.op-action-caret { transition: border-color .18s ease, background .18s ease, box-shadow .18s ease; }
-  select.op-action-caret:hover { border-color: var(--accent); background: var(--bg-2);
-    box-shadow: 0 0 0 2px rgba(120,160,255,.16); }
-  .op-rail { position: relative; }   /* anchor for the settings popover */
-  .op-settings { position: fixed; z-index: 200;
-    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
-    padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.5rem;
-    box-shadow: 0 8px 24px -8px rgba(0,0,0,.6); min-width: 170px; }
-  .op-set-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
-    font: 600 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); }
-  .op-pt { font: 700 0.6rem/1 'JetBrains Mono', monospace; color: var(--live);
-    flex: 0 0 auto; min-width: 2.4em; text-align: right; }
-  .op-set-row input[type=range] { flex: 1 1 auto; accent-color: var(--accent); }
-  .op-set-row select { background: var(--bg-3); color: var(--fg); border: 1px solid var(--border-2);
-    border-radius: 6px; padding: 0.15rem 0.3rem; font: 500 0.66rem/1 'Plus Jakarta Sans', sans-serif; cursor: pointer; }
-  .op-fontpill { display: inline-flex; align-items: stretch; border: 1px solid var(--border-2);
-    border-radius: 8px; overflow: hidden; height: 20px; align-self: center; flex: 0 0 auto; }   /* same height as MAN/AUTO + right icons */
-  .op-fontpill button { background: transparent; border: none; color: var(--fg-2); cursor: pointer;
-    font: 500 0.84rem/1 'Plus Jakarta Sans', sans-serif; width: 19px; height: 100%; padding: 0; margin: 0;
-    display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
-  .op-fontpill button { transform: translate(0px, -1.5px); }   /* up 1px, left 0.5px per the owner eye */
-  .op-fontpill button:hover { background: var(--bg-3); color: var(--fg); }
-  .op-fontpill button:active { background: var(--bg-4); }
-  .op-fontpill-sep { width: 1px; flex: 0 0 1px; align-self: stretch; background: var(--border); }
-  .op-iconbtn { width: 20px; height: 20px; min-width: 20px; display: inline-flex; align-items: center;
-    justify-content: center; padding: 0 !important; font-size: 0.92rem !important; line-height: 1; flex: 0 0 auto; }   /* smaller  */
-  .op-full-btn { background: var(--bg-3); border: 1px solid var(--border-2);
-    color: var(--fg-2); border-radius: 8px; padding: 0.32rem 0.55rem; cursor: pointer; flex: 0 0 auto;
-    font: 500 0.72rem/1 'JetBrains Mono', monospace; transition: all .15s; }
-  .op-full-btn:hover { background: var(--bg-4); color: var(--accent); border-color: rgba(184,192,204,.45); }
-
-  /* live action status — the "Clicking… / Typing…" Operator indicator */
-  .op-action { width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 0.55rem;
-    transition: border-color .2s ease, background .2s ease, padding .25s cubic-bezier(.2,1,.3,1), height .25s cubic-bezier(.2,1,.3,1), width .25s cubic-bezier(.2,1,.3,1);
-    background: var(--bg); border: 1px solid var(--border-2); border-radius: 11px;
-    padding: 0.7rem 0.85rem; min-height: 46px; }
-  .op-status-min { flex: 0 0 auto; margin-left: 0.1rem; color: var(--muted); display: inline-flex;
-    align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; }
-  .op-status-min {
-    transition: color .14s, background .14s, transform .25s; }
-  .op-status-min:hover { color: var(--fg); background: var(--bg-3); }
-  /* .op-action is a <button>; kill the global button:hover gray bleed (it sticks
-     on touch after you tap to expand, turning the pill gray). Keep its own bg. */
-  .op-action:hover, .op-action:focus { background: var(--bg); }
-  /* collapsed: the card shrinks to a slim pill — just the live dot + the caret (now an
-     expand chevron). text + picker hide. one click on the caret brings it back. */
-  .op[data-status-min="1"] .op-action { padding: 0 0.5rem 0 0.5rem; height: 32px; min-height: 32px;
-    gap: 0.55rem; width: auto; align-self: flex-start; display: flex; align-items: center; }
-  @media (min-width: 821px) { .op[data-status-min="1"] .op-action { gap: 0.32rem; } }   /* desktop: tighter minimized-pill gap; mobile keeps 0.55 (works as-is) */   /* tighter gap for the minimized pill  */
-  .op-action > div { transition: opacity .18s ease; }
-  .op[data-status-min="1"] .op-action > div { opacity: 0; width: 0; overflow: hidden; pointer-events: none; }
-  /* minimized: float the pill top-left so the rest of its row is transparent and the
-     message log reclaims the full width underneath it . */
-  .op[data-status-min="1"] .op-action { position: absolute; top: 36px; left: 0.7rem; z-index: 8; width: auto; }   /* small gap below the header  */   /* float just below the header row */
-  .op[data-status-min="1"] .op-log { padding-top: 40px; }
-  .op[data-status-min="1"] .op-man-note { margin-top: 36px; }   /* +4px buffer so the man-note isn't stuck under the pill  — matches the v0.6.5 gap */   /* clear the floating minimized pill */
-  .op[data-status-min="1"] .op-pick-wrap { display: none !important; }
-  .op-status-min { transform: rotate(180deg); }                       /* expanded: caret up */
-  .op[data-status-min="1"] .op-status-min { transform: rotate(0deg); margin-left: 0; }   /* minimized: caret down */
-  /* ring stays full size when minimized */
-  .op-action-ico { width: 18px; height: 18px; flex: 0 0 auto; position: relative; }
-  .op-action-ico::before { content:""; position:absolute; inset:0; border-radius:50%;
-    border: 2px solid var(--border-2);
-    transition: border-color .3s cubic-bezier(.4,0,.2,1), box-shadow .3s ease; }
-  .op[data-busy="1"] .op-action-ico::before {
-    border: 2px solid color-mix(in srgb, var(--live) 35%, transparent); border-top-color: var(--live);
-    box-shadow: 0 0 6px -2px var(--live);   /* soft modern glow on the active ring */
-    animation: op-spin .8s cubic-bezier(.65,.05,.36,1) infinite; }
-  /* CONNECTING → yellow spinning ring (not green), even while busy=1 on cold start  */
-  .op[data-state="connecting"]:not(.op-signal-lost) .op-action-ico::before {
-    border: 2px solid #d2a30f !important; border-top-color: #f0cf6a !important;
-    animation: op-spin .85s cubic-bezier(.65,.05,.36,1) infinite !important; }
-  .op[data-mode="man"] .op-action-ico::before { border-color: #f0883e !important;
-    transition: border-color .3s ease; }
-  .op[data-state="live"]:not([data-busy="1"]) .op-action-ico::before {
-    border-color: var(--live); }
-  /* connecting/idle (not yet live, not busy): spin the gray ring like the others */
-  .op[data-state="connecting"]:not([data-busy="1"]):not(.op-signal-lost) .op-action-ico::before,
-  .op[data-state="idle"]:not([data-busy="1"]):not([data-agent="done"]):not(.op-signal-lost) .op-action-ico::before {
-    border: 2px solid var(--border-2); border-top-color: var(--fg-2);
-    animation: op-spin .85s cubic-bezier(.65,.05,.36,1) infinite; }
-  /* SIGNAL LOST stays a static ring (no spin) — the triangle overlay is the indicator */
-  .op.op-signal-lost .op-action-ico::before { animation: none; }
-  @keyframes op-spin{
-    0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
-  /* modern indeterminate feel: ease-in-out rotation (subtle accel/decel each turn). */
-  /* animated checkmark when a task completes — a centered ✓ glyph */
-  .op-action-ico::after { content: ""; position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--live); font: 700 12px/1 'Plus Jakarta Sans', sans-serif;
-    transform: translate(0.5px, 0px) scale(0); opacity: 0; transition: none; }
-  .op[data-agent="done"] .op-action-ico::before { border-color: var(--live); }
-  .op[data-mode="man"] .op-action-ico::after { content: none !important; }   /* manual: never a checkmark */
-  .op[data-agent="done"]:not([data-mode="man"]) .op-action-ico::after { content: "\2713";
-    animation: op-check .35s cubic-bezier(.2,1.2,.4,1) forwards; }
-  @keyframes op-check { 0%{transform:translate(0.5px,0px) scale(0);opacity:0}
-    60%{transform:translate(0.5px,0px) scale(1.18);opacity:1} 100%{transform:translate(0.5px,0px) scale(1);opacity:1} }
-  /* errored: red ring + an animated ✕ instead of the checkmark */
-  .op[data-agent="errored"] .op-action-ico::before { border-color: var(--bad) !important; animation: none; }
-  .op[data-agent="errored"] .op-action-ico::after { content: none !important;   /* no X — just the red ring */
-    content: "\2715"; left: 0; top: 0; width: 18px; height: 18px; border: none;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--bad); font: 700 11px/1 'Plus Jakarta Sans', sans-serif;
-    transform: translate(-1px,-1px) scale(0); opacity: 0;
-    animation: op-x .3s cubic-bezier(.2,1.2,.4,1) forwards; }
-  @keyframes op-x { 0%{transform:translate(-1px,-1px) scale(0);opacity:0}
-    60%{transform:translate(-1px,-1px) scale(1.2);opacity:1} 100%{transform:translate(-1px,-1px) scale(1);opacity:1} }
-  /* a FAILED steer action (click/type rejected) → flash the ring red + pulse so
-     the failure is felt, not just read. Transient class cleared by settleAction. */
-  .op.op-act-failed .op-action-ico::before {
-    border-color: var(--bad) !important; animation: op-fail-pulse .5s ease-out 1 !important; }
-  @keyframes op-fail-pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(229,83,75,.55); transform: scale(1); }
-    45%  { box-shadow: 0 0 0 5px rgba(229,83,75,0);  transform: scale(1.12); }
-    100% { box-shadow: 0 0 0 0 rgba(229,83,75,0);    transform: scale(1); } }
-  /* stopped (hand-off): just an amber ring — no glyph inside .
-     distinct from done(✓ green ring)/errored(✕ red ring). */
-  .op[data-agent="stopped"] .op-action-ico::before { border-color: #f5a04a !important; animation: none; }
-  .op[data-agent="stopped"] .op-action-ico::after { content: none !important; }
-  /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
-  .op-action-body { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
-  .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans',sans-serif; color: var(--fg); }   /* status verb (Working/Ready) down half a notch : 0.86->0.80 */   /* FIXED size — status card is not −/+ controlled (chat only); mobile peek has its own scale */
-  .op-action-sub { transition: color .25s ease; }
-  /* tool-call / status text changes animate in like the chat bubbles do */
-  .op-action-txt.op-card-swap { animation: op-card-in .4s cubic-bezier(.22,1,.36,1); }
-  .op-action-sub.op-card-swap { animation: op-sub-cycle .34s cubic-bezier(.22,1,.36,1); }
-  .op-action-sub .sub-bot { font-weight: 700; color: var(--fg); }
-  .op-action-sub .sub-emo { font-size: 1.05em; vertical-align: -1px; }
-  @keyframes op-sub-in { from{opacity:0;transform:translateY(2px)} to{opacity:1;transform:none} }
-  /* clearer action-cycle transition: brief blur + rise so browsing→reading reads as a change */
-  @keyframes op-sub-cycle { 0%{opacity:0;transform:translateY(3px);filter:blur(1px)}
-    50%{opacity:1} 100%{opacity:1;transform:none;filter:blur(0)} }
-  @keyframes op-card-in {
-    0%{opacity:0;transform:translateY(4px);filter:blur(1.5px)}
-    40%{opacity:1}
-    100%{opacity:1;transform:none;filter:blur(0)} }
-  .op-man-head { display: flex; align-items: center; gap: 0.34rem;
-    font: 700 0.7rem/1.3 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); margin-bottom: 0.18rem; }
-  .op-man-head .op-warn { flex: 0 0 auto; display: block; }
-  .op-man-line { font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif; color: var(--muted); }
-  .op-man-note:not([hidden]) { animation: op-man-in .34s cubic-bezier(.16,1,.3,1); }
-  @keyframes op-man-in { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
-  .op-man-note { margin: 0.35rem 0.1rem 0; font: 500 0.6rem/1.4 'Plus Jakarta Sans', sans-serif;
-    color: var(--muted); padding: 0.4rem 0.55rem; background: var(--bg-2);
-    border: 1px solid var(--border); border-radius: 8px; }
-  /* Demonstration-mode card — same shape as the Manual-mode card; demo only (.op-demo). */
-  .op-demo-note { margin: 0.35rem 0.1rem 0.1rem; padding: 0.4rem 0.55rem; background: var(--bg-2);
-    border: 1px solid var(--border); border-radius: 8px; }
-  .op-demo-note .op-man-head { color: var(--fg); }
-  .op-demo-note .op-man-line { margin-top: 0.15rem; }
-  #op-demo-note { display: none; }
-  .op-demo #op-demo-note { display: block; }
-  .op:has(#op-man-note:not([hidden])) #op-demo-note { display: none; }   /* hide demo card while the Manual-mode card is up  */
-  .op:has(.op-log:not(:empty)) #op-demo-note { display: none; }   /* clear the demo card once the conversation starts  */
-  .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
-  .op-inputbox.disabled .op-input { cursor: not-allowed; }
-  .op-action-sub { font: 500 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
-    margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* FIXED size (not −/+ controlled); +1px baseline-align with "Working" */
-
-  /* wrap is the flex slot; log scrolls inside it; jump-button floats over it */
-  .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  /* "Jump to bottom" live pill — rises from above the input when scrolled up; red dot = feed is live. */
-  /* "Jump to present" pill — filled red, fast-forward glyph, rises from above the input. */
-  .op-jump { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%) translateY(8px);
-    height: 19px; padding: 0 0.5rem 0 0.4rem; border-radius: 999px; cursor: pointer;
-    background: var(--bad); color: #fff; border: 1px solid var(--bad);
-    display: inline-flex; align-items: center; gap: 0.24rem; white-space: nowrap;
-    font: 600 0.6rem/1 'Plus Jakarta Sans', sans-serif;
-    box-shadow: none; z-index: 6;
-    opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
-  .op-jump-ff { flex: 0 0 auto; width: 10px !important; height: 10px !important; }   /* ▶▶ filled fast-forward */
-  .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
-  .op-jump:hover { background: #e5484d; border-color: #e5484d; }   /* stay red on hover, no gray, no glow */
-  /* conversation log — flex-grows, scrolls */
-  .op-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
-    display: flex; flex-direction: column; gap: 0.4rem; padding: 0.05rem 0.1rem; }
-  .op-log:empty { padding-top: 0; }
-  .op[data-mode="man"] .op-log:empty::after { content: none; }
-  /* manual mode: dim the conversation (it's preserved, just inactive) — lighter than
-     the disabled-input wash so it still reads */
-  .op[data-mode="man"] .op-log { opacity: 0.5; filter: grayscale(0.35);
-    transition: opacity .3s ease, filter .3s ease; pointer-events: none; }
-  .op-log { transition: opacity .3s ease, filter .3s ease; }
-  .op-log:empty::after { content: "Type a message, or use the browser to steer Operator. Tip: type / for saved tasks.";
-    color: var(--muted); font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif;
-    padding: 0; margin: 0; letter-spacing: -.003em; }
-  /* demo has no saved tasks (routes 404, palette hidden) — keep its copy tip-free */
-  .op-demo .op-log:empty::after { content: "Type a message, or use the browser to steer Operator."; }
-
-  .op-msg { animation: op-msg-in .42s cubic-bezier(.16,1,.3,1); }
-  @keyframes op-msg-in{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:none}}
-  .op-msg .bubble { animation: op-bubble-in .42s cubic-bezier(.16,1,.3,1); transform-origin: bottom; }
-  @keyframes op-bubble-in{from{opacity:0;transform:translateY(6px) scale(.96)}to{opacity:1;transform:none}}
-  /* smooth clear: messages fade + collapse up before the log empties */
-  .op-log.op-clearing .op-msg, .op-log.op-clearing .op-task {
-    animation: op-msg-out .32s cubic-bezier(.5,0,.75,0) forwards; }
-  @keyframes op-msg-out { to { opacity: 0; transform: translateY(-8px) scale(.97);
-    max-height: 0; margin: 0; padding-top: 0; padding-bottom: 0; } }
-  /* user command → right-aligned gray bubble (Operator style), no label */
-  .op-msg.user { display: flex; flex-direction: column; align-items: flex-end; margin: 0.5rem 0 0.3rem; }
-  .op-msg.bot { display: flex; flex-direction: column; align-items: flex-start; }
-  .op-msg .bubble { order: 0; }
-  .op-msg .op-msg-meta { order: 1; }
-  /* meta row under each bubble: actions (slide out to the left) + timestamp (bottom corner) */
-  .op-msg-meta { display: flex; align-items: center; gap: 0.3rem; height: 0; overflow: hidden;
-    margin-top: 0; opacity: 0; transition: height .22s cubic-bezier(.2,1,.3,1), opacity .2s ease, margin-top .22s ease; }
-  .op-msg:hover .op-msg-meta { height: 20px; opacity: 1; margin-top: 0.18rem; }
-  .op-msg-time { font: 500 calc(0.56rem * var(--chat-scale))/1 'Plus Jakarta Sans', sans-serif;
-    color: var(--muted); white-space: nowrap; flex: 0 0 auto; }
-  /* actions slide in from / out to the LEFT (space-saving) */
-  .op-msg-acts { display: inline-flex; gap: 0.15rem; transform: translateX(8px); opacity: 0;
-    transition: transform .22s cubic-bezier(.2,1,.3,1), opacity .2s ease; }
-  .op-msg.user.op-last-user:hover .op-msg-acts { transform: none; opacity: 1; }
-  .op-msg.user:not(.op-last-user) .op-msg-acts, .op-msg.bot .op-msg-acts { display: none; }
-  .op-msg-act { background: transparent; border: 1px solid var(--border-2); color: var(--muted);
-    width: 22px; height: 22px; border-radius: 6px; cursor: pointer; display: inline-flex;
-    align-items: center; justify-content: center; transition: all .14s; }
-  .op-msg-act:hover { color: var(--fg); border-color: var(--accent); background: var(--bg-3); }
-  .op-msg-act svg { display: block; }
-  .op-msg.user .bubble { background: var(--bg-4); color: var(--fg);
-    border-radius: 14px 14px 5px 14px; padding: 0.52rem 0.78rem; max-width: 85%;
-    font: 500 calc(0.78rem * var(--chat-scale))/1.45 var(--chat-font); letter-spacing:-.005em;
-    box-shadow: 0 1px 2px rgba(0,0,0,.25); white-space: pre-wrap; word-break: break-word; }
-  /* agent step → small muted line (Navigating… / Clicking… / Navigated · Google) */
-  .op-msg.step { padding: 0.12rem 0.2rem; font-size: 0.66rem; }
-  .op-msg.step .body { color: var(--muted) !important;
-    font: 600 0.66rem/1.4 'Plus Jakarta Sans', sans-serif !important; letter-spacing: -.002em; }
-  /* bot's actual reply to you → a left speech bubble (vs the muted step lines) */
-  .op-msg.bot { display: flex; justify-content: flex-start; margin: 0.4rem 0 0.3rem; }
-  .op-msg.bot .bubble { background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
-    color: var(--fg); border: 1px solid var(--border);
-    border-radius: 14px 14px 14px 5px; padding: 0.55rem 0.8rem; max-width: 88%;
-    font: 500 calc(0.78rem * var(--chat-scale))/1.5 var(--chat-font); letter-spacing:-.005em;
-    box-shadow: 0 2px 8px -3px rgba(0,0,0,.4); white-space: pre-wrap; word-break: break-word; }
-  .op-msg.step .body { color: var(--muted) !important;
-    font: 600 0.66rem/1.4 'Plus Jakarta Sans',sans-serif !important; letter-spacing:-.002em; }
-  .op-msg.step.err .body { color: var(--bad); }
-  /* code: darker, theme-aware (adapts to dark/midnight/light via the bg/border vars) */
-  .op-msg.bot .bubble code, .op-msg.bot .bubble pre {
-    background: var(--op-code-bg); border: 1px solid var(--op-code-bd); border-radius: 5px;
-    padding: 0.06rem 0.32rem; color: var(--op-code-fg);
-    font: 500 calc(0.66rem * var(--chat-scale))/1.3 'JetBrains Mono', monospace; }   /* down a notch : 0.7→0.66 */
-  .op-md-h { font-weight: 700; color: var(--fg); margin: 0.2rem 0 0.1rem; line-height: 1.25; }
-  .op-md-h1 { font-size: 1.05em; } .op-md-h2 { font-size: 1em; } .op-md-h3 { font-size: 0.95em; }
-  .op-md-h4, .op-md-h5, .op-md-h6 { font-size: 0.9em; color: var(--fg-2); }
-  .op-md-img { max-width: 100%; border-radius: 6px; margin: 0.15rem 0; display: block; }
-  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.1rem 0; overflow-x: auto; white-space: pre; line-height: 1.3; position: relative; }
-  .op-msg.bot .bubble pre code { background: none; border: none; padding: 0; }   /* no double box */
-  /* code-block copy button: top-right, hover-reveal, theme-safe */
-  .op-copy { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
-    display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
-    background: var(--bg-2); color: var(--muted); border: 1px solid var(--op-code-bd);
-    border-radius: 5px; padding: 0; opacity: 0.5; z-index: 3;   /* ALWAYS visible (don't gate on hover — iPad reports hover:hover and a tap can't trigger it, hiding the button) */
-    pointer-events: auto; touch-action: manipulation;
-    transition: none; }   /* no hover animation  — state changes are instant */
-  .op-msg.bot .bubble pre:hover .op-copy { opacity: 0.95; }
-  .op-copy:hover { color: var(--fg); border-color: var(--accent); }
-  .op-copy:active { opacity: 1; }
-  .op-copy.copied { opacity: 1; color: var(--live); border-color: var(--live); }
-  .op-copy svg { display: block; width: 10px; height: 10px; }
-  .op-msg.bot .bubble strong { font-weight: 700; }
-  .op-msg.bot .bubble a { color: var(--accent); text-decoration: underline; }
-  .op-msg.bot .bubble ul { margin: 0.2rem 0 0.2rem 0; padding-left: 1.1rem; }
-  .op-msg.bot .bubble li { margin: 0.1rem 0; }
-  .op-msg.bot .bubble div + div { margin-top: 0.15rem; }
-
-  /* ── hand-off: "Operator needs your input" card — sleek, theme-safe ──
-     subtle fill, hairline border, a thin amber left band (the "stopped" accent),
-     a small CSS stop-square dot for the head (no emoji), and a ghost/outline
-     Take-control pill (modern, light-weight — not a heavy filled block). */
-  .op-handoff { margin: 0.5rem 0 0.45rem; padding: 0.62rem 0.75rem 0.66rem 0.8rem;
-    background: var(--bg-2); border: 1px solid var(--border);
-    border-left: 2px solid #f5a04a; border-radius: 12px;   /* warmer orange band */
-    display: flex; flex-direction: column; gap: 0.5rem;
-    box-shadow: 0 1px 10px -6px rgba(0,0,0,.55); }
-  .op-handoff-head { display: flex; align-items: center; gap: 0.45rem;
-    font: 700 calc(0.74rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;
-    color: var(--fg); letter-spacing: -.01em; }
-  /* head icon: a small pulsing traffic-light-YELLOW dot  */
-  .op-handoff-head .hi { flex: 0 0 auto; width: 0.6em; height: 0.6em;
-    background: #f5c542; border-radius: 50%; display: inline-block;
-    box-shadow: 0 0 0 0 rgba(245,197,66,.55); animation: op-handoff-pulse 1.8s ease-out infinite; }
-  @keyframes op-handoff-pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(245,197,66,.5); }
-    70%  { box-shadow: 0 0 0 5px rgba(245,197,66,0); }
-    100% { box-shadow: 0 0 0 0 rgba(245,197,66,0); } }
-  .op-handoff-reason { font: 500 calc(0.72rem * var(--chat-scale))/1.45 var(--chat-font);
-    color: var(--fg-2); letter-spacing: -.005em; }
-  .op-takeover-btn { align-self: flex-start; cursor: pointer;
-    background: transparent; color: var(--fg);
-    border: 1px solid var(--border-2);
-    font: 600 calc(0.72rem * var(--chat-scale))/1 'Plus Jakarta Sans', sans-serif;
-    padding: 0.46rem 0.8rem; border-radius: 999px; letter-spacing: -.005em;   /* fully pill-shaped  */
-    transition: background .14s, border-color .14s, transform .08s; }
-  .op-takeover-btn:hover { background: var(--bg-4); border-color: var(--accent); }
-  .op-takeover-btn:active { transform: translateY(1px); }
-  .op-takeover-btn[disabled] { opacity: 0.5; cursor: default; background: transparent; border-color: var(--border); }
-  /* Finish-up hand-back (inside the Manual-mode note) */
-  .op-finish { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
-  .op-finish[hidden], .op-finish-expand[hidden] { display: none; }   /* let the hidden attr win over display:flex */
-  .op-finish-expand { display: flex; flex-direction: column; gap: 0.4rem;
-    animation: op-man-in .26s cubic-bezier(.16,1,.3,1); }
-  .op-finish-q { font: 500 calc(0.66rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); }
-  .op-finish-opt { font-size: 0.86em; font-style: italic; color: var(--muted); }   /* ONLY "(optional)" — small + italic + muted  */
-  .op-finish-input { width: 100%; box-sizing: border-box; resize: none;
-    background: var(--bg); color: var(--fg); border: 1px solid var(--border-2); border-radius: 10px;
-    padding: 0.4rem 0.55rem; font: 500 calc(0.7rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif;
-    outline: none; }
-  /* placeholder: smaller, italic, more grayed out (it was too bright) */
-  .op-finish-input::placeholder { font-size: calc(0.64rem * var(--chat-scale)); font-style: italic;
-    color: var(--muted); opacity: 0.6; }
-  .op-finish-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
-  /* "Took control" system line — small, centered, muted (a state-change notice) */
-  .op-msg.sys { display: flex; justify-content: center; margin: 0.35rem 0 0.3rem; }
-  .op-msg.sys .body { font: 600 calc(0.66rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    color: var(--muted); background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: 999px; padding: 0.26rem 0.7rem; letter-spacing: .01em;
-    display: inline-flex; align-items: center; gap: 0.4rem; }   /* gap = clean icon↔text spacing */
-  .op-msg.sys .body .op-sys-ico { flex: 0 0 auto; display: block; opacity: 0.9; }
-
-  /* event log lines (errors only now) — always small + muted, never big/white */
-  .op-events { display: flex; flex-direction: column; gap: 0.1rem; }
-  .op-ev { font: 500 0.64rem/1.3 'Plus Jakarta Sans', sans-serif; color: var(--muted);
-    padding: 0.08rem 0.2rem; }
-  .op-ev.err { color: var(--bad); }
-  .op-ev .t { display: none; }
-
-  /* controls + steer input pinned to rail bottom */
-  .op-controls { display: flex; gap: 0.32rem; flex-wrap: wrap; }
-  .op-chip { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 7px;
-    color: var(--fg-2); font: 500 0.68rem/1 'JetBrains Mono', monospace; padding: 0.4rem 0.48rem;
-    cursor: pointer; transition: all .15s; }
-  .op-chip:hover { background: var(--bg-4); color: var(--accent); border-color: rgba(184,192,204,.45); }
-  .op-chip:active { transform: translateY(1px); }
-  .op-driver-row { display: flex; align-items: center; gap: 0.5rem; }
-  .op-driver-lbl { font: 600 0.66rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
-  .op-driver { flex: 1 1 auto; background: var(--bg); border: 1px solid var(--border-2);
-    border-radius: 9px; color: var(--fg); font: 500 0.78rem/1 'Plus Jakarta Sans', sans-serif;
-    padding: 0.5rem 0.6rem; cursor: pointer; }
-  .op-driver:focus { outline: none; border-color: var(--accent); }
-  .op-steer { display: flex; gap: 0.4rem; align-items: stretch; }
-  .op-input-wrap { flex: 1 1 auto; position: relative; display: flex; }
-  .op-prefix { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
-    color: var(--accent); font: 700 0.85rem/1 'JetBrains Mono', monospace; pointer-events: none; }
-  .op-input { flex: 1 1 auto; width: 100%; background: var(--bg); border: 1px solid var(--border-2);
-    border-radius: 10px; color: var(--fg); font: 500 0.8rem/1 'Plus Jakarta Sans',sans-serif;
-    padding: 0.7rem 0.8rem 0.7rem 1.85rem; transition: border-color .2s, box-shadow .2s; }
-  .op-input::placeholder { color: var(--muted); }
-  .op-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.20); }
-  .op-send { flex: 0 0 auto; background: var(--accent); color: #0b0e18; border: none; border-radius: 10px;
-    padding: 0 0.95rem; font: 700 0.78rem/1 'Plus Jakarta Sans', sans-serif; cursor: pointer;
-    transition: filter .15s, transform .05s; }
-  .op-send:hover { filter: brightness(1.12); } .op-send:active { transform: translateY(1px); }
-
-  /* ── RIGHT: live browser ───────────────────────────────────── */
-  /* drag-to-resize handle between the chat rail and the browser (desktop only) */
-  .op-resizer { grid-column: 1; grid-row: 1; justify-self: end; align-self: stretch;
-    width: 10px; margin-right: -0.7rem; cursor: ew-resize; z-index: 8;
-    display: flex; align-items: center; justify-content: center;
-    -webkit-user-select: none; user-select: none; touch-action: none; }
-  .op-resizer::before { content: ""; width: 3px; height: 38px; border-radius: 3px;
-    background: var(--border-2); transition: background .15s, height .15s; }
-  .op-resizer:hover::before, .op-resizer.dragging::before { background: var(--accent); height: 60px; }
-  body.op-resizing { cursor: ew-resize; user-select: none; }
-  body.op-resizing .op-view { pointer-events: none; }
-  .op-browser { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; min-width: 0;
-    border: 1px solid var(--border-2); border-radius: 16px; overflow: hidden; background: var(--bg); }
-  .op-tabs { display: flex; gap: 4px; padding: 5px 6px; background: var(--bg-2);
-    overflow-x: auto; white-space: nowrap; }
-  /* tab bar reveal + per-tab pop-in / close-out */
-  .op-tabs:not([hidden]) { animation: op-tabs-in .22s cubic-bezier(.2,1,.3,1); }
-  @keyframes op-tabs-in { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
-  .op-tab { animation: op-tab-pop .24s cubic-bezier(.2,1.3,.4,1); }
-  @keyframes op-tab-pop { from{opacity:0;transform:scale(.85) translateY(-2px)} to{opacity:1;transform:none} }
-  .op-tab.op-tab-closing { animation: op-tab-out .2s cubic-bezier(.5,0,.75,0) forwards; pointer-events:none; }
-  @keyframes op-tab-out { to{opacity:0;transform:scale(.8);max-width:0;margin:0;padding:0} }
-  .op-tabs:empty { display: none; }
-  /* modern rounded chips, shorter — a soft pill that highlights the active tab with a
-     subtle accent-tinted fill instead of the half-baked top-bar + bottomless border */
-  .op-tab { flex: 0 0 auto; max-width: 150px; display: flex; align-items: center; gap: 5px; line-height: 1;
-    background: transparent; border: 1px solid transparent; border-radius: 7px;
-    color: var(--muted); cursor: pointer;
-    font: 500 0.62rem/1 'Plus Jakarta Sans', sans-serif; padding: 0.26rem 0.5rem;
-    transition: background .15s, color .15s, border-color .15s; }
-  .op-tab:hover { color: var(--fg-2); background: var(--bg-3); }
-  .op-tab.active { color: var(--fg); background: var(--accent-soft, rgba(184,192,204,.14));
-    border-color: var(--border-2); }
-  .op-tab .lbl { overflow: hidden; text-overflow: ellipsis; }
-  .op-urlbar { display: flex; align-items: center; gap: 0.42rem; padding: 0.34rem 0.55rem;
-    background: var(--bg-2); border-bottom: 1px solid var(--border); }
-  .op-traffic { display: flex; gap: 5px; flex: 0 0 auto; }
-  .op-traffic span { width: 10px; height: 10px; border-radius: 50%; background: var(--border-2); }
-  /* lock lives INSIDE the URL box now (like a real browser) — absolute at the left edge */
-  .op-lock { position: absolute; left: 0.5rem; top: 50%; transform: translateY(-50%);
-    display: inline-flex; align-items: center; z-index: 2; pointer-events: none; }
-  .op-lock:empty { display: none; }
-  .op-lock svg { display: block; }
-  /* modern hover tooltip (replaces the native title) */
-  .op-lock { pointer-events: auto; }
-  .op-lock::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px);
-    white-space: nowrap; font: 600 0.6rem/1 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em;
-    background: var(--bg-4); color: var(--fg); border: 1px solid var(--border-2);
-    border-radius: 6px; padding: 0.3rem 0.46rem; box-shadow: 0 6px 18px -6px rgba(0,0,0,.7);
-    opacity: 0; transform: translateY(-2px); pointer-events: none; transition: opacity .15s, transform .15s; z-index: 30; }
-  .op-lock:hover::after { opacity: 1; transform: translateY(0); }
-  .op-lock.secure::after { color: var(--live); }
-  .op-lock.insecure::after { color: #e3b341; }
-  .op-lock.secure { color: var(--live); }
-  .op-lock.insecure { color: var(--muted); }
-  .op-url-wrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
-  /* nav status dot (#5): green = loaded, amber pulse = loading, red = nav failed /
-     browser disconnected. Fed by act()'s nav path. */
-  .op-dotstat { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
-    background: var(--live); box-shadow: 0 0 5px rgba(63,185,80,.5);
-    transition: background .2s, box-shadow .2s; }
-  .op-dotstat.loading { background: #f5c542; box-shadow: 0 0 5px rgba(245,197,66,.55);
-    animation: op-dot-pulse 1s ease-in-out infinite; }
-  .op-dotstat.err { background: #e5534b; box-shadow: 0 0 5px rgba(229,83,75,.55); }
-  @keyframes op-dot-pulse { 50% { opacity: .45; } }
-  /* loading hairline (#5): indeterminate sweep pinned under the url pill */
-  .op-nav-hairline { position: absolute; left: 12px; right: 12px; bottom: -2px; height: 2px;
-    border-radius: 2px; overflow: hidden; opacity: 0; transition: opacity .2s; pointer-events: none; }
-  .op-nav-hairline.on { opacity: 1; }
-  .op-nav-hairline::after { content: ""; display: block; height: 100%; width: 34%;
-    border-radius: 2px; background: var(--accent);
-    animation: op-hairline-sweep 1.1s cubic-bezier(.4,.2,.6,.8) infinite; }
-  @keyframes op-hairline-sweep { from { transform: translateX(-120%); } to { transform: translateX(400%); } }
-  /* tab favicons (#5) */
-  .op-tab-fav { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 3px; display: block; }
-  .op-url { font: 500 0.7rem/1.3 'JetBrains Mono', monospace; color: var(--fg-2);
-    white-space: nowrap; flex: 1 1 auto; min-width: 0; outline: none;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
-    padding: 0.3rem 1.8rem 0.3rem 1.5rem; }   /* left pad clears the in-box lock */
-  /* when there's no lock (blank/non-http), reclaim the left pad so the placeholder sits normally */
-  .op-url-wrap:has(.op-lock:empty) .op-url { padding-left: 0.6rem; }
-  .op-url-reload { position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
-    width: 26px; height: 26px; font-size: 1.15rem; }
-  .op-url:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(184,192,204,.20); color: var(--fg); }
-  .op-url .scheme { color: var(--muted); }
-  .op-stage { position: relative; flex: 1 1 auto; background: #05060a; overflow: hidden; outline: none;
-    min-height: 280px;
-    /* iPad/touch: we own every gesture here — no scroll/zoom/long-press-callout
-       stealing the press-and-hold. Without this iOS Safari hijacks the hold. */
-    touch-action: pinch-zoom; -webkit-touch-callout: none;   /* allow native pinch-zoom; single-finger steering handled in JS */
-    -webkit-user-select: none; user-select: none; }
-  .op[data-state="live"] .op-stage { box-shadow: inset 0 0 26px -8px var(--glow); }
-  .op-stage:focus { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 26px -8px var(--glow); }
-  .op-view { display: block; width: 100%; height: 100%; object-fit: contain;
-    background: #05060a; cursor: crosshair; font-size: 0; color: transparent;
-    -webkit-user-select: none; user-select: none; pointer-events: none; }
-  .op-kbhint { position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
-    font: 500 0.6rem/1 'JetBrains Mono', monospace; color: var(--muted);
-    background: rgba(10,12,20,.8); border: 1px solid var(--border); padding: 0.22rem 0.45rem;
-    border-radius: 6px; pointer-events: none; transition: opacity .3s; white-space: nowrap;
-    opacity: 0; }                                  /* hidden unless the stage is focused */
-  .op-kbhint.op-hint-show { opacity: 1; }   /* JS-controlled timed visibility */
-  /* agent cursor — a small white pointer that GLIDES smoothly from point to point
-     (GPT-Agent style), no flashing. A subtle press-dot marks each click. */
-  .op-agent-cursor { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 7;
-    opacity: 0;
-    transition: left .55s cubic-bezier(.33,0,.18,1), top .55s cubic-bezier(.33,0,.18,1), opacity .4s; }
-  .op-agent-cursor.show { opacity: 1; }
-  /* bot cursor is the AGENT's — hide it in manual mode (the user is driving) */
-  .op[data-mode="man"] .op-agent-cursor { display: none; }
-  .op-agent-cursor svg { display: block; filter: drop-shadow(0 1px 3px rgba(0,0,0,.55));
-    transition: transform .12s ease; }
-  .op-agent-cursor.press svg { transform: scale(.82); }   /* gentle press, no big ring */
-  /* a soft dot that blooms once at the click point, quiet not flashy */
-  .op-agent-cursor.press::after { content: ""; position: absolute; left: 1px; top: 0;
-    width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
-    background: rgba(255,255,255,.55);
-    animation: op-agent-dot .45s ease-out forwards; }
-  @keyframes op-agent-dot { from { transform: scale(.5); opacity: .7; } to { transform: scale(1.7); opacity: 0; } }
-  .op-ripple { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px;
-    border: 2px solid var(--accent); border-radius: 50%; pointer-events: none;
-    animation: op-rip .5s ease-out forwards; }
-  @keyframes op-rip{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
-  .op-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
-    flex-direction: column; gap: .6rem; color: var(--muted); font: 500 0.85rem/1 'JetBrains Mono', monospace;
-    background: radial-gradient(circle at 50% 40%, var(--bg-2), var(--bg)); }
-  .op[data-state="connecting"] .op-overlay, .op[data-state="idle"] .op-overlay,
-  .op[data-state="error"] .op-overlay, .op.op-signal-lost .op-overlay { display: flex; }
-  /* SIGNAL LOST: NO spinner — a static symbol above + the label only . */
-  .op.op-signal-lost .op-spinner { display: none; }
-  .op.op-signal-lost .op-overlay { flex-direction: column; gap: 0.5rem; }
-  .op.op-signal-lost #op-overlay-text { letter-spacing: .12em; font-weight: 600;
-    color: var(--muted); }
-  /* static "no signal" symbol above the SIGNAL LOST label (broken-feed glyph). */
-  .op.op-signal-lost .op-overlay::before {
-    content: ""; width: 26px; height: 26px; opacity: .5;
-    background: var(--muted);
-    -webkit-mask: var(--op-nosignal-mask) center/contain no-repeat;
-            mask: var(--op-nosignal-mask) center/contain no-repeat; }
-  .op { --op-nosignal-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 8.82a15 15 0 0 1 4.17-2.65'/><path d='M10.66 5c4.01-.36 8.14.9 11.34 3.76'/><path d='M16.85 11.25a10 10 0 0 1 2.22 1.68'/><path d='M5 13a10 10 0 0 1 5.24-2.76'/><path d='M8.53 16.11a6 6 0 0 1 6.95 0'/><path d='M12 20h.01'/><path d='M2 2l20 20'/></svg>"); }
-  .op-spinner { width: 30px; height: 30px; border-radius: 50%;
-    background: conic-gradient(from 0deg, transparent 0deg, var(--accent) 300deg, var(--accent) 360deg);
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
-    animation: op-spin .85s cubic-bezier(.5,.15,.5,.85) infinite; }
-
-  /* stack on narrow screens (iPad portrait / phone) */
-  /* drag-handle grabber — only shown when the rail is a mobile bottom sheet */
-  .op-sheet-handle { display: none; }
-
-  @media (max-width: 820px) {
-    /* ── MOBILE: keep the host-app header ;
-       the headerless full-viewport is reserved for the ⤢ fullscreen toggle (op-full).
-       Here we only (a) hard-clamp horizontal overflow so the wide nav row can't leak
-       a scroll / bezel-bleed, and (b) strip the container's max-width/padding so the
-       operator app spans the full phone width. ── */
-    html, body { overflow-x: hidden; max-width: 100vw; }
-    main, .container, .wrap { max-width: none !important; width: 100% !important;
-      margin: 0 !important; padding: 0 !important; overflow-x: hidden; }
-
-    /* ── browser fills the screen; chat is a draggable BOTTOM SHEET over it
-       (iOS Maps / Uber idiom). Snap states: peek / half / full via --sheet-h. ── */
-    .op { display: block; height: 100dvh; width: 100%; max-width: 100%; margin: 0;
-      position: relative; overflow: hidden;
-      --chat-scale: 1.18; }   /* mobile default a notch larger than desktop's 1.05 ; still −/+ adjustable */
-    .op-resizer { display: none; }
-    .op-url { font-size: 0.66rem; }
-    /* MOBILE ONLY: the −/+ control scales the whole chat box together (input + the
-       model/effort pickers), so the chatbox text matches the message scale. Desktop
-       keeps fixed sizes. */
-    #op-input.op-input { font-size: calc(0.72rem * var(--chat-scale)); }   /* +1 notch (mobile) */
-    .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; padding-right: 1.15em !important; background-position: right 0.18rem center !important; }   /* model/effort scales with -/+ (mobile) but CAPPED; MORE pad-right (0.85->1.15em) + caret nudged to the edge so a long word like "Flash 3.5" never hides behind the caret  */
-    #op-input.op-input::placeholder { font-size: calc(0.72rem * var(--chat-scale)); }
-    .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
-    /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
-       flex-centered digit; desktop keeps its 0.5px top-pad)  */
-    .op-act-x { padding: 0 0 1px 0; }
-    /* MOBILE: the header is taller (28px controls), so the floating minimized pill
-       needs to sit lower to clear it; man-note drops further to keep the gap. */
-    .op[data-status-min="1"] .op-action { top: 58px; }
-    .op[data-status-min="1"] .op-man-note { margin-top: 70px; }   /* +4px buffer : unstick from pill */
-
-    /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px).
-       Desktop keeps the compact 20px sizing. */
-    .op-iconbtn { width: 28px; height: 28px; min-width: 28px; font-size: 1.1rem !important; }
-    .op-iconbtn svg { width: 16px !important; height: 16px !important; }
-    #op-full { font-size: 1.05rem; }
-    .op-fontpill { height: 28px; }
-    .op-fontpill button { width: 26px; font-size: 1rem; }
-    .op-mode { margin-top: 0; height: 28px; transform: none; }   /* match the 28px icon row */
-    .op-mode-btn { padding: 0 0.6rem; font-size: 0.78rem; display: flex; align-items: center; }
-    .op-mode-thumb { border-radius: 7px; }
-    .op-head { gap: 0.3rem; align-items: center; }
-    /* iOS focus-zoom is handled in JS (lock maximum-scale on focus, restore on
-       blur) so we keep the compact font here without the box zooming the viewport
-       AND without blocking pinch-zoom otherwise. See the focusin/focusout handler. */
-
-    /* browser occupies the VISIBLE area ABOVE the sheet (not the whole viewport) so
-       the contain-fit frame scales into what you can actually see — no black band up
-       top, and the page bottom isn't hidden behind a half-raised sheet. Tracks the
-       sheet height live (--sheet-h is updated on drag/snap). */
-    .op-browser { position: fixed; top: var(--op-hdr-h, 0px); left: 0; right: 0; bottom: auto;
-      height: calc(100dvh - var(--sheet-h) - var(--op-hdr-h, 0px)); width: 100vw;
-      border: none; border-radius: 0; z-index: 1; }
-      /* NO height transition — a mid-animation getBoundingClientRect() in the click
-         mapping would read a stale stage height and offset taps (worse toward edges). */
-    .op-view { object-fit: contain; object-position: center; }   /* FIT the whole frame into the visible area */
-
-    /* the rail becomes the bottom sheet */
-    .op { --sheet-h: 50dvh; }            /* default snap = half */
-    .op-rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-      height: var(--sheet-h); max-width: 100%;
-      border-radius: 18px 18px 0 0; border: 1px solid var(--border-2); border-bottom: none;
-      background: var(--bg-2); background-clip: padding-box;   /* solid → no corner seam */
-      box-shadow: 0 -10px 34px -10px rgba(0,0,0,.7);
-      transition: height .28s cubic-bezier(.22,1,.36,1);
-      padding: 0 0.7rem 0.7rem; overflow: hidden; touch-action: none; }
-    .op.op-sheet-dragging .op-rail { transition: none; }   /* live drag = no lag */
-
-    .op-sheet-handle { display: flex; align-items: flex-start; justify-content: center;
-      height: 14px; padding-top: 6px; margin: 0 -0.7rem 0; cursor: grab; flex: 0 0 auto; touch-action: none; }
-    /* tighten the head up against the grip — no big black gap above "Operator" */
-    .op-rail .op-head { margin-top: 0; }
-    .op-sheet-handle:active { cursor: grabbing; }
-    .op-sheet-grip { width: 38px; height: 4px; border-radius: 4px; background: var(--border-2); }
-
-    /* the log grows to fill the sheet; input/disclaimer pinned at the bottom of it */
-    .op-rail { display: flex; flex-direction: column; }
-    .op-log { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
-
-    /* ── PEEK (sheet dragged down to minimize): show the Message box, with the full
-       status as a black pill ( ◌ Ready · gpt · <action> · ⌄ ) above it. Grip at TOP. ── */
-    .op[data-sheet="peek"] .op-rail { justify-content: flex-start; gap: 0.35rem;
-      padding-bottom: 0.45rem; }   /* tighter bottom gutter, ~matches the grip's top inset */
-    .op[data-sheet="peek"] .op-sheet-handle { order: -10; }   /* grip ALWAYS first/top */
-    .op[data-sheet="peek"] .op-logwrap,
-    .op[data-sheet="peek"] .op-disclaimer,
-    .op[data-sheet="peek"] .op-head { display: none; }
-    /* status row: FULL-WIDTH, one row tall, encapsulates the spinner — acts as the
-       status / current-tool-call display. Same caret as the expanded view, NO separate
-       boxed pill (just the card surface as a slim bar). */
-    .op[data-sheet="peek"] .op-action { order: -1; width: 100%; align-self: stretch;
-      flex: 0 0 auto; height: 40px; min-height: 40px; box-sizing: border-box;
-      padding: 0 0.7rem; gap: 0.5rem; display: flex; align-items: center; }
-    .op[data-sheet="peek"] .op-action .op-pick-wrap { display: none; }   /* no driver picker */
-    /* spinner stays a fixed circle on the left */
-    .op[data-sheet="peek"] .op-action .op-action-ico { display: inline-block; width: 18px; height: 18px;
-      min-width: 18px; min-height: 18px; flex: 0 0 auto; border-radius: 50%; }
-    /* Ready + gpt·<action> on one baseline row, taking the middle, ellipsis if long */
-    .op[data-sheet="peek"] .op-action > div { display: flex; align-items: baseline; gap: 0.45rem;
-      flex: 1 1 auto; min-width: 0; overflow: hidden; }
-    .op[data-sheet="peek"] .op-action .op-action-txt,
-    .op[data-sheet="peek"] .op-action .op-action-sub { display: block; white-space: nowrap; }
-    .op[data-sheet="peek"] .op-action .op-action-sub { overflow: hidden; text-overflow: ellipsis; }
-    .op[data-sheet="peek"] .op-action .op-action-txt { font-size: 0.78rem; flex: 0 0 auto; }
-    .op[data-sheet="peek"] .op-action .op-action-sub { font-size: 0.68rem; }
-    /* caret pinned right, same as expanded */
-    .op[data-sheet="peek"] .op-action .op-status-min { display: inline-flex; flex: 0 0 auto; margin-left: auto; }
-    /* peek + minimized-pill BOTH set -> peek wins: undo the status-min absolute float
-       + text-hide so the peek status bar shows normally . */
-    .op[data-sheet="peek"][data-status-min="1"] .op-action {
-       position: static; top: auto; left: auto; height: auto; min-height: 0;
-       width: 100%; padding: 0.5rem 0.75rem; z-index: auto; }
-    .op[data-sheet="peek"][data-status-min="1"] .op-action > div {
-       opacity: 1 !important; width: auto !important; overflow: visible !important;
-       pointer-events: auto !important; }
-    .op[data-sheet="peek"][data-status-min="1"] .op-log { padding-top: 0; }
-    .op[data-sheet="peek"] .op-inputbox { order: 0; margin: 0; flex: 0 0 auto; }
-  }
-
-  /* ── redesign 2026-06-26: modern chatbox + browser chrome ── */
-  /* urlbar buttons (reload / tabs / hamburger) */
-  .op-ubtn { flex: 0 0 auto; background: transparent; border: 1px solid transparent;
-    color: var(--fg-2); border-radius: 7px; cursor: pointer; font-size: 1.3rem; line-height: 1;
-    width: 25px; height: 25px; display: flex; align-items: center; justify-content: center;
-    transition: background .15s, color .15s, border-color .15s, transform .09s cubic-bezier(.34,1.4,.6,1); }
-  /* subtle smooth press feedback (back/fwd/reload/hamburger) — quick scale, springs back */
-  .op-ubtn:active { transform: scale(0.86); }
-  .op-ubtn svg { transition: transform .09s cubic-bezier(.34,1.4,.6,1); }
-  .op-url-reload { font-size: 1.05rem; }   /* the in-box reload stays compact */
-  .op-url-reload .ic-stop { display: none; }
-  .op-url-reload.loading .ic-reload { display: none; }
-  .op-url-reload.loading .ic-stop { display: block; }
-  .op-ubtn:hover { background: var(--bg-3); color: var(--fg); }
-  .op-ubtn svg { display: block; flex: 0 0 auto; width: auto; height: auto; }   /* don't let flex crush the icon horizontally (was rendering ~4px wide) */
-  .op-ham { position: relative; flex: 0 0 auto; }
-  /* hamburger menu — quieter, palette-matched (the old full
-     accent-fill hover read harsh; take the slash-palette's language instead:
-     bg-2 sheet, soft bg-4 hover, chip-styled shortcut keys). */
-  .op-ham-menu { position: fixed; z-index: 200;
-    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 11px;
-    box-shadow: 0 12px 34px -8px rgba(0,0,0,.7), 0 2px 8px rgba(0,0,0,.35);
-    padding: 5px; min-width: 168px;
-    display: flex; flex-direction: column; gap: 1px;
-    transform-origin: top right;
-    animation: op-ham-in .16s cubic-bezier(.2,1,.3,1); }
-  @keyframes op-ham-in { from{opacity:0;transform:scale(.96) translateY(-4px)} to{opacity:1;transform:none} }
-  .op-ham-menu[hidden] { display: none; }
-  .op-ham-item { display: flex; align-items: center; justify-content: space-between; gap: 1.4rem;
-    background: transparent; border: none; color: var(--fg-2); cursor: pointer;
-    text-align: left; border-radius: 8px; padding: 0.44rem 0.6rem;
-    font: 500 0.74rem/1 'Plus Jakarta Sans', sans-serif;
-    transition: background .12s ease, color .12s ease; }
-  .op-ham-item:hover { background: var(--bg-4); color: var(--fg); }
-  .op-ham-item .k { flex: 0 0 auto; background: var(--bg-4); border: 1px solid var(--border-2);
-    border-radius: 4px; padding: 0.1rem 0.3rem; color: var(--muted);
-    font: 500 0.6rem/1.2 'JetBrains Mono', monospace;
-    transition: color .12s ease, background .12s ease; }
-  .op-ham-item:hover .k { color: var(--fg-2); background: var(--bg-3); }
-  .op-ham-sep { height: 1px; background: var(--border); margin: 4px 8px; }
-
-  /* tabs — modern, compact, hidden until toggled */
-  .op-tabs[hidden] { display: none; }
-  /* overlay the tabs OVER the top of the view so opening them doesn't resize it */
-  .op-tabs { position: absolute; top: 0; left: 0; right: 0; z-index: 20;
-    display: flex; gap: 7px; padding: 6px 8px; background: var(--bg-2);
-    backdrop-filter: blur(6px); border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .op-tab { flex: 0 0 auto; max-width: 160px; display: flex; align-items: center; gap: 4px; background: var(--bg-3); border: 1px solid var(--border);
-    border-radius: 8px; color: var(--muted); cursor: pointer; padding: 0.34rem 0.7rem;
-    font: 500 0.72rem/1.4 'Plus Jakarta Sans', sans-serif; transition: all .15s;
-    white-space: nowrap; box-shadow: none; }
-  .op-tab:hover { background: var(--bg-4); color: var(--fg-2); }
-  .op-tab.active { background: var(--bg); color: var(--fg); border-color: #ededea; }
-  .op-tab { cursor: grab; touch-action: none; }   /* none: pointer-drag must own touch gestures (strip still wheel/trackpad-scrolls) */
-  .op-tab.dragging { opacity: 0.55; cursor: grabbing; transform: scale(1.04);
-    box-shadow: 0 4px 14px rgba(0,0,0,.5); z-index: 2; }
-  .op-tab .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
-  .op-tab-x { flex: 0 0 auto; width: 15px; height: 15px; display: inline-flex; align-items: center;
-    justify-content: center; color: var(--muted); border-radius: 4px;
-    transition: background .14s, color .14s; }
-  .op-tab-x svg { display: block; }
-  .op-tab-x:hover { background: var(--bad); color: #fff; }
-  .op-tab-add { flex: 0 0 auto; background: var(--bg-3); border: 1px solid var(--border); color: var(--fg-2);
-    border-radius: 8px; cursor: pointer; font-size: 0.95rem; padding: 0.3rem 0.55rem; }
-  .op-tab-add:hover { background: var(--bg-4); color: var(--accent); }
-  .op-tab-add { display: inline-flex; align-items: center; justify-content: center; }
-  .op-tab-add svg { flex: 0 0 auto; display: block; }
-
-  /* the whole input box: one bordered container holding the input row + model row */
-  .op-inputbox { border: 1px solid var(--border-2); border-radius: 11px; background: var(--bg);
-    padding: 0.4rem 0.5rem 0.3rem;
-    transition: border-color .25s, box-shadow .25s, background .3s ease, opacity .3s ease; }
-  .op-inputbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
-  .op-steer { display: flex; gap: 0.4rem; align-items: center; }
-  .op-input { flex: 1 1 auto; width: 100%; background: transparent; border: none; outline: none;
-    color: var(--fg); font: 500 0.58rem/1.35 'Plus Jakarta Sans', sans-serif; padding: 0.2rem 0.25rem;
-    text-align: left; resize: none; overflow-y: auto; max-height: 5.2em;
-    white-space: pre-wrap; word-break: break-word; }
-  /* iOS zooms in on focus of any input < 16px — bump to 16px on touch devices
-     (the box stays compact; only the typed-text size nudges up on phones). */
-  /* (mobile 16px no-zoom rule removed — owner prefers the compact size) */
-  .op-steer { align-items: center; }   /* small send btn centered on the input line — no gap */
-  .op-input::placeholder { color: var(--muted); text-align: left; }
-  .op-send { flex: 0 0 auto; width: 23px; height: 23px; background: #ededea; color: #0b0e18;
-    border: 1px solid var(--border-2); border-radius: 6px; cursor: pointer; padding: 0;
-    display: grid; place-items: center;   /* SVG centers geometrically */
-    transition: filter .15s, transform .05s, background .15s; }
-  .op-send svg { display: block; transform: translate(-0.5px, 0.5px); }
-  .op-send.stopping svg { transform: translate(0.5px, 0); }
-  .op-send:hover { background: #dedcd6; } .op-send:active { transform: translateY(1px); }
-  .op-send.stopping { background: var(--bad); color: #fff; border-color: var(--bad); }
-  .op-send.stopping:hover { filter: brightness(1.1); background: var(--bad); }
-  [data-theme="light"] .op { --op-code-bg: #e9edf2; --op-code-bd: rgba(0,0,0,.12); --op-code-fg: #2a2e36;
-    /* the default light theme washes out under this UI — give the operator rail a
-       slightly deeper, cooler surface + firmer borders so it reads as a panel, not paper. */
-    --bg-2: #e4e8ee; --bg: #eef1f5; --bg-3: #dde2e9; --border: rgba(0,0,0,.12); --border-2: rgba(0,0,0,.16); }
-  [data-theme="light"] .op-rail { background: #e7ebf1; }   /* solid (no gradient corner seam) */
-  [data-theme="midnight"] .op { --op-code-bg: #0a0e18; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
-  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'Plus Jakarta Sans', sans-serif;   /* fixed size — does NOT scale with the +/- control */
-    color: var(--muted); opacity: 0.82; text-align: center; cursor: default; }
-  [data-theme="light"] .op-disclaimer { color: #5a6573; opacity: 0.92; }   /* darker on light for readability */
-  [data-theme="light"] .op-disclaimer-info { color: #3a424d; }
-  /* ── LIGHT-MODE chat legibility : several chat elements are tuned for dark and
-     wash out on light. Give them dark-on-light colors so everything reads. ── */
-  [data-theme="light"] .op-err-reason { color: #a01722; background: rgba(200,30,40,.07); border-color: rgba(200,30,40,.3); }
-  [data-theme="light"] .op-err-head { color: #b21d2a; }
-  [data-theme="light"] .op-msg.bot .bubble a, [data-theme="light"] .op-msg.bot .bubble a:visited { color: #2452c0; }
-  [data-theme="light"] a.op-act-detail { color: #2a2e36; }
-  [data-theme="light"] a.op-act-detail:hover { color: #1a3a8c; }
-  [data-theme="light"] .op-act-coord { color: #4a5260; }
-  [data-theme="light"] .op-act-lab { color: var(--fg); }
-  [data-theme="light"] .op-msg.sys .body { color: #3a424d; }
-  .op-disclaimer-info { display: block; max-height: 0; overflow: hidden; opacity: 0;
-    transform: translateY(-2px); transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem; }   /* a smidge smaller than the disclaimer; collapsed: zero height + slight up-offset */
-  /* revealed: gap as margin-top (outside the overflow box, collapses cleanly), NOT
-     transitioned → no 1px end-jump. Only max-height+opacity animate. */
-  .op-disclaimer:hover .op-disclaimer-info,
-  .op[data-mode="man"] .op-disclaimer-info { max-height: 1.4rem; opacity: 0.85; transform: translateY(0); margin-top: 0.2rem; }   /* slide down + fade in; height matches 1 line (1:1, no step) */
-  /* enable the reveal transition only AFTER first paint (op-ready) so a refresh can't
-     animate the info open→closed (the flash on load). */
-  .op.op-ready .op-disclaimer-info { transition: max-height .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, transform .28s cubic-bezier(.22,.61,.36,1); }   /* ease-out: height resolves smoothly; opacity leads; subtle slide */
-  /* MAN mode: the "no screenshots while you have control" line stays shown persistently
-     (it's an active reassurance while the user is driving), not just on hover. */
-  .op-noshot { display: inline-block; vertical-align: middle; position: relative; top: -1px; }   /* center the icon on the text midline (not flush at baseline) */
-  /* model row blended INSIDE the inputbox: model left, effort right, ghost styling */
-  .op-modelrow { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: nowrap;
-    padding-top: 0.25rem; border-top: 1px solid var(--border); overflow: visible;
-    visibility: hidden; }   /* revealed once loadModels sets the saved model — avoids default-flash on refresh */
-  .op-modelrow.op-ready { visibility: visible; }
-  .op-mini:disabled { opacity: 0.45; cursor: default; }
-  /* ── Slash palette (#30 v2): saved tasks summoned by typing "/" in the composer.
-     Zero standing chrome — the palette floats above the inputbox only while the
-     draft starts with "/". Same tokens as everything else; never in the demo. ── */
-  .op-inputbox { position: relative; }
-  .op-pal { position: absolute; left: -1px; right: -1px; bottom: calc(100% + 8px);
-    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 11px;
-    box-shadow: 0 -8px 30px rgba(0,0,0,.55); overflow: hidden; z-index: 30;
-    animation: op-pal-in .18s cubic-bezier(.2,1,.3,1); }
-  @keyframes op-pal-in { from{opacity:0;transform:translateY(6px) scale(.99)} to{opacity:1;transform:none} }
-  .op-pal[hidden] { display: none; }
-  .op-pal-head { display: flex; justify-content: space-between; padding: 0.45rem 0.65rem;
-    font: 700 calc(0.54rem * var(--chat-scale))/1 var(--chat-font); color: var(--muted);
-    letter-spacing: .08em; border-bottom: 1px solid var(--border); }
-  .op-pal-list { max-height: 205px; overflow-y: auto; }
-  .op-pal-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem;
-    cursor: pointer; }
-  .op-pal-item.sel { background: var(--bg-4); }
-  .op-pal-name { font: 700 calc(0.66rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--fg); white-space: nowrap; }
-  .op-pal-prompt { font: 500 calc(0.58rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .op-pal-empty { padding: 0.55rem 0.65rem; font: 500 calc(0.6rem * var(--chat-scale))/1.4 var(--chat-font);
-    color: var(--muted); }
-  .op-pal-key { flex: 0 0 auto; background: var(--bg-4); border: 1px solid var(--border-2);
-    border-radius: 4px; padding: 0.06rem 0.3rem; color: var(--fg-2);
-    font: 600 calc(0.54rem * var(--chat-scale))/1.3 var(--chat-font); }
-  .op-pal-del { flex: 0 0 auto; background: transparent; border: none; cursor: pointer;
-    color: var(--muted); font-size: 0.7rem; padding: 0.05rem 0.2rem; visibility: hidden; }
-  .op-pal-item.sel .op-pal-del, .op-pal-item:hover .op-pal-del { visibility: visible; }
-  .op-pal-del:hover { color: var(--fg); }
-  .op-pal-del.arm { color: #e5534b; visibility: visible; }
-  .op-pal-foot { display: flex; gap: 0.8rem; padding: 0.4rem 0.65rem; border-top: 1px solid var(--border);
-    font: 600 calc(0.54rem * var(--chat-scale))/1.6 var(--chat-font); color: var(--muted); flex-wrap: wrap; }
-  .op-pal-foot[hidden] { display: none; }   /* same [hidden]-vs-flex trap as the save row */
-  .op-pal-save { display: flex; gap: 0.4rem; padding: 0.5rem 0.65rem; align-items: center; }
-  .op-pal-save[hidden] { display: none; }   /* the class's display:flex would beat the hidden attr */
-  .op-pal-save input { flex: 1 1 auto; min-width: 0; background: var(--bg-3);
-    border: 1px solid var(--border-2); border-radius: 6px; color: var(--fg);
-    font: 500 calc(0.62rem * var(--chat-scale))/1.4 var(--chat-font); padding: 0.28rem 0.45rem; }
-  .op-pal-save input::placeholder { color: var(--muted); }
-  .op-pal-save input:focus { outline: none; border-color: var(--accent); }
-  .op-pal-save .op-pal-sites { flex: 0 1 38%; }
-  .op-demo .op-pal { display: none !important; }   /* never in the public demo */
-  /* ── New-task modal (#30 v2b): OpenAI-Operator-style save dialog — name,
-     "What would you like Operator to do?", websites/apps/MCPs. Opened from the
-     💾 urlbar button (and prefilled from the draft or last dispatch). ── */
-  .op-veil { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.55);
-    backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center;
-    animation: op-veil-in .18s ease; }
-  @keyframes op-veil-in { from{opacity:0} to{opacity:1} }
-  .op-veil[hidden] { display: none; }
-  .op-nt { width: 400px; max-width: 92vw; background: var(--bg-2);
-    border: 1px solid var(--border-2); border-radius: 14px; padding: 1rem 1.05rem;
-    box-shadow: 0 24px 70px -18px rgba(0,0,0,.85), 0 4px 16px rgba(0,0,0,.4);
-    display: flex; flex-direction: column; gap: 0.45rem;
-    animation: op-nt-in .22s cubic-bezier(.2,1,.3,1); }
-  @keyframes op-nt-in { from{opacity:0;transform:translateY(8px) scale(.97)} to{opacity:1;transform:none} }
-  .op-nt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem; }
-  .op-nt-title { font: 700 calc(0.85rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); }
-  .op-nt-x { background: transparent; border: none; color: var(--muted); cursor: pointer;
-    width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; }
-  .op-nt-x:hover { background: var(--bg-4); color: var(--fg); }
-  .op-nt-lbl { font: 600 calc(0.6rem * var(--chat-scale))/1.3 var(--chat-font);
-    color: var(--fg-2); margin-top: 0.35rem; }
-  .op-nt-input { width: 100%; box-sizing: border-box; background: var(--bg-3);
-    border: 1px solid var(--border-2); border-radius: 8px; color: var(--fg);
-    font: 500 calc(0.68rem * var(--chat-scale))/1.45 var(--chat-font);
-    padding: 0.42rem 0.55rem; }
-  .op-nt-input::placeholder { color: var(--muted); }
-  .op-nt-input:focus { outline: none; border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(184,192,204,.14); }
-  textarea.op-nt-input { resize: vertical; min-height: 4.4em; }
-  .op-nt-hint { font: 500 calc(0.54rem * var(--chat-scale))/1.4 var(--chat-font); color: var(--muted); }
-  /* pill input (#6): sites/tools as removable chips + icon autocomplete */
-  .op-nt-pillwrap { position: relative; }
-  .op-nt-pills { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
-    background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px;
-    padding: 0.32rem 0.45rem; cursor: text; }
-  .op-nt-pills:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.14); }
-  .op-nt-pill { display: inline-flex; align-items: center; gap: 0.3rem;
-    background: var(--bg-4); border: 1px solid var(--border-2); border-radius: 999px;
-    padding: 0.18rem 0.28rem 0.18rem 0.45rem; color: var(--fg);
-    font: 600 calc(0.6rem * var(--chat-scale))/1.2 var(--chat-font); white-space: nowrap;
-    animation: op-pill-in .16s cubic-bezier(.2,1.3,.4,1); }
-  @keyframes op-pill-in { from{opacity:0;transform:scale(.85)} to{opacity:1;transform:none} }
-  .op-nt-pill img { width: 13px; height: 13px; border-radius: 3px; display: block; }
-  .op-nt-pill svg { display: block; color: var(--fg-2); }
-  .op-nt-pill-x { display: inline-flex; align-items: center; justify-content: center;
-    width: 14px; height: 14px; border-radius: 50%; color: var(--muted); cursor: pointer;
-    transition: background .12s, color .12s; }
-  .op-nt-pill-x:hover { background: var(--bad, #e5534b); color: #fff; }
-  .op-nt-pill-in { flex: 1 1 90px; min-width: 90px; background: transparent; border: none;
-    outline: none; color: var(--fg); font: 500 calc(0.66rem * var(--chat-scale))/1.4 var(--chat-font);
-    padding: 0.12rem 0.1rem; }
-  .op-nt-pill-in::placeholder { color: var(--muted); }
-  .op-nt-sug { position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 5;
-    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 9px;
-    box-shadow: 0 10px 28px rgba(0,0,0,.55); max-height: 158px; overflow-y: auto; padding: 3px;
-    animation: op-pal-in .15s cubic-bezier(.2,1,.3,1); }
-  .op-nt-sug[hidden] { display: none; }
-  .op-nt-sug-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.34rem 0.5rem;
-    border-radius: 7px; cursor: pointer; color: var(--fg-2);
-    font: 500 calc(0.64rem * var(--chat-scale))/1.3 var(--chat-font); }
-  .op-nt-sug-row:hover { background: var(--bg-4); color: var(--fg); }
-  .op-nt-sug-row img { width: 14px; height: 14px; border-radius: 3px; display: block; }
-  .op-nt-sug-row svg { display: block; color: var(--fg-2); flex: 0 0 auto; }
-  .op-nt-sug-add { margin-left: auto; color: var(--muted); font-weight: 700; padding: 0 0.2rem;
-    border-radius: 5px; }
-  .op-nt-sug-row:hover .op-nt-sug-add { color: var(--fg); }
-  .op-nt-sug-kind { margin-left: 0.15rem; font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--muted); background: var(--bg-4); border: 1px solid var(--border);
-    border-radius: 4px; padding: 0.06rem 0.26rem; }
-  .op-nt-foot { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.7rem; }
-  .op-nt-btn { border-radius: 8px; cursor: pointer; padding: 0.42rem 0.85rem;
-    font: 600 calc(0.66rem * var(--chat-scale))/1.2 var(--chat-font);
-    background: var(--bg-3); border: 1px solid var(--border-2); color: var(--fg-2);
-    transition: background .14s, color .14s, filter .14s; }
-  .op-nt-btn:hover { background: var(--bg-4); color: var(--fg); }
-  .op-nt-btn.primary { background: #ededea; border-color: transparent; color: #0b0e18; }
-  .op-nt-btn.primary:hover { background: #dedcd6; filter: none; }
-  .op-demo #op-save-task, .op-demo .op-veil { display: none !important; }
-  /* ── Launchpad (#1): saved tasks as cards on the idle stage — the OpenAI-
-     Operator homepage pattern. Shown only on a fresh session (empty log, no
-     run); disappears for good the moment the conversation starts. ── */
-  .op-lp { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 1rem; padding: 1.5rem;
-    background:
-      radial-gradient(120% 95% at 50% 42%, transparent 42%, rgba(0,0,0,.42) 100%),
-      color-mix(in srgb, var(--bg-2) 82%, transparent);
-    backdrop-filter: blur(3px); }
-  /* a whisper of grain so the launchpad floats on texture, not flat black */
-  .op-lp::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .045;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"); }
-  .op-lp > * { position: relative; z-index: 1; }
-  .op-lp[hidden] { display: none; }
-  .op[data-mode="man"] .op-lp, .op-demo .op-lp { display: none !important; }
-  .op-lp-title { font: 700 calc(0.62rem * var(--chat-scale))/1 var(--chat-font);
-    color: var(--muted); letter-spacing: .14em; }
-  .op-lp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 218px));
-    gap: 0.75rem; justify-content: center; max-width: 760px; width: 100%; }
-  .op-lp-card { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 12px;
-    padding: 0.75rem 0.8rem; display: flex; flex-direction: column; gap: 0.4rem;
-    position: relative; cursor: pointer; text-align: left;
-    transition: border-color .15s, transform .15s, box-shadow .15s;
-    animation: op-lp-pop .3s cubic-bezier(.2,1.1,.35,1) backwards; }
-  .op-lp-card:nth-child(2) { animation-delay: .04s; } .op-lp-card:nth-child(3) { animation-delay: .08s; }
-  .op-lp-card:nth-child(4) { animation-delay: .12s; } .op-lp-card:nth-child(5) { animation-delay: .16s; }
-  @keyframes op-lp-pop { from{opacity:0;transform:translateY(6px) scale(.96)} to{opacity:1;transform:none} }
-  .op-lp-card:hover { border-color: var(--accent); transform: translateY(-2px);
-    box-shadow: 0 8px 22px rgba(0,0,0,.4); }
-  .op-lp-name { font: 700 calc(0.7rem * var(--chat-scale))/1.25 var(--chat-font); color: var(--fg); }
-  .op-lp-prompt { font: 500 calc(0.58rem * var(--chat-scale))/1.45 var(--chat-font); color: var(--muted);
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .op-lp-meta { display: flex; align-items: center; gap: 0.3rem; margin-top: 0.1rem; min-height: 17px; }
-  .op-lp-site { background: var(--bg-4); border: 1px solid var(--border); border-radius: 5px;
-    font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg-2);
-    padding: 0.12rem 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%;
-    display: inline-flex; align-items: center; gap: 0.24rem; }
-  .op-lp-site img { width: 11px; height: 11px; border-radius: 2.5px; display: block; }
-  .op-lp-bot { margin-left: auto; font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--muted); white-space: nowrap; }
-  .op-lp-run { position: absolute; top: 0.55rem; right: 0.55rem; background: var(--bg-4);
-    border: 1px solid var(--border-2); color: var(--fg); border-radius: 7px;
-    font: 700 calc(0.56rem * var(--chat-scale))/1.2 var(--chat-font); padding: 0.22rem 0.45rem;
-    opacity: 0; transition: opacity .15s; pointer-events: none; }
-  .op-lp-card:hover .op-lp-run { opacity: 1; }
-  .op-lp-new { border-style: dashed; align-items: center; justify-content: center;
-    color: var(--muted); font: 600 calc(0.62rem * var(--chat-scale))/1.5 var(--chat-font);
-    text-align: center; display: flex; min-height: 92px; }
-  .op-lp-new:hover { color: var(--fg-2); }
-  /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
-  .op-anim-ready .op-mini { transition: opacity .2s ease; }
-  .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
-    border: none; cursor: pointer; font: 600 0.56rem/1.5 'Plus Jakarta Sans', sans-serif;
-    padding: 0.1rem 1.05rem 0.1rem 0.25rem; flex: 0 0 auto; width: auto; line-height: 1.5;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M1 1l3 3 3-3' fill='none' stroke='%237e8a9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-    background-position: right 0.28rem center; background-size: 6px 4px; background-repeat: no-repeat; }
-  .op-mini:hover { color: var(--fg); }
-  .op-mini:focus { outline: none; color: var(--accent); }
-  .op-mini.op-mini-swap { animation: op-mini-in .26s cubic-bezier(.2,1,.3,1); }
-  @keyframes op-mini-in { 0%{opacity:.3;transform:translateY(2px)} 100%{opacity:1;transform:none} }
-  .op-mini-r { margin-left: auto; font-weight: 600; color: var(--muted);
-    text-align: right; text-align-last: right; }   /* effort text hugs its caret on the right, raised to line up */
-  /* DESKTOP ONLY: bump the chat-input row text half a notch (Message Operator / model /
-     effort). Mobile keeps the −/+ controlled sizing (its @media max-width:820px rules). */
-  @media (min-width: 821px) {
-    .op-input { font-size: 0.70rem; }
-    .op-input::placeholder { font-size: 0.70rem; }
-    .op-mini { font-size: 0.74rem; }
-  }
-
-  /* ── Operator-style task group: steps indented under a collapsible header that
-     shows the live action while running, then "Worked for Nm" when done ── */
-  .op-task { margin: 0.22rem 0; }
-  /* live: no inline header (the top status card is the sole live indicator);
-     the head reappears only when done as the collapsible "Worked for Ns" summary */
-  /* live: spinner + current action verb (Browsing… / Reading…) + collapse caret;
-     resolves to a green checkmark + "Worked for Ns" when done. */
-  .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
-  .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
-    color: var(--fg-2); font: 600 calc(0.74rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }
-  .op-task:hover .op-task-head .verb,
-  .op-task[data-busy="0"] .op-task-head:hover .verb { color: var(--fg); }   /* brighten text on hover, beats the dimmed finished-state color */
-  .op-task-head:hover .car { opacity: 1; }
-  .op-task-head:hover .car::before { border-color: var(--fg); }   /* + the caret */   /* left pad aligns spinner center to the trace vertical line */
-  .op-task-head .ico { width: 14px; height: 14px; flex: 0 0 auto; position: relative; }
-  .op-task[data-busy="1"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
-    border-radius:50%;
-    background: conic-gradient(from 0deg, transparent 0deg, var(--accent) 300deg, var(--accent) 360deg);
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-    animation: op-spin .85s cubic-bezier(.5,.15,.5,.85) infinite; }
-  .op-task[data-busy="0"] .op-task-head .ico::before { content:"\2713"; position:absolute; inset:0;
-    display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700; }
-  .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { content:"\2715"; color: var(--bad); }
-  .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2); }
-  /* stopped (hand-off): a stop symbol instead of the green ✓  */
-  .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { content:"\25A0"; color: var(--bad); font-size: 0.7rem; }
-  .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
-  .op-task-head .verb { font-weight: 700; color: var(--fg); transition: color .16s ease; }   /* bold live action */
-  .op-task[data-busy="0"] .op-task-head .verb { font-weight: 600; color: var(--fg-2); }
-  /* collapse caret — a pure-CSS chevron (two borders rotated 45°). Fixed px dims so
-     nothing can shrink it (the SVG version kept collapsing). Box is 9×9; expanded
-     state points DOWN (rotate 45°), collapsed points LEFT. */
-  .op-task-head .car { margin-left: auto; flex: 0 0 auto; width: 10px; height: 10px;
-    position: relative; transition: transform .2s, opacity .16s ease; opacity: 0.7; }
-  .op-task-head .car::before { content: ""; position: absolute; top: 2px; left: 2px;
-    width: 4px; height: 4px; border-right: 1.4px solid var(--muted); border-bottom: 1.4px solid var(--muted);
-    transform: rotate(45deg); transition: border-color .16s ease; }   /* small down chevron */
-  .op-task.collapsed .op-task-head .car { transform: rotate(-90deg); }   /* points LEFT (collapsed) */
-  /* steps: indented list with a subtle left vertical rule */
-  .op-task-steps { margin: 0.1rem 0 0.2rem 1.05rem; padding-left: 0.85rem;
-    border-left: 1.5px solid var(--border); display: flex; flex-direction: column; gap: 0.32rem;
-    overflow: visible; max-height: 20000px; opacity: 1;
-    transition: max-height .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .3s, padding .3s; }
-  .op-task.collapsed .op-task-steps { max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
-  .op-task-step { color: var(--muted); font: 500 calc(0.69rem * var(--chat-scale))/1.5 var(--chat-font);
-    letter-spacing: -.002em; animation: op-msg-in .2s ease;
-    white-space: normal; overflow-wrap: anywhere;
-    padding: 0.28rem 0 0.28rem 0.1rem; }
-  .op-task-step + .op-task-step { border-top: 1px solid rgba(255,255,255,.05); }
-  .op-task-step.err { color: var(--bad); }
-  /* modern error block: bold title + reason in a code block */
-  .op-err-step { display: flex; flex-direction: column; gap: 0.2rem; position: relative; }
-  .op-err-head { display: flex; align-items: center; gap: 0.34rem;
-    color: var(--bad); font: 700 calc(0.7rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif; }
-  .op-err-head .op-err-mark { width: 14px; height: 14px; flex: 0 0 auto; border-radius: 50%;
-    background: var(--bad); color: #1a0608; display: inline-flex; align-items: center;
-    justify-content: center; font: 800 0.62rem/1 'Plus Jakarta Sans', sans-serif;
-    transform: translate(-1px, -1px); }
-  .op-err-reason { font-family: 'JetBrains Mono', monospace;
-    font-size: calc(0.64rem * var(--chat-scale)); line-height: 1.45; color: #f0a8ac;
-    background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.28);
-    border-radius: 5px; padding: 0.3rem 0.44rem; white-space: pre-wrap;
-    overflow-wrap: anywhere; word-break: break-word; }
-  .op-act-step { display: flex; flex-direction: column; gap: 0.05rem; color: var(--fg-2); position: relative; }
-  .op-act-step .op-act-lab { white-space: nowrap; }
-  .op-act-ico2 { position: absolute; left: calc(-0.85rem - 0.75px); top: 0.72rem;
-    transform: translate(-50%, -50%); font-size: 0.72rem; line-height: 1;
-    background: var(--bg-2); padding: 1px; border-radius: 50%; }
-  .op-act-step .op-act-lab { margin-left: 0; }
-  /* label is a flex ROW so the text + the ×N pill sit on one line, vertically
-     centered together . */
-  .op-act-lab { font-weight: 700; color: var(--fg);
-    display: inline-flex; align-items: center; }
-  /* repeat-count badge — coalesced consecutive identical actions .
-     wireframe pill: transparent fill, hairline border, muted text. Bigger so the
-     digit has room, and centered both ways (inline-flex centers the number; the
-     parent flex-row centers the pill against the label). */
-  .op-act-x { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    margin-left: 0.4rem; width: 1.45em; height: 1.45em; padding: 1px 0 0 0;   /* perfect circle; padding-top nudges digit down (mono digits sit high) */
-    font: 500 0.66rem/1 'JetBrains Mono', monospace; color: var(--muted);
-    background: transparent; border: 1px solid var(--border-2);
-    border-radius: 50%; box-sizing: border-box; }
-  .op-act-x.op-x-pop { animation: op-xpop .22s cubic-bezier(.34,1.56,.64,1); }
-  @keyframes op-xpop { 0% { transform: scale(.72); }
-    60% { transform: scale(1.18); } 100% { transform: scale(1); } }
-  /* GPT-style leading dot on plain reasoning steps */
-  .op-task-step:not(.op-act-step) { position: relative; }
-  .op-task-step:not(.op-act-step)::before { content: ""; position: absolute;
-    left: calc(-0.85rem - 3.25px); top: 0.52rem; width: 5px; height: 5px; border-radius: 50%;
-    background: var(--muted); box-shadow: 0 0 0 3px var(--bg-2); }
-  /* inline coordinate detail after "Clicking"/"Dragging" — lighter, smaller, set apart */
-  .op-act-coord { margin-left: 0.4rem; font-weight: 400; color: var(--muted);
-    font: 400 calc(0.6rem * var(--chat-scale))/1 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: -.01em; position: relative; top: 1px; }   /* inline detail (coord OR duration) — Jakarta, muted */   /* sits high vs the label — lower ~2px  */
-  /* plain detail (element names under Clicking/Typing/etc.) — NOT a code block */
-  .op-act-detail-plain { color: var(--muted); font-weight: 400; max-width: 100%;
-    font: 500 calc(0.66rem * var(--chat-scale))/1.45 var(--chat-font);
-    margin-top: 0.1rem; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
-  .op-act-detail { color: var(--fg-2); font-weight: 400; max-width: 100%;
-    /* commands + URLs render as a code block (scales with the +/- font control) */
-    font-family: 'JetBrains Mono', monospace;
-    font-size: calc(0.62rem * var(--chat-scale)); line-height: 1.45;   /* down a notch : 0.66→0.62 */
-    background: rgba(255,255,255,.05); border: 1px solid var(--border);
-    border-radius: 5px; padding: 0.28rem 0.42rem; margin-top: 0.18rem;
-    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
-    transition: border-color .15s, background .15s; }
-  /* a browse URL detail is a clickable link — animate the border on hover to signal it */
-  a.op-act-detail { color: var(--fg-2); text-decoration: none; display: block; cursor: pointer; }
-  a.op-act-detail:hover { border-color: var(--accent); background: rgba(184,192,204,.08); color: var(--fg); }
-  /* step-count header at the top of the live trace — white, same size as action labels */
-  .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: .01em; margin: 0 0 0.3rem 0.35rem; }   /* bumped 0.66→0.70rem  */
-  .op-step-count[hidden] { display: none; }
-
-  /* DEMO: effort pinned + invisible */
-  .op-demo #op-effort { display: none !important; }
-
-  /* DEMO: fullscreen toggle is pointless (already full-window) — hide it */
-  .op-demo #op-full { display: none !important; }
-</style>
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}">
 
 <div class="op" id="op" data-state="idle" data-busy="0">
 
@@ -1385,7 +124,25 @@
           <button class="op-ham-item" data-kind="key" data-value="Escape"><span>Esc</span><span class="k">⎋</span></button>
           <button class="op-ham-item" data-kind="tab_next"><span>Next tab</span><span class="k">⇥</span></button>
           <button class="op-ham-item" data-kind="home"><span>Home</span><span class="k">⌂</span></button>
+          <div class="op-ham-sep"></div>
+          <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="k">⚙</span></button>
         </div>
+      </div>
+      <!-- Settings popover (v0.7.0): the first real settings surface. Every row is a
+           localStorage-persisted cockpit preference; future settings slot in as rows. -->
+      <div class="op-settings" id="op-settings" hidden>
+        <div class="op-set-row"><span>Chat font</span>
+          <select id="op-set-font">
+            <option value="'Plus Jakarta Sans', sans-serif">Jakarta</option>
+            <option value="system-ui, sans-serif">System</option>
+            <option value="'JetBrains Mono', monospace">Mono</option>
+            <option value="Georgia, serif">Serif</option>
+          </select>
+        </div>
+        <div class="op-set-row"><span>Keyboard hint</span>
+          <input type="checkbox" id="op-set-hint" checked></div>
+        <div class="op-set-row"><span>Cursor glide</span>
+          <input type="checkbox" id="op-set-glide" checked></div>
       </div>
     </div>
     <div class="op-stage" id="op-stage" tabindex="0" aria-label="live browser — click to interact, focus to type">
@@ -1423,8 +180,30 @@
         </div>
         <div class="op-nt-sug" id="op-nt-sug" hidden></div>
       </div>
-      <label class="op-nt-lbl" for="op-nt-sched">Schedule <span style="color:var(--muted);font-weight:500">— optional, cron</span></label>
-      <input type="text" class="op-nt-input" id="op-nt-sched" placeholder="e.g. 15 6 * * 1-5  (weekdays 6:15am) — leave empty for manual only" autocomplete="off" spellcheck="false">
+      <label class="op-nt-lbl" for="op-nt-rep">Schedule</label>
+      <!-- Real scheduler (v0.7.0): repeat + time + day pickers replace the raw
+           cron field; the picks compile to the same 5-field cron the backend
+           already runs. "Custom (cron)" keeps the raw escape hatch. -->
+      <div class="op-nt-sched-row">
+        <select class="op-nt-input" id="op-nt-rep">
+          <option value="" selected>Manual only</option>
+          <option value="hourly">Hourly</option>
+          <option value="daily">Daily</option>
+          <option value="weekdays">Weekdays</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="cron">Custom (cron)</option>
+        </select>
+        <input type="time" class="op-nt-input op-nt-time" id="op-nt-time" value="09:00" hidden>
+      </div>
+      <div class="op-nt-dow" id="op-nt-dow" hidden></div>
+      <div class="op-nt-sched-row" id="op-nt-dom-row" hidden>
+        <span class="op-nt-hint" style="flex:0 0 auto">on day</span>
+        <input type="number" class="op-nt-input op-nt-dom" id="op-nt-dom" min="1" max="31" value="1">
+        <span class="op-nt-hint" style="flex:0 0 auto">of the month</span>
+      </div>
+      <input type="text" class="op-nt-input" id="op-nt-sched" placeholder="5-field cron: min hour dom mon dow — e.g. 15 6 * * 1-5" autocomplete="off" spellcheck="false" hidden>
+      <div class="op-nt-hint op-nt-sched-sum" id="op-nt-sched-sum"></div>
       <div class="op-nt-foot">
         <button type="button" class="op-nt-btn" id="op-nt-cancel">Cancel</button>
         <button type="button" class="op-nt-btn primary" id="op-nt-save">Save task</button>
@@ -1434,7 +213,7 @@
 </div>
 
 <script>
-(function () {
+(function  {
   const op = document.getElementById('op');
   const view = document.getElementById('op-view');
   const stage = document.getElementById('op-stage');
@@ -1456,7 +235,7 @@
     const up = (log.scrollHeight - log.scrollTop - log.clientHeight) > 2080;
     if (jumpBtn) jumpBtn.classList.toggle('show', up);
   }
-  if (jumpBtn) jumpBtn.addEventListener('click', ()=>{
+  if (jumpBtn) jumpBtn.addEventListener('click', =>{
     log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
     // hide once we've arrived
     setTimeout(()=>{ jumpBtn.classList.remove('show'); }, 360);
@@ -1582,7 +361,7 @@
     rez.addEventListener('pointerup', e => { try{rez.releasePointerCapture(e.pointerId);}catch(_){} up(); });
     rez.addEventListener('pointercancel', up);
     // keep within bounds if the window resizes
-    window.addEventListener('resize', () => { const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--rail-w')); if (cur) apply(cur); });
+    window.addEventListener('resize',  => { const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--rail-w')); if (cur) apply(cur); });
   })();
 
   // ── mobile bottom-sheet: drag the chat sheet between peek / half / full ──
@@ -1590,11 +369,12 @@
     const handle = document.getElementById('op-sheet-handle');
     const opEl = document.getElementById('op');
     if (!handle || !opEl) return;
-    const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
+    const isMobile =  => window.matchMedia('(max-width: 820px)').matches;
     // snap targets as fractions of the viewport height
     const SNAPS = [0.22, 0.5, 0.9];   // peek (room for the Message box + spinner), half, full
     function vh(){ return window.innerHeight; }
-    // header height (mobile, non-full) — the sheet must not grow past it .
+    // header height (mobile, non-full) — the sheet must not grow past it (the owner: maximize
+    // was colliding with the host-app header).
     function hdrH(){ const v = parseFloat(getComputedStyle(opEl).getPropertyValue('--op-hdr-h')); return v||0; }
     function setH(px){
       const maxH = vh() - hdrH() - 10;     // leave the header + a small gap clear
@@ -1625,11 +405,11 @@
       handle.setPointerCapture(e.pointerId); down(e.clientY); });
     handle.addEventListener('pointermove', e => move(e.clientY));
     handle.addEventListener('pointerup', e => { try{handle.releasePointerCapture(e.pointerId);}catch(_){} up(e.clientY); });
-    handle.addEventListener('pointercancel', () => up(0));
+    handle.addEventListener('pointercancel',  => up(0));
     // tap the handle = cycle peek → half → full → peek
     let _tapStart = 0;
-    handle.addEventListener('pointerdown', () => { _tapStart = Date.now(); });
-    handle.addEventListener('pointerup', () => {
+    handle.addEventListener('pointerdown',  => { _tapStart = Date.now(); });
+    handle.addEventListener('pointerup',  => {
       if (Date.now() - _tapStart < 200 && isMobile()) {
         const cur = document.querySelector('.op-rail').getBoundingClientRect().height / vh();
         let idx = 0; SNAPS.forEach((f,i)=>{ if (Math.abs(f-cur) < Math.abs(SNAPS[idx]-cur)) idx = i; });
@@ -1638,7 +418,7 @@
     });
     // start at half on mobile
     if (isMobile()) snapTo(0.5);
-    window.addEventListener('resize', () => { if (isMobile()) {
+    window.addEventListener('resize',  => { if (isMobile()) {
       const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--sheet-h')); if (cur) setH(cur);
     }});
   })();
@@ -1654,9 +434,9 @@
     // on page load: show + persist 30s
     show(30000);
     // tapping/focusing the browser stage → fade after 1.5s (they're steering now)
-    stage.addEventListener('focus', ()=>{ show(0); hide(1500); });
+    stage.addEventListener('focus', =>{ show(0); hide(1500); });
     // clicking away from the stage → re-show + persist 10s
-    stage.addEventListener('blur', ()=>{ show(10000); });
+    stage.addEventListener('blur', =>{ show(10000); });
   })();
 
   // lock page scroll while on the operator page; restore on leave
@@ -1679,7 +459,7 @@
     setHdr();
     window.addEventListener('resize', setHdr);
     window.addEventListener('orientationchange', setHdr);
-    document.getElementById('op-full')?.addEventListener('click', () => setTimeout(setHdr, 50));
+    document.getElementById('op-full')?.addEventListener('click',  => setTimeout(setHdr, 50));
   })();
   // stop iOS Safari's zoom-on-focus of the small chat input (keeps the compact font
   // We do NOT set user-scalable=no — the owner wants native pinch-zoom on the
@@ -1696,10 +476,10 @@
     const inp = document.getElementById('op-input'); if (!inp || !_vp) return;
     const LOCK = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
     const FREE = _vpPrev || 'width=device-width, initial-scale=1';
-    inp.addEventListener('focus', () => _vp.setAttribute('content', LOCK));
-    inp.addEventListener('blur',  () => _vp.setAttribute('content', FREE));
+    inp.addEventListener('focus',  => _vp.setAttribute('content', LOCK));
+    inp.addEventListener('blur',   => _vp.setAttribute('content', FREE));
   })();
-  window.addEventListener('pagehide', () => {
+  window.addEventListener('pagehide',  => {
     document.documentElement.classList.remove('op-locked');
     document.body.classList.remove('op-locked');
     if (_vp && _vpPrev !== null) _vp.setAttribute('content', _vpPrev);
@@ -1709,7 +489,7 @@
     const btn = document.getElementById('op-full');
     // restore: if the user was in fullscreen before a refresh, re-enter it
     try { if (localStorage.getItem(FULL_KEY) === '1') { document.body.classList.add('op-full'); if (typeof setHdr === 'function') setTimeout(setHdr, 50); } } catch {}
-    btn && btn.addEventListener('click', () => {
+    btn && btn.addEventListener('click',  => {
       const on = document.body.classList.toggle('op-full');
       try { localStorage.setItem(FULL_KEY, on ? '1' : '0'); } catch {}
     });
@@ -1722,7 +502,7 @@
     const flatBtn = document.getElementById('op-flat');
     const apply = (on)=>{ if (opEl) opEl.classList.toggle('op-flat', on); };
     try { apply(localStorage.getItem(FLAT_KEY) === '1'); } catch {}
-    if (flatBtn) flatBtn.addEventListener('click', ()=>{
+    if (flatBtn) flatBtn.addEventListener('click', =>{
       const on = !(opEl && opEl.classList.contains('op-flat'));
       apply(on);
       try { localStorage.setItem(FLAT_KEY, on ? '1' : '0'); } catch {}
@@ -1763,7 +543,7 @@
     if (sub !== undefined) setCardText(actSub, sub || '');
   }
   let _failRingT = null;
-  // idle status-card label: NEVER "Manual"  — it reflects the BROWSER state.
+  // idle status-card label: NEVER "Manual" (the owner) — it reflects the BROWSER state.
   // live feed → "Ready"; otherwise (connecting / signal lost / not yet attached) →
   // "Connecting". Independent of MAN/AUTO mode.
   function idleCardText() {
@@ -1772,6 +552,21 @@
     return 'Connecting';
   }
   function settleAction(ok) {
+    // A manual browser action (click/drag/scroll/type on the live view) settles
+    // here. But if an AGENT turn is in flight, the card belongs to that turn
+    // ("Working") — a user click on the page must NOT stomp it to "Ready"/idle
+    // (the flash the owner saw: Working -> Ready on every click mid-turn). Keep the
+    // failure ring (useful "that manual action failed" feedback) but leave the
+    // turn's busy/text alone; the agent poll owns them.
+    if (typeof _inFlight !== 'undefined' && _inFlight) {
+      if (ok === false) {
+        op.classList.remove('op-act-failed'); void op.offsetWidth;
+        op.classList.add('op-act-failed');
+        if (_failRingT) clearTimeout(_failRingT);
+        _failRingT = setTimeout(() => op.classList.remove('op-act-failed'), 1500);
+      }
+      return;
+    }
     op.dataset.busy = '0';
     // idle label depends on mode: MAN -> "Manual", AUTO -> "Ready". never flash
     // "Ready" in manual (it's an auto-mode concept).
@@ -1820,13 +615,13 @@
     // feed came back while idle → settle the card to its proper idle label.
     if (wasLost && op.dataset.busy !== '1') {
       try { setCardText(actTxt, idleCardText()); } catch(_){} } }
-  view.addEventListener('load', () => { _hasFrame = true; _lastImgLoad = Date.now();
+  view.addEventListener('load',  => { _hasFrame = true; _lastImgLoad = Date.now();
     view.style.visibility='visible'; signalOk(); backoff = 600; });
-  view.addEventListener('error', () => { signalLost(); scheduleReconnect(); });
+  view.addEventListener('error',  => { signalLost(); scheduleReconnect(); });
   connectStream();
   // tab was backgrounded (browser suspends the MJPEG + timers) → on return,
   // immediately reconnect the stream + re-poll so the feed snaps back fast.
-  document.addEventListener('visibilitychange', () => {
+  document.addEventListener('visibilitychange',  => {
     if (document.visibilityState === 'visible') {
       _coldMs = 0; connectStream();
       if (typeof poll === 'function') poll();
@@ -1860,8 +655,11 @@
         ? '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
           + (https ? closed : open) + body + '</svg>'
         : '';
-      // live site favicon in the lock slot; falls back to the padlock when the
-      // icon can't load. Cache the host so the img doesn't reflash every poll.
+      // The URL-bar slot shows the live SITE FAVICON, falling back to the padlock
+      // when the icon can't load. (The HTTPS lock proper lives on the page-status
+      // dot — see setLockDot — so the favicon keeps its home here;
+      // reverting claude-g's v0.7.0 lock-in-favicon-slot swap.) Cache the host so
+      // the img doesn't reflash every poll.
       let host = '';
       try { host = (https || http) ? new URL(url).hostname : ''; } catch {}
       if (host && lockEl.dataset.favHost !== host) {
@@ -1871,7 +669,7 @@
         fv.width = 13; fv.height = 13; fv.alt = '';
         fv.style.borderRadius = '3px'; fv.style.display = 'block';
         fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=32';
-        fv.addEventListener('error', () => { lockEl.innerHTML = padlock; });
+        fv.addEventListener('error',  => { lockEl.innerHTML = padlock; });
         lockEl.appendChild(fv);
       } else if (!host) {
         lockEl.dataset.favHost = '';
@@ -1880,10 +678,34 @@
       lockEl.className = 'op-lock' + (https ? ' secure' : (http ? ' insecure' : ''));
       lockEl.title = '';   // suppress native tooltip; we render a styled one
       lockEl.dataset.tip = (host ? host + ' — ' : '') + (https ? 'Secured with HTTPS' : (http ? 'Not secure' : ''));
+      // The page-status dot doubles as the HTTPS lock.
+      setLockDot(https, http);
     }
     // urlEl is an editable input; don't clobber it while the user is typing in it
     if (document.activeElement === urlEl) return;
     urlEl.value = url || '';
+  }
+  // The page-status dot doubles as the HTTPS lock: render a padlock glyph into
+  // it (closed shackle = https, open = http). Colour rides on the .loading/.err
+  // classes act() toggles, so it still shows nav status. No scheme (blank/search)
+  // → clear the glyph and the dot reverts to the plain filled status dot via
+  // .op-dotstat:empty. (.)
+  const dotEl = document.getElementById('op-dotstat');
+  function setLockDot(https, http) {
+    if (!dotEl) return;
+    const kind = https ? 's' : (http ? 'i' : '');
+    if (dotEl.dataset.lockKind === kind) return;   // avoid reflash every poll
+    dotEl.dataset.lockKind = kind;
+    if (!kind) { dotEl.innerHTML = ''; dotEl.title = ''; return; }
+    const body = '<rect x="3" y="7" width="10" height="7" rx="1.4"></rect>';
+    const shackle = https
+      ? '<path d="M5 7V5a3 3 0 0 1 6 0v2"></path>'    // closed
+      : '<path d="M5 7V5a3 3 0 0 1 5.2-2"></path>';   // open
+    dotEl.innerHTML =
+      '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" '
+      + 'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+      + 'stroke-linejoin="round">' + shackle + body + '</svg>';
+    dotEl.title = https ? 'Secured with HTTPS' : 'Not secure';
   }
   // URL bar navigates on Enter
   // does this look like a URL/host the user means to navigate to (vs a search query)?
@@ -2106,7 +928,7 @@
     const btn = document.createElement('button'); btn.type='button'; btn.className='op-takeover-btn';
     const bl = document.createElement('span'); bl.className='tk-lab'; bl.textContent='Take control';
     btn.appendChild(bl);   // no emoji — clean text pill
-    btn.addEventListener('click', ()=> takeControl(card));
+    btn.addEventListener('click', => takeControl(card));
     card.appendChild(btn);
     log.appendChild(card); _trimOnly(); scrollToBottom(); saveSession();
     return card;
@@ -2114,7 +936,7 @@
 
   // ── Operator-style task group ("Worked for Nm" + indented steps) ──
   let _task = null, _taskStart = 0, _stepCount = 0;
-  const BOT_EMOJI = { 'claude-a':'🤖', 'claude-b':'🤖', 'gpt':'🤖', 'gemma':'✨' };
+  const BOT_EMOJI = { 'claude-b':'🦆', 'claude-a':'💣', 'gpt':'🤖', 'gemma':'✨' };
   function botEmoji(b){ return BOT_EMOJI[b] || '🤖'; }
   // gemma rides on the agy runtime; its picker FACE shows the real Gemini logo
   // (gradient 4-point star) instead of a flat emoji. HTML <option> text can't
@@ -2143,7 +965,7 @@
     Resize:'📐', 'Handle dialog':'💬', 'Read console':'🖥️', 'Inspect network':'📡', 'Save PDF':'📄',
     Searching:'🔍', Fetching:'🔗', 'Running command':'⌨️', 'Reading file':'📄',
     'Searching files':'🔍', 'Finding files':'📁', 'Writing file':'✏️', 'Editing file':'✏️',
-    'Checking data':'📈', 'Checking data':'📊',
+    'Checking quote':'📈', 'Checking data':'📊',
     'Searching web':'🌐', 'Searching the web':'🌐', 'Searching memory':'🧠', 'Searching files':'🔍',
     Recalling:'🧠', 'Checking memory':'🧠', Fetching:'🔗', 'Fetching messages':'💬',
     Listing:'📋', 'Listing resources':'📋', 'Listing files':'📁', 'Reading resource':'📖',
@@ -2243,7 +1065,7 @@
     const steps = _task.querySelector('.op-task-steps');
     // COALESCE consecutive identical actions: if the last step is an act-step with
     // the SAME label+detail, bump an animated ×N badge in place instead of spitting
-    // out a new line .
+    // out a new line (the owner — repeated clicks/screenshots shouldn't flood the trace).
     const _last = steps && steps.lastElementChild;
     const _sig = (label||'') + '' + (detail||'');
     const _noCoalesce = /^(Browsing|Navigating|Going back|Going forward)$/.test(label||'');   // navigations are milestones — never merge
@@ -2286,9 +1108,9 @@
       return;
     }
     // coordinate-click detail e.g. "(420, 315)" or a drag "(120, 80) → (300, 240)":
-    // show it INLINE after the label in lighter, smaller, muted text .
+    // show it INLINE after the label in lighter, smaller, muted text (the owner's preferred).
     const _isCoord = detail && /^\(\s*-?\d/.test(detail.trim());
-    // a short duration like '2s' / '1m 3s' also goes INLINE 
+    // a short duration like '2s' / '1m 3s' also goes INLINE (the owner: Waiting matches Clicking)
     const _isDur = detail && /^\d+(\.\d+)?\s*(ms|s|m|h)(\s+\d+\s*(s|m))?$/.test(detail.trim());
     // a short element label (e.g. "Button", "Submit") also goes inline — not a URL/path/command, not long.
     const _dt = (detail||'').trim();
@@ -2394,15 +1216,15 @@
   }
   const fontDec = document.getElementById('op-font-dec');
   const fontInc = document.getElementById('op-font-inc');
-  if (fontDec) fontDec.addEventListener('click', ()=> scaleKeepingView(-SIZE_STEP));
-  if (fontInc) fontInc.addEventListener('click', ()=> scaleKeepingView(+SIZE_STEP));
+  if (fontDec) fontDec.addEventListener('click', => scaleKeepingView(-SIZE_STEP));
+  if (fontInc) fontInc.addEventListener('click', => scaleKeepingView(+SIZE_STEP));
 
 
 
   const _clearBtn = document.getElementById('op-clear');
-  if (_clearBtn) _clearBtn.addEventListener('click', () => {
+  if (_clearBtn) _clearBtn.addEventListener('click',  => {
     if (_clearBtn.dataset.busy === '1') return;          // ignore double-tap mid-animation
-    const finishClear = () => {
+    const finishClear =  => {
       log.innerHTML=''; log.classList.remove('op-clearing');
       try{localStorage.removeItem(LS_KEY);}catch{}
       if (typeof _seenMsg!=='undefined') _seenMsg.clear();
@@ -2422,7 +1244,7 @@
   });
   const eventsEl = document.getElementById('op-events');
   const actionBtn = document.getElementById('op-action');
-  actionBtn.addEventListener('click', () => {
+  actionBtn.addEventListener('click',  => {
     const exp = eventsEl.classList.toggle('expanded');
     actionBtn.setAttribute('aria-expanded', exp ? 'true' : 'false');
     eventsEl.scrollTop = eventsEl.scrollHeight;
@@ -2441,7 +1263,7 @@
   const DISPATCH = "{{ url_for('operator.operator_dispatch') }}";
   const AGENT_URL = "{{ url_for('operator.operator_agent_state') }}";
 
-  // Code-block scroll trap fix : a horizontally-scrollable <pre> in a chat
+  // Code-block scroll trap fix (the owner): a horizontally-scrollable <pre> in a chat
   // bubble swallows vertical wheel events, so scrolling with the cursor over code
   // froze the chat. Delegate: if a wheel happens inside a <pre> that has no vertical
   // overflow of its own, forward the vertical delta to the log so the chat scrolls.
@@ -2468,7 +1290,7 @@
   // SESSION-ONLY by design — never seeded from storage, always false on load. A refresh
   // or a manual MAN flip must NOT resurrect Finish-up (it's not a real pending hand-off).
   let _handedToUser = false;
-  (async () => {
+  (async  => {
     try { const d = await (await fetch(DRIVERS_URL)).json();
       (d.drivers||[]).forEach(b => { const o=document.createElement('option');
         o.value=b.key; o.textContent=botEmoji(b.key)+' '+b.label; o.title=b.label; caretSel.appendChild(o); });
@@ -2492,7 +1314,7 @@
     if (!lp || !grid || op.classList.contains('op-demo')) return;
     if (log.children.length) return;             // conversation already going
     const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
-    (async () => {
+    (async  => {
       let tasks = [];
       try { const d = await (await fetch(TASKS_URL)).json(); tasks = d.ok ? (d.tasks || []) : []; } catch {}
       if (log.children.length) return;           // something started while fetching
@@ -2507,28 +1329,53 @@
           if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)) {   // looks like a domain → favicon
             const fv = document.createElement('img'); fv.alt = '';
             fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(s) + '&sz=32';
-            fv.addEventListener('error', () => fv.remove());
+            fv.addEventListener('error',  => fv.remove());
             chip.appendChild(fv);
           }
           const tx = document.createElement('span'); tx.textContent = s; chip.appendChild(tx);
           meta.appendChild(chip);
         });
+        if (t.schedule) {   // scheduled task → a small clock chip (v0.7.0)
+          const sc = document.createElement('span'); sc.className = 'op-lp-site op-lp-sched';
+          sc.textContent = '⏱ ' + cronToHuman(t.schedule);
+          sc.title = t.schedule;
+          meta.appendChild(sc);
+        }
         const who = document.createElement('span'); who.className = 'op-lp-bot';
         who.textContent = [t.bot, t.model].filter(Boolean).join(' · '); meta.appendChild(who);
         c.appendChild(meta);
         const run = document.createElement('span'); run.className = 'op-lp-run'; run.textContent = '▶ Run'; c.appendChild(run);
-        c.addEventListener('click', () => { lp.hidden = true; if (window._opRunSavedTask) window._opRunSavedTask(t); });
+        c.addEventListener('click',  => { lp.hidden = true; if (window._opRunSavedTask) window._opRunSavedTask(t); });
         grid.appendChild(c);
       });
       const add = document.createElement('button'); add.type = 'button'; add.className = 'op-lp-card op-lp-new';
       add.textContent = '＋ Save a task';
-      add.addEventListener('click', () => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
+      add.addEventListener('click',  => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
       grid.appendChild(add);
       lp.hidden = false;
       new MutationObserver((m, obs) => {
         if (log.children.length) { lp.hidden = true; obs.disconnect(); }
       }).observe(log, { childList: true });
     })();
+  }
+  // cron → short human label (v0.7.0): reverses the shapes the scheduler UI
+  // compiles (hourly/daily/weekdays/weekly/monthly); anything else shows raw.
+  function cronToHuman(expr){
+    const f = (expr || '').trim().split(/\s+/);
+    if (f.length !== 5) return expr || '';
+    const [mi, hr, dom, mon, dow] = f;
+    const t =  => { const h = parseInt(hr,10), m = parseInt(mi,10);
+      if (isNaN(h) || isNaN(m)) return hr + ':' + mi;
+      const ap = h < 12 ? 'AM' : 'PM'; return (h%12||12) + ':' + String(m).padStart(2,'0') + ' ' + ap; };
+    const NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    if (mon !== '*') return expr;
+    if (hr === '*' && dom === '*' && dow === '*') return 'hourly at :' + String(parseInt(mi,10)||0).padStart(2,'0');
+    if (dom === '*' && dow === '*') return 'daily ' + t();
+    if (dom === '*' && dow === '1-5') return 'weekdays ' + t();
+    if (dom === '*' && /^[0-7](,[0-7])*$/.test(dow))
+      return dow.split(',').map(d => NAMES[parseInt(d,10)%7]).join(', ') + ' ' + t();
+    if (dow === '*' && /^\d+$/.test(dom)) return 'monthly · day ' + dom + ' ' + t();
+    return expr;
   }
   // ── New-task modal (#30 v2b) — the 💾 urlbar button opens an OpenAI-Operator-
   // style save dialog: name / prompt / websites+apps+MCPs. Prefill order: the
@@ -2548,24 +1395,40 @@
 
     // ── sites/tools pill input (#6): chips + icon autocomplete ──
     // Common picks get real favicons (Google's s2 endpoint — this page has
-    // network); MCP/tool entries get a plug glyph and save WITHOUT the label
-    // suffix. Typing + Enter pills anything; Backspace on empty pops the last.
-    const PLUG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v4M10 2v4"></path><path d="M4 6h8v2.5a4 4 0 0 1-8 0z"></path><path d="M8 12.5V15"></path></svg>';
+    // network); MCP/tool entries get a letter-avatar placeholder (first letter
+    // of the tool name — MCPs have no favicon) and save WITHOUT a label suffix.
+    // MCPs are pinned to the TOP of the pick list (v0.7.0, the owner). Typing +
+    // Enter pills anything; Backspace on empty pops the last.
     const COMMON = [
+      // MCPs / tools first
+      {v:'playwright', tool:true}, {v:'the data service-mcp', tool:true}, {v:'host-app', tool:true},
+      {v:'search', tool:true}, {v:'discord', tool:true},
+      // finance / work
       {v:'bloomberg.com'}, {v:'reuters.com'}, {v:'finviz.com'},
-      {v:'booking.com'}, {v:'zillow.com'},
-      {v:'amazon.ca'}, {v:'doordash.com'}, {v:'ubereats.com'},
-      {v:'youtube.com'}, {v:'x.com'}, {v:'github.com'}, {v:'gmail.com', ico:'mail.google.com'},
-      {v:'lichess.org'}, {v:'wikipedia.org'},
-      {v:'playwright', tool:true}, {v:'filesystem', tool:true}, {v:'web-search', tool:true},
+      {v:'the data service.com', ico:'interactivebrokers.com'}, {v:'github.com'},
+      {v:'gmail.com', ico:'mail.google.com'}, {v:'docs.google.com'},
+      // shopping / food
+      {v:'amazon.ca'}, {v:'ebay.com'}, {v:'walmart.ca'}, {v:'bestbuy.ca'},
+      {v:'doordash.com'}, {v:'ubereats.com'}, {v:'instacart.com'}, {v:'opentable.com'},
+      // travel / local
+      {v:'google.com/maps', ico:'maps.google.com'}, {v:'booking.com'}, {v:'airbnb.com'},
+      {v:'expedia.ca', ico:'expedia.com'}, {v:'yelp.com'}, {v:'tripadvisor.com'},
+      // media / reference / play
+      {v:'youtube.com'}, {v:'x.com'}, {v:'reddit.com'}, {v:'netflix.com'},
+      {v:'spotify.com'}, {v:'wikipedia.org'}, {v:'weather.com'}, {v:'lichess.org'},
     ];
     let _pills = [];
     function fav(d){ return 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(d) + '&sz=32'; }
+    function letterIcon(name){
+      const s = document.createElement('span'); s.className = 'op-nt-letter';
+      s.textContent = ((name || '?').trim()[0] || '?');
+      return s;
+    }
     function pillIcon(entry){
-      if (entry.tool) { const s = document.createElement('span'); s.innerHTML = PLUG; return s.firstChild; }
+      if (entry.tool) return letterIcon(entry.v);
       const im = document.createElement('img'); im.alt = '';
       im.src = fav(entry.ico || entry.v);
-      im.addEventListener('error', () => im.remove());   // no favicon → text-only pill
+      im.addEventListener('error',  => im.remove());   // no favicon → text-only pill
       return im;
     }
     function addPill(val, entry){
@@ -2579,7 +1442,7 @@
       const tx = document.createElement('span'); tx.textContent = val; pill.appendChild(tx);
       const x = document.createElement('span'); x.className = 'op-nt-pill-x';
       x.innerHTML = '<svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"></path></svg>';
-      x.addEventListener('click', () => { _pills = _pills.filter(p => p.v !== val); pill.remove(); renderSug(); });
+      x.addEventListener('click',  => { _pills = _pills.filter(p => p.v !== val); pill.remove(); renderSug(); });
       pill.appendChild(x);
       pillsEl.insertBefore(pill, sitesIn);
       sitesIn.value = ''; renderSug();
@@ -2604,7 +1467,7 @@
     }
     sitesIn.addEventListener('focus', renderSug);
     sitesIn.addEventListener('input', renderSug);
-    sitesIn.addEventListener('blur', () => setTimeout(() => { sugEl.hidden = true; }, 120));
+    sitesIn.addEventListener('blur',  => setTimeout(() => { sugEl.hidden = true; }, 120));
     sitesIn.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addPill(sitesIn.value); }
       else if (e.key === 'Backspace' && !sitesIn.value && _pills.length) {
@@ -2616,12 +1479,83 @@
     });
     pillsEl.addEventListener('mousedown', e => { if (e.target === pillsEl) { e.preventDefault(); sitesIn.focus(); } });
 
+    // ── real scheduler (v0.7.0): repeat/time/day pickers → 5-field cron. The
+    // backend contract is unchanged (cron string in `schedule`); only the UI
+    // stopped being a cron textbox. "Custom (cron)" keeps the raw escape hatch.
+    const repSel = document.getElementById('op-nt-rep');
+    const timeIn = document.getElementById('op-nt-time');
+    const dowEl  = document.getElementById('op-nt-dow');
+    const domRow = document.getElementById('op-nt-dom-row');
+    const domIn  = document.getElementById('op-nt-dom');
+    const cronIn = document.getElementById('op-nt-sched');
+    const sumEl  = document.getElementById('op-nt-sched-sum');
+    // chips Mon..Sun → cron dow 1..6,0
+    ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => {
+      const c = document.createElement('span'); c.className = 'op-nt-dowchip';
+      c.textContent = d; c.dataset.d = String((i + 1) % 7);
+      c.addEventListener('click',  => { c.classList.toggle('active'); schedSync(); });
+      dowEl.appendChild(c);
+    });
+    function _timeParts(){ const p = (timeIn.value || '09:00').split(':');
+      return { h: parseInt(p[0], 10) || 0, m: parseInt(p[1], 10) || 0 }; }
+    function _fmtTime(){ const {h, m} = _timeParts(); const ap = h < 12 ? 'AM' : 'PM';
+      return (h % 12 || 12) + ':' + String(m).padStart(2, '0') + ' ' + ap; }
+    function _pickedDays(){ return [...dowEl.querySelectorAll('.active')]; }
+    function schedCron(){
+      const rep = repSel.value, {h, m} = _timeParts();
+      if (!rep) return '';
+      if (rep === 'cron')     return cronIn.value.trim();
+      if (rep === 'hourly')   return m + ' * * * *';
+      if (rep === 'daily')    return m + ' ' + h + ' * * *';
+      if (rep === 'weekdays') return m + ' ' + h + ' * * 1-5';
+      if (rep === 'weekly') { const ds = _pickedDays().map(c => c.dataset.d);
+        return ds.length ? m + ' ' + h + ' * * ' + ds.join(',') : ''; }
+      if (rep === 'monthly')  return m + ' ' + h + ' ' + (parseInt(domIn.value, 10) || 1) + ' * *';
+      return '';
+    }
+    function schedHuman(){
+      const rep = repSel.value, {m} = _timeParts();
+      if (!rep) return 'Runs only when you press ▶.';
+      if (rep === 'hourly')   return 'Runs every hour at :' + String(m).padStart(2, '0') + '.';
+      if (rep === 'daily')    return 'Runs every day at ' + _fmtTime() + '.';
+      if (rep === 'weekdays') return 'Runs Mon–Fri at ' + _fmtTime() + '.';
+      if (rep === 'weekly') { const names = _pickedDays().map(c => c.textContent);
+        return names.length ? 'Runs every ' + names.join(', ') + ' at ' + _fmtTime() + '.'
+                            : 'Pick at least one day.'; }
+      if (rep === 'monthly')  return 'Runs monthly on day ' + (parseInt(domIn.value, 10) || 1)
+                                     + ' at ' + _fmtTime() + '.';
+      if (rep === 'cron') { const c = cronIn.value.trim();
+        if (!c) return 'Enter a 5-field cron: min hour dom mon dow.';
+        return (c.split(/\s+/).length === 5 ? '' : '⚠ needs 5 fields — ') + cronToHuman(c); }
+      return '';
+    }
+    function schedSync(){
+      const rep = repSel.value;
+      timeIn.hidden = !rep || rep === 'cron';
+      dowEl.hidden  = rep !== 'weekly';
+      domRow.hidden = rep !== 'monthly';
+      cronIn.hidden = rep !== 'cron';
+      sumEl.innerHTML = '';
+      const span = document.createElement('span');
+      if (rep === 'cron') span.className = 'cronlit';
+      span.textContent = schedHuman();
+      sumEl.appendChild(span);
+    }
+    function schedReset(){
+      repSel.value = ''; timeIn.value = '09:00'; domIn.value = '1'; cronIn.value = '';
+      _pickedDays().forEach(c => c.classList.remove('active'));
+      schedSync();
+    }
+    repSel.addEventListener('change', schedSync);
+    [timeIn, domIn, cronIn].forEach(el => el.addEventListener('input', schedSync));
+    schedSync();
+
     function openModal(){
       const draft = input.value.trim();
       prompt.value = (draft && !draft.startsWith('/')) ? draft
         : ((window._opLastDispatch || {}).task || '');
       name.value = ''; sitesIn.value = '';
-      const schedEl = document.getElementById('op-nt-sched'); if (schedEl) schedEl.value = '';
+      schedReset();
       _pills = []; pillsEl.querySelectorAll('.op-nt-pill').forEach(p => p.remove());
       veil.hidden = false;
       setTimeout(() => name.focus(), 0);
@@ -2632,8 +1566,10 @@
       if (!n) { name.focus(); return; }
       if (!p) { prompt.focus(); return; }
       if (sitesIn.value.trim()) addPill(sitesIn.value);   // pending text counts
+      const sc = schedCron();
+      if (repSel.value && !sc) { schedSync(); return; }   // weekly with 0 days / empty custom
       const body = { name: n, task: p, sites: _pills.map(x => x.v).join(', '),
-        schedule: (document.getElementById('op-nt-sched')||{}).value || '',
+        schedule: sc,
         bot: (typeof selectedBot === 'function') ? selectedBot() : '',
         model: (document.getElementById('op-model')||{}).value || '',
         effort: (document.getElementById('op-effort')||{}).value || '' };
@@ -2715,7 +1651,7 @@
         del.addEventListener('mousedown', ev => { ev.preventDefault(); ev.stopPropagation(); tapDelete(t.slug); });
         row.appendChild(del);
         row.addEventListener('mousedown', ev => { ev.preventDefault(); _sel = i; runSelected(); });
-        row.addEventListener('mousemove', () => { if (_sel !== i) { _sel = i; render(); } });
+        row.addEventListener('mousemove',  => { if (_sel !== i) { _sel = i; render(); } });
         list.appendChild(row);
       });
       const s = list.querySelector('.sel'); if (s) s.scrollIntoView({ block: 'nearest' });
@@ -2750,7 +1686,7 @@
     function loadSelected(){
       const t = _view[_sel]; if (!t) return;
       input.value = t.prompt || ''; autoGrow(); refreshSendButton();
-      (async () => {
+      (async  => {
         if (t.bot && [].some.call(caretSel.options, o => o.value === t.bot)) {
           caretSel.value = t.bot; await loadModels(t.bot);
         }
@@ -2798,7 +1734,7 @@
     }));
 
     // Composer input drives open/filter/close. Runs alongside autoGrow's listener.
-    input.addEventListener('input', async () => {
+    input.addEventListener('input', async  => {
       const v = input.value;
       if (!v.startsWith('/')) { if (_mode) close(); return; }
       if (/^\/save(\s|$)/i.test(v)) { if (_mode !== 'save') enterSaveMode(); return; }
@@ -2904,8 +1840,18 @@
     else if (opts.includes('medium')) _effortSel.value = 'medium';
   }
   function _flashMini(el){ if(!el || el.disabled) return; el.classList.remove('op-mini-swap'); void el.offsetWidth; el.classList.add('op-mini-swap'); }
-  _modelSel.addEventListener('change', () => { syncEffort(); fitMini(_modelSel); _flashMini(_modelSel); _flashMini(_effortSel); saveSession(); });
-  _effortSel.addEventListener('change', () => { _flashMini(_effortSel); saveSession(); });
+  _modelSel.addEventListener('change',  => { syncEffort(); fitMini(_modelSel); _flashMini(_modelSel); _flashMini(_effortSel); saveSession(); });
+  _effortSel.addEventListener('change',  => { _flashMini(_effortSel); saveSession(); });
+
+  // ⌘L / Ctrl+L → focus the URL bar; ⌘K / Ctrl+K → focus the composer (v0.7.0,
+  // browser idiom). Both swallow the browser default (⌘L would hijack OUR urlbar).
+  document.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    if (e.key === 'l' || e.key === 'L') { e.preventDefault();
+      urlEl.focus(); urlEl.select(); }
+    else if (e.key === 'k' || e.key === 'K') { e.preventDefault();
+      const inp = document.getElementById('op-input'); if (inp) inp.focus(); }
+  });
 
   // ⌘⇧E (mac) / Ctrl+Shift+E (win) → cycle the model picker
   document.addEventListener('keydown', (e) => {
@@ -2936,7 +1882,7 @@
   }
   function applyMode() {
     // keep the chat fixed across AUTO⇄MAN: toggling the "Manual mode" banner changes
-    // the rail height and reflows the log, shoving it up . Capture the log's
+    // the rail height and reflows the log, shoving it up (the owner). Capture the log's
     // position before the change, restore it after the synchronous reflow.
     const _atBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 24;
     const _fromBottom = log.scrollHeight - log.scrollTop;
@@ -2987,7 +1933,7 @@
     const finExp=document.getElementById('op-finish-expand');
     const finGo=document.getElementById('op-finish-go');
     const finInput=document.getElementById('op-finish-input');
-    if (finBtn) finBtn.addEventListener('click', ()=>{
+    if (finBtn) finBtn.addEventListener('click', =>{
       if (finExp) finExp.hidden = false;          // expand the optional-message box
       finBtn.hidden = true;                       // hide the trigger so "Finish up" isn't duplicated
       if (finInput) setTimeout(()=>finInput.focus(), 30);
@@ -3006,7 +1952,7 @@
     if (finInput) finInput.addEventListener('keydown', e=>{
       if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); handBack(); } });
   })();
-  caretSel.addEventListener('change', () => { applyMode(); loadModels(selectedBot()); });
+  caretSel.addEventListener('change',  => { applyMode(); loadModels(selectedBot()); });
   applyMode();
   // hard-reset the Finish-up UI at load: hidden + collapsed, regardless of any cached/
   // restored state. It only appears after a live Take control (sets _handedToUser).
@@ -3033,7 +1979,7 @@
   // ^ guards re-emitting a turn that COMPLETED before the page loaded: on refresh the
   // server still reports the last turn's terminal state, which would otherwise re-append
   // its reply (the "last 2 messages duplicate on every refresh" bug, the owner).
-  let _errShown = false;     // one error card per turn — suppress the stacking 
+  let _errShown = false;     // one error card per turn — suppress the stacking (the owner)
   // show at most ONE error card per turn. A failing turn otherwise stacks 3-4:
   // the stderr 'error' message + the 120s watchdog + the 'error' state handler.
   // Prefer a specific reason; ignore generic follow-ups once one is shown.
@@ -3068,7 +2014,7 @@
           // the trace same as 'assistant', but NEVER let it become the reply bubble: a
           // turn that ends (or is cut off mid-loop) without a real answer should fall
           // through to the "no summary" card below, not leak a raw work-summary/checklist
-          // .
+          // (/#40).
           taskStep(m.text);
           taskVerb('Thinking\u2026');
         } else if (m.role === 'error') {
@@ -3122,7 +2068,8 @@
         // on 120s of no new *message*, but a healthy agent legitimately goes quiet for
         // >2min: a long reasoning step, a slow page load, a cold start spinning up the
         // subprocess+MCP, or a natural pause mid-conversation. Those were all getting
-        // false-killed with "the agent stalled" . The server now reports `alive` (subprocess poll()==None); we gate the
+        // false-killed with "the agent stalled" (the owner: happens mid-flight, not just at
+        // start). The server now reports `alive` (subprocess poll()==None); we gate the
         // watchdog on it. A long timeout (8min) stays as a backstop for a process that's
         // alive but truly hung, so we never spin forever — but a working agent is never
         // killed for being quiet.
@@ -3198,7 +2145,7 @@
 
   // urlbar reload + hamburger items → act(); hamburger open/close; tabs toggle
   document.querySelectorAll('.op-ubtn[data-kind], .op-ham-item[data-kind]').forEach(b =>
-    b.addEventListener('click', () => act({kind:b.dataset.kind, value:b.dataset.value||''}, null, true)));  // silent: no status flash
+    b.addEventListener('click',  => act({kind:b.dataset.kind, value:b.dataset.value||''}, null, true)));  // silent: no status flash
   const ham = document.getElementById('op-ham-menu');
   const hamWrap = document.getElementById('op-ham');
   const hamBtn = document.getElementById('op-ham-btn');
@@ -3219,7 +2166,7 @@
     if (!ham.hidden && !hamWrap.contains(e.target)) closeHam(); }, true);
   // picking a menu item runs its action then closes
   ham.querySelectorAll('.op-ham-item').forEach(it =>
-    it.addEventListener('click', () => {
+    it.addEventListener('click',  => {
       if (it.dataset.kind === 'copy_url') {
         const u = (document.getElementById('op-url')||{}).value || '';
         if (u && navigator.clipboard) navigator.clipboard.writeText(u);
@@ -3227,8 +2174,51 @@
       }
       closeHam();
     }));
+
+  // ── settings popover (v0.7.0): ham → Settings. Each row applies live and
+  //    persists to localStorage; restored at init below. ──
+  (function(){
+    const pop = document.getElementById('op-settings');
+    const item = document.getElementById('op-ham-settings');
+    if (!pop || !item) return;
+    const fontSel = document.getElementById('op-set-font');
+    const hintCb  = document.getElementById('op-set-hint');
+    const glideCb = document.getElementById('op-set-glide');
+    const K_FONT = 'operator-chatfont-v1', K_HINT = 'operator-kbhint-v1', K_GLIDE = 'operator-glide-v1';
+    function applyAll(){
+      op.style.setProperty('--chat-font', fontSel.value);
+      op.classList.toggle('op-no-hint', !hintCb.checked);
+      op.classList.toggle('op-no-glide', !glideCb.checked);
+    }
+    function persist(){
+      try { localStorage.setItem(K_FONT, fontSel.value);
+        localStorage.setItem(K_HINT, hintCb.checked ? '1' : '0');
+        localStorage.setItem(K_GLIDE, glideCb.checked ? '1' : '0'); } catch {}
+    }
+    try {
+      const f = localStorage.getItem(K_FONT);
+      if (f && [].some.call(fontSel.options, o => o.value === f)) fontSel.value = f;
+      hintCb.checked  = localStorage.getItem(K_HINT)  !== '0';
+      glideCb.checked = localStorage.getItem(K_GLIDE) !== '0';
+    } catch {}
+    applyAll();
+    [fontSel, hintCb, glideCb].forEach(el =>
+      el.addEventListener('change',  => { applyAll(); persist(); }));
+    item.addEventListener('click', e => {
+      e.stopPropagation();
+      const r = hamBtn.getBoundingClientRect();
+      pop.style.top = (r.bottom + 4) + 'px';
+      pop.style.left = 'auto';
+      pop.style.right = (window.innerWidth - r.right) + 'px';
+      pop.hidden = false;
+    });
+    document.addEventListener('click', e => {
+      if (!pop.hidden && !pop.contains(e.target)) pop.hidden = true; }, true);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
+  })();
   const tabsToggle = document.getElementById('op-tabs-toggle');
-  tabsToggle.addEventListener('click', () => {
+  tabsToggle.addEventListener('click',  => {
     const t = document.getElementById('op-tabs'); t.hidden = !t.hidden;
     tabsToggle.classList.toggle('active', !t.hidden); });
 
@@ -3236,6 +2226,36 @@
   const TABS_URL = "{{ url_for('operator.operator_tabs') }}";
   const tabsEl = document.getElementById('op-tabs');
   let _dragTab = null;
+  // ── favicon hover popover (v0.7.0): one floating card per cockpit, repositioned
+  //    under whichever tab-favicon is hovered. Pointer-events:none so it can never
+  //    steal the hover; a poll rebuild while shown just leaves it to fade on leave.
+  let _favPop = null, _favPopHide = null;
+  function _ensureFavPop(){
+    if (_favPop) return _favPop;
+    _favPop = document.createElement('div'); _favPop.className = 'op-favpop';
+    _favPop.innerHTML = '<img alt=""><span class="fp-txt"><span class="fp-t"></span><span class="fp-h"></span></span>';
+    document.querySelector('.op-browser').appendChild(_favPop);
+    return _favPop;
+  }
+  function showFavPop(anchor, host, title){
+    const pop = _ensureFavPop();
+    if (_favPopHide) { clearTimeout(_favPopHide); _favPopHide = null; }
+    pop.querySelector('img').src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=64';
+    pop.querySelector('.fp-t').textContent = title;
+    pop.querySelector('.fp-h').textContent = host;
+    const br = document.querySelector('.op-browser').getBoundingClientRect();
+    const ar = anchor.getBoundingClientRect();
+    pop.style.top = (ar.bottom - br.top + 7) + 'px';
+    // clamp so the card never spills past the browser's right edge
+    const left = Math.max(6, Math.min(ar.left - br.left - 8, br.width - 330));
+    pop.style.left = left + 'px';
+    pop.classList.add('show');
+  }
+  function hideFavPop(){
+    if (!_favPop) return;
+    _favPop.classList.remove('show');
+    _favPopHide = setTimeout(() => { if (_favPop) _favPop.classList.remove('show'); }, 180);
+  }
   async function pollTabs() {
     try {
       const d = await (await fetch(TABS_URL)).json();
@@ -3297,7 +2317,7 @@
             const tb=document.getElementById('op-tabs'); tb.hidden=true;
             tabsToggle.classList.remove('active');
           };
-          const cancel = () => {
+          const cancel =  => {
             el.removeEventListener('pointermove', move);
             el.removeEventListener('pointerup', done);
             el.removeEventListener('pointercancel', cancel);
@@ -3312,9 +2332,13 @@
         // no backend change; a failed load just removes the img (text-only tab).
         if (/^https?:\/\//i.test(t.url || '')) {
           try {
+            const host = new URL(t.url).hostname;
             const fv = document.createElement('img'); fv.className = 'op-tab-fav'; fv.alt = '';
-            fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(new URL(t.url).hostname) + '&sz=32';
-            fv.addEventListener('error', () => fv.remove());
+            fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=32';
+            fv.addEventListener('error',  => fv.remove());
+            // hover the favicon → big-icon + page-title popover (v0.7.0)
+            fv.addEventListener('mouseenter',  => showFavPop(fv, host, t.title || host));
+            fv.addEventListener('mouseleave', hideFavPop);
             el.appendChild(fv);
           } catch {}
         }
@@ -3323,7 +2347,7 @@
         x.innerHTML = '<svg viewBox="0 0 14 14" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7"></path></svg>';
         x.addEventListener('click', async (e) => { e.stopPropagation();
           el.classList.add('op-tab-closing');   // play the close-out animation first
-          setTimeout(async () => {
+          setTimeout(async  => {
             try { await fetch("{{ url_for('operator.operator_tab_close', idx=0) }}".replace('/0','/'+t.i), {method:'POST'}); pollTabs(); } catch {}
           }, 190);
         });
@@ -3333,7 +2357,7 @@
       const add = document.createElement('button'); add.className='op-tab-add';
       add.innerHTML='<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"></path></svg>';
       add.title='new tab';
-      add.addEventListener('click', async () => {
+      add.addEventListener('click', async  => {
         try { await fetch("{{ url_for('operator.operator_tab_new') }}", {method:'POST'}); pollTabs(); } catch {}
       });
       tabsEl.appendChild(add);
@@ -3405,7 +2429,7 @@
     if (modeBox) { modeBox.classList.add('op-mode-noanim'); modeBox.setAttribute('data-mode', MODE); }
     requestAnimationFrame(() => { if (modeBox) modeBox.classList.remove('op-mode-noanim'); });
   }
-  setTimeout(async () => { try {
+  setTimeout(async  => { try {
     // Restore the bot FIRST, then reload the model list for THAT bot — otherwise the
     // picker keeps the default (Claude) models even after the bot is set to gpt, so
     // it goes blank (the saved gpt model isn't in the Claude option list). Reloading
@@ -3562,11 +2586,11 @@
     _handledState='__interrupted__';   // ignore the backend 'error' that follows
     setTimeout(()=>{ _interrupting=false; }, 2000);
   }
-  send.addEventListener('click', () => {
+  send.addEventListener('click',  => {
     if (_inFlight && !input.value.trim()) stopAgent(); else submit();
   });
   function autoGrow(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight, 84)+'px'; }
-  input.addEventListener('input', () => { autoGrow(); refreshSendButton(); });
+  input.addEventListener('input',  => { autoGrow(); refreshSendButton(); });
   input.addEventListener('keydown', e => {
     // slash palette (#30 v2) owns the keys while open — it's initialized later
     // in the async boot, so consult it dynamically rather than by listener order.
@@ -3575,7 +2599,7 @@
   });
 
   const PRETTY={back:'Back',forward:'Forward',reload:'Reload',tab_next:'Next tab'};
-  document.querySelectorAll('.op-chip').forEach(c => c.addEventListener('click', () =>
+  document.querySelectorAll('.op-chip').forEach(c => c.addEventListener('click',  =>
     act({kind:c.dataset.kind, value:c.dataset.value||''})));  // direct action: result-only, no 'Operator :' line
 
   // ── click on the live view → real page click (object-fit:contain mapping) ──
@@ -3714,22 +2738,28 @@
     }
     _endTouch();
   }, {passive:false});
-  stage.addEventListener('touchcancel', () => {
+  stage.addEventListener('touchcancel',  => {
     if (_tHoldTimer) { clearTimeout(_tHoldTimer); _tHoldTimer = null; }
     // if a press was already down when iOS cancels, RELEASE it so the button
     // doesn't get stuck down on the page.
     if (_tHolding) act({kind:'mouseup_at', x:(_tN?_tN.x:0.5), y:(_tN?_tN.y:0.5)}, null, true);
     _endTouch();
   });
-  stage.addEventListener('dblclick' , e => { e.preventDefault(); const n=viewToNorm(e.clientX,e.clientY); if(!n) return;
-    ripple(e.clientX,e.clientY); act({kind:'dblclick_at',x:n.x,y:n.y}, null, true); });
+  // dblclick: swallow the native event only — the click handler below already
+  // forwarded each physical click with its native detail count (1,2,3…), so the
+  // remote page has the real double/triple-click. Dispatching dblclick_at here
+  // too would replay EXTRA presses and break word/paragraph selection.
+  stage.addEventListener('dblclick' , e => { e.preventDefault(); });
   // right-click → forward to the remote page (its native context menu, captured in the frame);
   // preventDefault stops OUR browser's menu from popping over the stage.
   stage.addEventListener('contextmenu', e => { e.preventDefault(); const n=viewToNorm(e.clientX,e.clientY); if(!n) return;
     ripple(e.clientX,e.clientY); act({kind:'rclick_at',x:n.x,y:n.y}, null, true); });
   stage.addEventListener('click', e => { if (_touchHandled) return;   // touch already handled it
     stage.focus(); const n=viewToNorm(e.clientX,e.clientY); if(!n) return;
-    ripple(e.clientX,e.clientY); act({kind:'click_at',x:n.x,y:n.y}, null, true); });
+    ripple(e.clientX,e.clientY);
+    // e.detail = native multi-click count (2=word select, 3=paragraph select) —
+    // forwarded so the remote page sees a REAL double/triple-click, not three singles.
+    act({kind:'click_at',x:n.x,y:n.y,count:Math.min(e.detail||1,4)}, null, true); });
 
   // ── keyboard passthrough when stage focused ──
   const PASS={Enter:'Enter',Backspace:'Backspace',Tab:'Tab',Escape:'Escape',ArrowUp:'ArrowUp',
@@ -3763,7 +2793,7 @@
       _heldKeys.delete(PASS[e.key]);
       act({kind:'key_up',value:PASS[e.key]}, null, true); } });
   // release any stuck held keys if focus leaves the stage
-  stage.addEventListener('blur', () => { _heldKeys.forEach(k => act({kind:'key_up',value:k}, null, true)); _heldKeys.clear(); });
+  stage.addEventListener('blur',  => { _heldKeys.forEach(k => act({kind:'key_up',value:k}, null, true)); _heldKeys.clear(); });
 })();
 </script>
 {% endblock %}
