@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.7.0-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.7.2-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -60,7 +60,8 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 | **Manual steer** | Click / type / scroll / press-hold / drag flow straight through to the page. |
 | **Agent drive** | `claude-a` + `claude-b` (Claude) and `gpt` (Codex), all on subscription auth — no metered API keys. Conversation is shared across bot switches and persisted across restarts. |
 | **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. |
-| **UX** | MAN/AUTO modes, drag-to-resize chat, live font controls, mobile layout, self-healing feed (flicker-free, auto-relaunch on a wedged Chrome). |
+| **UX** | MAN/AUTO modes, drag-to-resize chat, live font controls, mobile layout, launchpad of saved tasks, a `/` slash palette, and a real scheduler (repeat/time/day → cron). |
+| **Reliability** | Chrome launched once at server boot (no racy on-demand relaunch), scheduler fired-keys persisted across restarts, vision module loads without OCR present, and an env-tunable token-cap governor that stops a runaway vision run. |
 
 ---
 
@@ -70,7 +71,10 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 __init__.py               exports bp (Flask blueprint) + runner (AgentRunner)
 operator_view.py          blueprint: streamer (CDP screenshots) + /operator routes
 operator_agent.py         AgentRunner: claude -p / codex exec, transcript, action labels
-templates/operator.html   the whole UI (CSS + JS, single file)
+operator_tasks.py         saved-task store (name / prompt / bot / model / tools)
+operator_schedule.py      cron matcher + background dispatcher, disk-persisted dedupe
+templates/operator.html   the UI markup + JS (styles live in static/operator.css)
+static/operator.css       the UI stylesheet (extracted from the template)
 align_audit.py            dev tool: measures header / urlbar alignment
 ```
 
@@ -83,6 +87,10 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v0.7.2** — **stability + UI polish pass**. Chrome now launches **exactly once at server boot** and the old on-demand / on-wedge / on-dispatch auto-relaunch is gone — multiple call sites used to each independently decide Chrome was down and shell out to the launcher at the same time, spawning duplicate windows even with a lock around one of them; a wedged or manually-closed browser now surfaces cleanly and is restarted via the launch script instead. The scheduler's per-minute **fired-keys are persisted to disk** (atomic tmp+replace) so a restart inside the same minute doesn't double-fire a scheduled task. The vision module **lazy-imports `pytesseract`** so it loads even where OCR isn't installed. The UI stylesheet is **extracted to a served `static/operator.css`** (was inline in the template) — same look, cacheable and easier to read. Plus a **1Password autofill hint** (the agent tries the inline 1Password suggestion at any login before hunting for credentials), the agy step-by-step directive is factored into a testable constant, and assorted tab-drag / palette / favicon / font fixups.
+
+**v0.7.1** — intermediate infra tag (folded into v0.7.2): scheduler persistence, CSS extraction, single-boot Chrome, lazy OCR, and the env-tunable token-cap governor (`OPERATOR_TOKEN_TURN_STOP` / `OPERATOR_TOKEN_RUN_STOP`).
 
 **v0.7.0** — **saved tasks + the run governor**. The headline: OpenAI-Operator-style **saved tasks** — a **/ slash palette** in the composer (type "/" → filterable list, ↵ runs a task as stored, Tab loads it into the composer with its bot/model/effort applied, inline delete with click-again confirm), a **Save task modal** (name / "What would you like Operator to do?" / a tools-and-websites **pill field** with favicon autocomplete) opened from a floppy button in the urlbar, and a **launchpad** — saved tasks as cards on the idle stage, shown on fresh sessions until the conversation starts. Tasks can carry an optional 5-field **cron schedule**: a background thread dispatches them through the same path as ▶ (stdlib cron matcher, per-minute dedupe), and finished runs feed an **unseen-runs counter** (`/operator/unseen`) you can wire to a nav badge — it clears the moment the cockpit is viewed or polling. **Run governor**: per-run cumulative token tracking with hard caps (default 3M/turn, 20M/run, env-tunable) that auto-stop a runaway vision task like a human Stop tap, and an **image governor** in the MCP pipe (browse/mcp_image_governor.js) that downscales oversized screenshot blocks (long edge >1100px → 1024 JPEG) before the model ingests them — fail-open at every layer, ~2× context headroom on long vision runs (requires `sharp` next to the script; passes through untouched without it). UI: pointer-based **drag-to-reorder tabs** (works on touch — the old HTML5 drag never fired there), per-tab **favicons**, a live **site favicon in the urlbar lock slot**, a green/amber/red **nav status dot** + loading hairline, a quieter hamburger menu (soft hover, chip-styled shortcut keys), slightly darker default-dark surfaces, smaller urlbar icons, restrained entrance animations, and a radial vignette + grain under the launchpad.
 
