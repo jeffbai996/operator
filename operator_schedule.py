@@ -4,14 +4,16 @@ pings (#3).
 One thread, two small jobs that share the same poll loop:
 - SCHEDULE: saved tasks may carry a 5-field cron `schedule`; when a minute
   matches, the task is dispatched through the same path as the ▶ run route.
-  Fired at most once per matching minute (in-memory dedupe — a server restart
-  inside the same minute could double-fire; acceptable for v1).
+  Fired at most once per matching minute; the fired-keys are persisted to disk
+  (operator-fired.json, atomic tmp+replace) so a server restart inside the same
+  minute does NOT re-fire — each fire is a real token + browser cost.
 - UNSEEN COUNTER: when a run reaches a terminal state (done/error — a user
   interrupt is the user's own act), bump a small on-disk counter that feeds
-  a red notification badge in the host app's nav (wire #operator-badge to the
-  /operator/unseen endpoint). The badge clears when the cockpit is actually
-  looked at (the operator page view and its status poll both clear it), so an
-  open cockpit never accumulates.
+  the red notification badge on the host-app operator nav tab. The badge
+  clears when the cockpit is actually looked at (the operator page view and
+  its status poll both clear it), so an open cockpit never accumulates.
+  (Replaces the short-lived Discord completion pings — "we don't need to be
+  notified in discord for operator", 2026-07-01.)
 
 Config (env): OPERATOR_SCHEDULER=0 disables the whole thread.
 """
@@ -91,15 +93,52 @@ def cron_matches(expr: str, dt: datetime) -> bool:
             and dt.day in sets[2] and dt.month in sets[3] and dow_ok)
 
 
-# ── schedule core (pure: injected task loader, in-memory dedupe) ─────────────
+# ── schedule core (injected task loader, disk-persisted per-minute dedupe) ────
+
+# Sibling of operator-tasks.json / operator-unseen.json; same cache dir + the
+# tmp+os.replace atomic-write discipline. Persisting the fired-keys means a
+# service restart INSIDE a matching minute won't re-fire tasks that already ran
+# this minute (each fire is a real token + browser cost, so a double-fire is not
+# free). The set is pruned to the current + previous minute so it stays tiny.
+FIRED_PATH = os.path.join(
+    os.path.expanduser("~/.cache/computer-use"), "operator-fired.json")
+
+
+def _read_fired(path: str) -> dict:
+    """The persisted {slug: 'YYYY-mm-ddTHH:MM'} fired-map. Missing/corrupt → {}."""
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_fired(path: str, d: dict) -> None:
+    """Atomically persist the fired-map (tmp + os.replace); best-effort."""
+    import json
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
 
 class SchedulerCore:
-    def __init__(self, load_tasks=None):
+    def __init__(self, load_tasks=None, fired_path: str | None = None):
         self._load = load_tasks or _tasks_store.load_tasks
-        self._fired: dict = {}          # slug -> "YYYY-mm-ddTHH:MM" last fired
+        self._fired_path = fired_path or FIRED_PATH
+        # slug -> "YYYY-mm-ddTHH:MM" last fired; loaded from disk so a restart
+        # inside the same minute doesn't re-fire.
+        self._fired: dict = _read_fired(self._fired_path)
 
     def due(self, now: datetime) -> list:
-        """Slugs whose schedule matches `now`'s minute and haven't fired in it."""
+        """Slugs whose schedule matches `now`'s minute and haven't fired in it.
+        A fire is persisted immediately so a restart this minute won't repeat it."""
         key = now.strftime("%Y-%m-%dT%H:%M")
         out = []
         try:
@@ -115,7 +154,17 @@ class SchedulerCore:
             if cron_matches(expr, now):
                 self._fired[slug] = key
                 out.append(slug)
+        if out:
+            self._prune(now)
+            _write_fired(self._fired_path, self._fired)
         return out
+
+    def _prune(self, now: datetime) -> None:
+        """Keep only current + previous minute buckets so the set stays bounded."""
+        from datetime import timedelta
+        keep = {now.strftime("%Y-%m-%dT%H:%M"),
+                (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M")}
+        self._fired = {slug: k for slug, k in self._fired.items() if k in keep}
 
 
 # ── unseen-runs counter (feeds the nav badge) ────────────────────────────────
