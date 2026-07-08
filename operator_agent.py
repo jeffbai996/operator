@@ -82,8 +82,8 @@ _DESKTOP_FLAVORS = {
 # Squad self-context for gpt. The Claude bots get this from their own CLAUDE.md +
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
-def _squad_boot_context(bot: str = "gpt") -> str:
-    """Slim squad context for Operator runs (browser tasks don't need the full digest).
+def _host_boot_context(bot: str = "gpt") -> str:
+    """Slim host context for Operator runs (browser tasks don't need the full digest).
 
     Loads:
     - SQUAD.md rulebook (behavioral rules, ~5.7k tokens)
@@ -102,7 +102,7 @@ def _squad_boot_context(bot: str = "gpt") -> str:
             _sys.path.insert(0, _ss)
         import store as _store  # type: ignore
         parts = []
-        for fn in ("format_squad_doc_for_prompt", "format_system_doc_for_prompt"):
+        for fn in ("format_host_doc_for_prompt", "format_system_doc_for_prompt"):
             try:
                 v = getattr(_store, fn)(bot=bot)
                 if v:
@@ -148,7 +148,7 @@ def _squad_boot_context(bot: str = "gpt") -> str:
 
 _GPT_SELF = ""
 
-# Inline self-context for gemma — fallback if _squad_boot_context("gemma") returns
+# Inline self-context for gemma — fallback if _host_boot_context("gemma") returns
 # nothing (gemma has no SessionStart hook, same as gpt). Parallel to _GPT_SELF.
 _GEMMA_SELF = ""
 
@@ -187,7 +187,7 @@ for _b in AGENT_BOTS.values():
     try: os.makedirs(_b["cwd"], exist_ok=True)
     except Exception: pass
 
-# DEMO sandbox persona — Operator browser-driving behavior ONLY, no squad identity/context.
+# DEMO sandbox persona — Operator browser-driving behavior ONLY, no host identity/context.
 # Used when start(demo=True) for the public demo instance. Strips _GPT_SELF.
 _DEMO_PERSONA = "You are a capable web-browsing assistant operating a live browser." + _BROWSER_MANDATE
 
@@ -869,7 +869,7 @@ class AgentRunner:
             self.started_ts = time.time()
             self.ended_ts = 0.0
             self.model, self.effort = (model or '').strip(), (effort or '').strip()
-            self.demo = bool(demo)   # demo=True → sandboxed: no squad context/identity
+            self.demo = bool(demo)   # demo=True → sandboxed: no host context/identity
             # default the claude runtime to Sonnet 5 / medium when nothing was picked
             # (empty model would otherwise drop the flag and use the CLI's own default).
             if b.get("runtime") == "claude":
@@ -1111,20 +1111,20 @@ class AgentRunner:
             # resumes, codex already threaded it — don't re-send (avoids per-turn bloat).
             # (Kept full, not compressed: it's ~92% cached after turn 1, and the host/
             # search/store awareness it gives the bot is worth the one-time cold cost.)
-            _boot = "" if (resume_id or getattr(self, "demo", False)) else _squad_boot_context("gpt")
+            _boot = "" if (resume_id or getattr(self, "demo", False)) else _host_boot_context("gpt")
             _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
             prompt = (_persona
                       + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n" + _boot) if _boot else "")
                       + "\n\nTask: " + task)
             # DEMO: read-only sandbox (codex's own FS sandbox restricts the agent to its
-            # workspace — it CANNOT read ~/repos, ~/.claude, squad files). Non-demo keeps
+            # workspace — it CANNOT read ~/repos, ~/.claude, host files). Non-demo keeps
             # the bypass (it's the owner's trusted local cockpit). The browser MCP runs as
             # a separate subprocess outside this sandbox, so browsing still works fully.
             if getattr(self, "demo", False):
                 # DEMO: run codex INSIDE a bwrap FS sandbox (sandbox.sh) — tmpfs over
-                # $HOME hides ~/repos, ~/.claude, ~/.codex, squad data; only the empty
+                # $HOME hides ~/repos, ~/.claude, ~/.codex, host data; only the empty
                 # workspace + auth + browse module are bound. codex's built-in shell/file
-                # tools physically cannot reach owner/squad files. (-s read-only too, as
+                # tools physically cannot reach owner/host files. (-s read-only too, as
                 # defense-in-depth; the real seal is the OS sandbox.) Verified can't read
                 # the host repo. The browser MCP it spawns inherits the sandbox but still
                 # reaches the isolated Chrome (network) + writes screenshots (bound dir).
@@ -1189,7 +1189,7 @@ class AgentRunner:
             self._agy_traj_before = self._agy_snapshot_trajectories()
             # agy has no --append-system-prompt (a claude flag) — FOLD persona +
             # host self-context + task into the -p prompt (like the codex branch).
-            _boot = "" if getattr(self, "demo", False) else _squad_boot_context("gemma")
+            _boot = "" if getattr(self, "demo", False) else _host_boot_context("gemma")
             _persona = _DEMO_PERSONA if getattr(self, "demo", False) else b["persona"]
             # STEP-BY-STEP (agy/Gemini only): Flash one-shots its whole plan — it writes
             # every tool_call in a single planner pass up front, then executes silently,
