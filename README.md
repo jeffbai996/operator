@@ -92,6 +92,22 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 
 ---
 
+## Roadmap
+
+**v1.1 — perception depth + the canvas-game showcase**
+- Self-hosted OpenRSC demo (zero ToS risk) — the flagship RuneScape-class canvas run.
+- Sprite-capture workflow: lift template sprites from live frames into `vision/maps/`.
+- Map auto-calibration: derive region geometry from perception (blob grids) instead of static seed coordinates, so maps survive layout/viewport changes.
+- Desktop + macro combined: `game_macro` on the sandbox desktop — grind a native app the way a canvas game is ground.
+- OCR in anger: system tesseract, text conditions and chat/tooltip reading in real macros.
+
+**v1.2 — continuity + driver parity**
+- Long-lived controller sessions: controller state and watchers persist across `game_macro` calls; events push to the planner instead of being polled.
+- Auto-replan loop: on a macro yield the planner re-decides and continues under a hard step/token budget — sustained autonomous play sessions.
+- Driver parity: the operator-control MCP wired into the GPT and Gemini runtimes, so desktop surfaces and `game_macro` stop being Claude-only.
+
+**Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
+
 ## Changelog
 
 **v1.0.0** — **full hands-off computer-use — perception, game_macro, desktop surfaces**. This fulfills the `v1.0.0` promise: the agent can now drive **three surfaces** — the logged-in browser (as before), an **isolated sandbox desktop** (Xvfb — nothing outside it can be touched), and the **real desktop** (gated: never the default, needs an explicit per-session confirm, panic-**STOP** always on screen). Switch from a popover on the brand mark; the live feed follows whichever surface is active, mid-session, no reconnect. **Local perception** (`vision/`): a `perceive` tool grounds the agent in labeled on-screen targets without a single extra model call — template + colour-blob matching, OCR text extraction, per-game region maps (Lichess, OpenRSC shipped), and an optional coordinate grid or region-crop overlay for when raw pixels are still the fastest read. **game_macro planner/controller split** (`control/`): instead of one LLM round-trip per click, the model emits a multi-step macro once — click-by-target-label, waits on local conditions, repeats — and a local controller executes and verifies it at machine speed with **zero mid-macro model calls**, bailing back to the planner only on completion or genuine surprise. **Trace integration**: every macro op and perception call streams into the same live action trace as browser tool calls, so a desktop run reads exactly like a browser one — thinking interleaved with what actually happened on screen.

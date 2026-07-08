@@ -242,7 +242,7 @@
     const up = (log.scrollHeight - log.scrollTop - log.clientHeight) > 2080;
     if (jumpBtn) jumpBtn.classList.toggle('show', up);
   }
-  if (jumpBtn) jumpBtn.addEventListener('click', =>{
+  if (jumpBtn) jumpBtn.addEventListener('click', () =>{
     log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
     // hide once we've arrived
     setTimeout(()=>{ jumpBtn.classList.remove('show'); }, 360);
@@ -368,7 +368,7 @@
     rez.addEventListener('pointerup', e => { try{rez.releasePointerCapture(e.pointerId);}catch(_){} up(); });
     rez.addEventListener('pointercancel', up);
     // keep within bounds if the window resizes
-    window.addEventListener('resize',  => { const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--rail-w')); if (cur) apply(cur); });
+    window.addEventListener('resize', () => { const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--rail-w')); if (cur) apply(cur); });
   })();
 
   // ── mobile bottom-sheet: drag the chat sheet between peek / half / full ──
@@ -376,7 +376,7 @@
     const handle = document.getElementById('op-sheet-handle');
     const opEl = document.getElementById('op');
     if (!handle || !opEl) return;
-    const isMobile =  => window.matchMedia('(max-width: 820px)').matches;
+    const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
     // snap targets as fractions of the viewport height
     const SNAPS = [0.22, 0.5, 0.9];   // peek (room for the Message box + spinner), half, full
     function vh(){ return window.innerHeight; }
@@ -412,11 +412,11 @@
       handle.setPointerCapture(e.pointerId); down(e.clientY); });
     handle.addEventListener('pointermove', e => move(e.clientY));
     handle.addEventListener('pointerup', e => { try{handle.releasePointerCapture(e.pointerId);}catch(_){} up(e.clientY); });
-    handle.addEventListener('pointercancel',  => up(0));
+    handle.addEventListener('pointercancel', () => up(0));
     // tap the handle = cycle peek → half → full → peek
     let _tapStart = 0;
-    handle.addEventListener('pointerdown',  => { _tapStart = Date.now(); });
-    handle.addEventListener('pointerup',  => {
+    handle.addEventListener('pointerdown', () => { _tapStart = Date.now(); });
+    handle.addEventListener('pointerup', () => {
       if (Date.now() - _tapStart < 200 && isMobile()) {
         const cur = document.querySelector('.op-rail').getBoundingClientRect().height / vh();
         let idx = 0; SNAPS.forEach((f,i)=>{ if (Math.abs(f-cur) < Math.abs(SNAPS[idx]-cur)) idx = i; });
@@ -425,7 +425,7 @@
     });
     // start at half on mobile
     if (isMobile()) snapTo(0.5);
-    window.addEventListener('resize',  => { if (isMobile()) {
+    window.addEventListener('resize', () => { if (isMobile()) {
       const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--sheet-h')); if (cur) setH(cur);
     }});
   })();
@@ -441,9 +441,9 @@
     // on page load: show + persist 30s
     show(30000);
     // tapping/focusing the browser stage → fade after 1.5s (they're steering now)
-    stage.addEventListener('focus', =>{ show(0); hide(1500); });
+    stage.addEventListener('focus', () =>{ show(0); hide(1500); });
     // clicking away from the stage → re-show + persist 10s
-    stage.addEventListener('blur', =>{ show(10000); });
+    stage.addEventListener('blur', () =>{ show(10000); });
   })();
 
   // lock page scroll while on the operator page; restore on leave
@@ -466,7 +466,7 @@
     setHdr();
     window.addEventListener('resize', setHdr);
     window.addEventListener('orientationchange', setHdr);
-    document.getElementById('op-full')?.addEventListener('click',  => setTimeout(setHdr, 50));
+    document.getElementById('op-full')?.addEventListener('click', () => setTimeout(setHdr, 50));
   })();
   // stop iOS Safari's zoom-on-focus of the small chat input (keeps the compact font
   // We do NOT set user-scalable=no — the owner wants native pinch-zoom on the
@@ -483,10 +483,10 @@
     const inp = document.getElementById('op-input'); if (!inp || !_vp) return;
     const LOCK = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
     const FREE = _vpPrev || 'width=device-width, initial-scale=1';
-    inp.addEventListener('focus',  => _vp.setAttribute('content', LOCK));
-    inp.addEventListener('blur',   => _vp.setAttribute('content', FREE));
+    inp.addEventListener('focus', () => _vp.setAttribute('content', LOCK));
+    inp.addEventListener('blur', () => _vp.setAttribute('content', FREE));
   })();
-  window.addEventListener('pagehide',  => {
+  window.addEventListener('pagehide', () => {
     document.documentElement.classList.remove('op-locked');
     document.body.classList.remove('op-locked');
     if (_vp && _vpPrev !== null) _vp.setAttribute('content', _vpPrev);
@@ -496,7 +496,7 @@
     const btn = document.getElementById('op-full');
     // restore: if the user was in fullscreen before a refresh, re-enter it
     try { if (localStorage.getItem(FULL_KEY) === '1') { document.body.classList.add('op-full'); if (typeof setHdr === 'function') setTimeout(setHdr, 50); } } catch {}
-    btn && btn.addEventListener('click',  => {
+    btn && btn.addEventListener('click', () => {
       const on = document.body.classList.toggle('op-full');
       try { localStorage.setItem(FULL_KEY, on ? '1' : '0'); } catch {}
     });
@@ -509,7 +509,7 @@
     const flatBtn = document.getElementById('op-flat');
     const apply = (on)=>{ if (opEl) opEl.classList.toggle('op-flat', on); };
     try { apply(localStorage.getItem(FLAT_KEY) === '1'); } catch {}
-    if (flatBtn) flatBtn.addEventListener('click', =>{
+    if (flatBtn) flatBtn.addEventListener('click', () =>{
       const on = !(opEl && opEl.classList.contains('op-flat'));
       apply(on);
       try { localStorage.setItem(FLAT_KEY, on ? '1' : '0'); } catch {}
@@ -622,13 +622,13 @@
     // feed came back while idle → settle the card to its proper idle label.
     if (wasLost && op.dataset.busy !== '1') {
       try { setCardText(actTxt, idleCardText()); } catch(_){} } }
-  view.addEventListener('load',  => { _hasFrame = true; _lastImgLoad = Date.now();
+  view.addEventListener('load', () => { _hasFrame = true; _lastImgLoad = Date.now();
     view.style.visibility='visible'; signalOk(); backoff = 600; });
-  view.addEventListener('error',  => { signalLost(); scheduleReconnect(); });
+  view.addEventListener('error', () => { signalLost(); scheduleReconnect(); });
   connectStream();
   // tab was backgrounded (browser suspends the MJPEG + timers) → on return,
   // immediately reconnect the stream + re-poll so the feed snaps back fast.
-  document.addEventListener('visibilitychange',  => {
+  document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       _coldMs = 0; connectStream();
       if (typeof poll === 'function') poll();
@@ -676,7 +676,7 @@
         fv.width = 13; fv.height = 13; fv.alt = '';
         fv.style.borderRadius = '3px'; fv.style.display = 'block';
         fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=32';
-        fv.addEventListener('error',  => { lockEl.innerHTML = padlock; });
+        fv.addEventListener('error', () => { lockEl.innerHTML = padlock; });
         lockEl.appendChild(fv);
       } else if (!host) {
         lockEl.dataset.favHost = '';
@@ -935,7 +935,7 @@
     const btn = document.createElement('button'); btn.type='button'; btn.className='op-takeover-btn';
     const bl = document.createElement('span'); bl.className='tk-lab'; bl.textContent='Take control';
     btn.appendChild(bl);   // no emoji — clean text pill
-    btn.addEventListener('click', => takeControl(card));
+    btn.addEventListener('click', () => takeControl(card));
     card.appendChild(btn);
     log.appendChild(card); _trimOnly(); scrollToBottom(); saveSession();
     return card;
@@ -1223,15 +1223,15 @@
   }
   const fontDec = document.getElementById('op-font-dec');
   const fontInc = document.getElementById('op-font-inc');
-  if (fontDec) fontDec.addEventListener('click', => scaleKeepingView(-SIZE_STEP));
-  if (fontInc) fontInc.addEventListener('click', => scaleKeepingView(+SIZE_STEP));
+  if (fontDec) fontDec.addEventListener('click', () => scaleKeepingView(-SIZE_STEP));
+  if (fontInc) fontInc.addEventListener('click', () => scaleKeepingView(+SIZE_STEP));
 
 
 
   const _clearBtn = document.getElementById('op-clear');
-  if (_clearBtn) _clearBtn.addEventListener('click',  => {
+  if (_clearBtn) _clearBtn.addEventListener('click', () => {
     if (_clearBtn.dataset.busy === '1') return;          // ignore double-tap mid-animation
-    const finishClear =  => {
+    const finishClear = () => {
       log.innerHTML=''; log.classList.remove('op-clearing');
       try{localStorage.removeItem(LS_KEY);}catch{}
       if (typeof _seenMsg!=='undefined') _seenMsg.clear();
@@ -1251,7 +1251,7 @@
   });
   const eventsEl = document.getElementById('op-events');
   const actionBtn = document.getElementById('op-action');
-  actionBtn.addEventListener('click',  => {
+  actionBtn.addEventListener('click', () => {
     const exp = eventsEl.classList.toggle('expanded');
     actionBtn.setAttribute('aria-expanded', exp ? 'true' : 'false');
     eventsEl.scrollTop = eventsEl.scrollHeight;
@@ -1476,7 +1476,7 @@
           if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)) {   // looks like a domain → favicon
             const fv = document.createElement('img'); fv.alt = '';
             fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(s) + '&sz=32';
-            fv.addEventListener('error',  => fv.remove());
+            fv.addEventListener('error', () => fv.remove());
             chip.appendChild(fv);
           }
           const tx = document.createElement('span'); tx.textContent = s; chip.appendChild(tx);
@@ -1492,12 +1492,12 @@
         who.textContent = [t.bot, t.model].filter(Boolean).join(' · '); meta.appendChild(who);
         c.appendChild(meta);
         const run = document.createElement('span'); run.className = 'op-lp-run'; run.textContent = '▶ Run'; c.appendChild(run);
-        c.addEventListener('click',  => { lp.hidden = true; if (window._opRunSavedTask) window._opRunSavedTask(t); });
+        c.addEventListener('click', () => { lp.hidden = true; if (window._opRunSavedTask) window._opRunSavedTask(t); });
         grid.appendChild(c);
       });
       const add = document.createElement('button'); add.type = 'button'; add.className = 'op-lp-card op-lp-new';
       add.textContent = '＋ Save a task';
-      add.addEventListener('click',  => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
+      add.addEventListener('click', () => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
       grid.appendChild(add);
       lp.hidden = false;
       new MutationObserver((m, obs) => {
@@ -1511,7 +1511,7 @@
     const f = (expr || '').trim().split(/\s+/);
     if (f.length !== 5) return expr || '';
     const [mi, hr, dom, mon, dow] = f;
-    const t =  => { const h = parseInt(hr,10), m = parseInt(mi,10);
+    const t = () => { const h = parseInt(hr,10), m = parseInt(mi,10);
       if (isNaN(h) || isNaN(m)) return hr + ':' + mi;
       const ap = h < 12 ? 'AM' : 'PM'; return (h%12||12) + ':' + String(m).padStart(2,'0') + ' ' + ap; };
     const NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -1575,7 +1575,7 @@
       if (entry.tool) return letterIcon(entry.v);
       const im = document.createElement('img'); im.alt = '';
       im.src = fav(entry.ico || entry.v);
-      im.addEventListener('error',  => im.remove());   // no favicon → text-only pill
+      im.addEventListener('error', () => im.remove());   // no favicon → text-only pill
       return im;
     }
     function addPill(val, entry){
@@ -1589,7 +1589,7 @@
       const tx = document.createElement('span'); tx.textContent = val; pill.appendChild(tx);
       const x = document.createElement('span'); x.className = 'op-nt-pill-x';
       x.innerHTML = '<svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"></path></svg>';
-      x.addEventListener('click',  => { _pills = _pills.filter(p => p.v !== val); pill.remove(); renderSug(); });
+      x.addEventListener('click', () => { _pills = _pills.filter(p => p.v !== val); pill.remove(); renderSug(); });
       pill.appendChild(x);
       pillsEl.insertBefore(pill, sitesIn);
       sitesIn.value = ''; renderSug();
@@ -1614,7 +1614,7 @@
     }
     sitesIn.addEventListener('focus', renderSug);
     sitesIn.addEventListener('input', renderSug);
-    sitesIn.addEventListener('blur',  => setTimeout(() => { sugEl.hidden = true; }, 120));
+    sitesIn.addEventListener('blur', () => setTimeout(() => { sugEl.hidden = true; }, 120));
     sitesIn.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addPill(sitesIn.value); }
       else if (e.key === 'Backspace' && !sitesIn.value && _pills.length) {
@@ -1640,7 +1640,7 @@
     ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => {
       const c = document.createElement('span'); c.className = 'op-nt-dowchip';
       c.textContent = d; c.dataset.d = String((i + 1) % 7);
-      c.addEventListener('click',  => { c.classList.toggle('active'); schedSync(); });
+      c.addEventListener('click', () => { c.classList.toggle('active'); schedSync(); });
       dowEl.appendChild(c);
     });
     function _timeParts(){ const p = (timeIn.value || '09:00').split(':');
@@ -1798,7 +1798,7 @@
         del.addEventListener('mousedown', ev => { ev.preventDefault(); ev.stopPropagation(); tapDelete(t.slug); });
         row.appendChild(del);
         row.addEventListener('mousedown', ev => { ev.preventDefault(); _sel = i; runSelected(); });
-        row.addEventListener('mousemove',  => { if (_sel !== i) { _sel = i; render(); } });
+        row.addEventListener('mousemove', () => { if (_sel !== i) { _sel = i; render(); } });
         list.appendChild(row);
       });
       const s = list.querySelector('.sel'); if (s) s.scrollIntoView({ block: 'nearest' });
@@ -1987,8 +1987,8 @@
     else if (opts.includes('medium')) _effortSel.value = 'medium';
   }
   function _flashMini(el){ if(!el || el.disabled) return; el.classList.remove('op-mini-swap'); void el.offsetWidth; el.classList.add('op-mini-swap'); }
-  _modelSel.addEventListener('change',  => { syncEffort(); fitMini(_modelSel); _flashMini(_modelSel); _flashMini(_effortSel); saveSession(); });
-  _effortSel.addEventListener('change',  => { _flashMini(_effortSel); saveSession(); });
+  _modelSel.addEventListener('change', () => { syncEffort(); fitMini(_modelSel); _flashMini(_modelSel); _flashMini(_effortSel); saveSession(); });
+  _effortSel.addEventListener('change', () => { _flashMini(_effortSel); saveSession(); });
 
   // ⌘L / Ctrl+L → focus the URL bar; ⌘K / Ctrl+K → focus the composer (v0.7.0,
   // browser idiom). Both swallow the browser default (⌘L would hijack OUR urlbar).
@@ -2080,7 +2080,7 @@
     const finExp=document.getElementById('op-finish-expand');
     const finGo=document.getElementById('op-finish-go');
     const finInput=document.getElementById('op-finish-input');
-    if (finBtn) finBtn.addEventListener('click', =>{
+    if (finBtn) finBtn.addEventListener('click', () =>{
       if (finExp) finExp.hidden = false;          // expand the optional-message box
       finBtn.hidden = true;                       // hide the trigger so "Finish up" isn't duplicated
       if (finInput) setTimeout(()=>finInput.focus(), 30);
@@ -2099,7 +2099,7 @@
     if (finInput) finInput.addEventListener('keydown', e=>{
       if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); handBack(); } });
   })();
-  caretSel.addEventListener('change',  => { applyMode(); loadModels(selectedBot()); });
+  caretSel.addEventListener('change', () => { applyMode(); loadModels(selectedBot()); });
   applyMode();
   // hard-reset the Finish-up UI at load: hidden + collapsed, regardless of any cached/
   // restored state. It only appears after a live Take control (sets _handedToUser).
@@ -2292,7 +2292,7 @@
 
   // urlbar reload + hamburger items → act(); hamburger open/close; tabs toggle
   document.querySelectorAll('.op-ubtn[data-kind], .op-ham-item[data-kind]').forEach(b =>
-    b.addEventListener('click',  => act({kind:b.dataset.kind, value:b.dataset.value||''}, null, true)));  // silent: no status flash
+    b.addEventListener('click', () => act({kind:b.dataset.kind, value:b.dataset.value||''}, null, true)));  // silent: no status flash
   const ham = document.getElementById('op-ham-menu');
   const hamWrap = document.getElementById('op-ham');
   const hamBtn = document.getElementById('op-ham-btn');
@@ -2313,7 +2313,7 @@
     if (!ham.hidden && !hamWrap.contains(e.target)) closeHam(); }, true);
   // picking a menu item runs its action then closes
   ham.querySelectorAll('.op-ham-item').forEach(it =>
-    it.addEventListener('click',  => {
+    it.addEventListener('click', () => {
       if (it.dataset.kind === 'copy_url') {
         const u = (document.getElementById('op-url')||{}).value || '';
         if (u && navigator.clipboard) navigator.clipboard.writeText(u);
@@ -2350,7 +2350,7 @@
     } catch {}
     applyAll();
     [fontSel, hintCb, glideCb].forEach(el =>
-      el.addEventListener('change',  => { applyAll(); persist(); }));
+      el.addEventListener('change', () => { applyAll(); persist(); }));
     item.addEventListener('click', e => {
       e.stopPropagation();
       const r = hamBtn.getBoundingClientRect();
@@ -2365,7 +2365,7 @@
       if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
   })();
   const tabsToggle = document.getElementById('op-tabs-toggle');
-  tabsToggle.addEventListener('click',  => {
+  tabsToggle.addEventListener('click', () => {
     const t = document.getElementById('op-tabs'); t.hidden = !t.hidden;
     tabsToggle.classList.toggle('active', !t.hidden); });
 
@@ -2464,7 +2464,7 @@
             const tb=document.getElementById('op-tabs'); tb.hidden=true;
             tabsToggle.classList.remove('active');
           };
-          const cancel =  => {
+          const cancel = () => {
             el.removeEventListener('pointermove', move);
             el.removeEventListener('pointerup', done);
             el.removeEventListener('pointercancel', cancel);
@@ -2482,9 +2482,9 @@
             const host = new URL(t.url).hostname;
             const fv = document.createElement('img'); fv.className = 'op-tab-fav'; fv.alt = '';
             fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=32';
-            fv.addEventListener('error',  => fv.remove());
+            fv.addEventListener('error', () => fv.remove());
             // hover the favicon → big-icon + page-title popover (v0.7.0)
-            fv.addEventListener('mouseenter',  => showFavPop(fv, host, t.title || host));
+            fv.addEventListener('mouseenter', () => showFavPop(fv, host, t.title || host));
             fv.addEventListener('mouseleave', hideFavPop);
             el.appendChild(fv);
           } catch {}
@@ -2739,11 +2739,11 @@
     _handledState='__interrupted__';   // ignore the backend 'error' that follows
     setTimeout(()=>{ _interrupting=false; }, 2000);
   }
-  send.addEventListener('click',  => {
+  send.addEventListener('click', () => {
     if (_inFlight && !input.value.trim()) stopAgent(); else submit();
   });
   function autoGrow(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight, 84)+'px'; }
-  input.addEventListener('input',  => { autoGrow(); refreshSendButton(); });
+  input.addEventListener('input', () => { autoGrow(); refreshSendButton(); });
   input.addEventListener('keydown', e => {
     // slash palette (#30 v2) owns the keys while open — it's initialized later
     // in the async boot, so consult it dynamically rather than by listener order.
@@ -2752,7 +2752,7 @@
   });
 
   const PRETTY={back:'Back',forward:'Forward',reload:'Reload',tab_next:'Next tab'};
-  document.querySelectorAll('.op-chip').forEach(c => c.addEventListener('click',  =>
+  document.querySelectorAll('.op-chip').forEach(c => c.addEventListener('click', () =>
     act({kind:c.dataset.kind, value:c.dataset.value||''})));  // direct action: result-only, no 'Operator :' line
 
   // ── click on the live view → real page click (object-fit:contain mapping) ──
@@ -2891,7 +2891,7 @@
     }
     _endTouch();
   }, {passive:false});
-  stage.addEventListener('touchcancel',  => {
+  stage.addEventListener('touchcancel', () => {
     if (_tHoldTimer) { clearTimeout(_tHoldTimer); _tHoldTimer = null; }
     // if a press was already down when iOS cancels, RELEASE it so the button
     // doesn't get stuck down on the page.
@@ -2946,7 +2946,7 @@
       _heldKeys.delete(PASS[e.key]);
       act({kind:'key_up',value:PASS[e.key]}, null, true); } });
   // release any stuck held keys if focus leaves the stage
-  stage.addEventListener('blur',  => { _heldKeys.forEach(k => act({kind:'key_up',value:k}, null, true)); _heldKeys.clear(); });
+  stage.addEventListener('blur', () => { _heldKeys.forEach(k => act({kind:'key_up',value:k}, null, true)); _heldKeys.clear(); });
 })();
 </script>
 {% endblock %}
