@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-0.7.2-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -48,9 +48,9 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** the UI + manual steering + browser attach work today. Full hands-off
-> computer-use (the agent driving end-to-end) lands at **v1.0.0**; we're on `0.5.x`
-> until then.
+> **Status:** full hands-off computer-use shipped in **v1.0.0** — browser, an
+> isolated sandbox desktop, and (gated, confirm-required) the real desktop, all
+> with local perception and a fast macro controller for repetitive sequences.
 
 ## What it does
 
@@ -62,6 +62,9 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 | **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. |
 | **UX** | MAN/AUTO modes, drag-to-resize chat, live font controls, mobile layout, launchpad of saved tasks, a `/` slash palette, and a real scheduler (repeat/time/day → cron). |
 | **Reliability** | Chrome launched once at server boot (no racy on-demand relaunch), scheduler fired-keys persisted across restarts, vision module loads without OCR present, and an env-tunable token-cap governor that stops a runaway vision run. |
+| **Surfaces** | Browser (default), an isolated sandbox desktop (Xvfb), or the real desktop (gated — explicit per-session confirm, panic-STOP always on screen). Switch from a popover on the brand mark; the live feed follows. |
+| **Perception** | Zero-token local vision (`vision/`): template/colour-blob target finding + OCR, per-game region maps, and grid/crop grounding overlays — the agent reads labeled targets instead of squinting at raw pixels. |
+| **game_macro** | A planner/controller split (`control/`): the model emits a multi-step macro once, a local controller executes + verifies it at machine speed with zero mid-macro model calls, and only reports back on completion or surprise. |
 
 ---
 
@@ -76,6 +79,9 @@ operator_schedule.py      cron matcher + background dispatcher, disk-persisted d
 templates/operator.html   the UI markup + JS (styles live in static/operator.css)
 static/operator.css       the UI stylesheet (extracted from the template)
 align_audit.py            dev tool: measures header / urlbar alignment
+vision/                   local perception: template/colour targets, OCR, per-game maps
+control/                  surface interface + game_macro controller + control MCP
+computer-use/             sandbox (Xvfb) + real-desktop (PowerShell/WSL) backends
 ```
 
 ---
@@ -87,6 +93,12 @@ Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, 
 ---
 
 ## Changelog
+
+**v1.0.0** — **full hands-off computer-use — perception, game_macro, desktop surfaces**. This fulfills the `v1.0.0` promise: the agent can now drive **three surfaces** — the logged-in browser (as before), an **isolated sandbox desktop** (Xvfb — nothing outside it can be touched), and the **real desktop** (gated: never the default, needs an explicit per-session confirm, panic-**STOP** always on screen). Switch from a popover on the brand mark; the live feed follows whichever surface is active, mid-session, no reconnect. **Local perception** (`vision/`): a `perceive` tool grounds the agent in labeled on-screen targets without a single extra model call — template + colour-blob matching, OCR text extraction, per-game region maps (Lichess, OpenRSC shipped), and an optional coordinate grid or region-crop overlay for when raw pixels are still the fastest read. **game_macro planner/controller split** (`control/`): instead of one LLM round-trip per click, the model emits a multi-step macro once — click-by-target-label, waits on local conditions, repeats — and a local controller executes and verifies it at machine speed with **zero mid-macro model calls**, bailing back to the planner only on completion or genuine surprise. **Trace integration**: every macro op and perception call streams into the same live action trace as browser tool calls, so a desktop run reads exactly like a browser one — thinking interleaved with what actually happened on screen.
+
+**v0.9.0** — **coordinate contract + hardening**. Nailed down the coordinate contract across the surface stack: `BrowserSurface` records the device-px→CSS-px scale at each capture and converts on inject (CDP screenshots are device pixels, CDP input is CSS pixels — unconverted clicks land down-right of the target on any DPR>1 window), and `win_backend` does the equivalent image→physical scaling on the real desktop. `control/README.md` documents the planner/controller split and the safety model (shared STOP file, `desktop-real` refusing to construct without an explicit per-session confirm). Plus a **launch-error hardening fix**: a desktop-surface persona swap used `.format()` against mandate text containing literal braces (`computer{action:'screenshot'}`), which threw a bare `KeyError` that used to die silently — the whole prompt-build/MCP-config/persona-swap path is now wrapped so a dead launch surfaces a real error in the chat instead of leaving the run stuck in "running" forever.
+
+**v0.8.0** — **the surface axis**. Before this, Operator only ever drove the browser. Now dispatch takes a **surface** — `browser` / `desktop-sandbox` / `desktop-real` — routed through a dedicated **control MCP** (`computer` / `perceive` / `game_macro`) instead of Playwright on desktop surfaces (a browser tool on a desktop run would just mislead the model). A **surface picker** lives in a popover off the brand mark, with a live-updating chip next to the version number; picking `desktop-real` demands an inline two-step confirm every session, never persisted. The live feed source switches with the surface (`_DesktopFeed` captures via the same sandbox/real backends the agent drives, at a gentler cadence than the browser's CDP frames) and a **panic STOP button** sits over the feed whenever a desktop run is live — it arms a shared kill-switch file that any in-flight macro or injection checks before its next op, so a stop lands even before the process tree dies.
 
 **v0.7.2** — **stability + UI polish pass**. Chrome now launches **exactly once at server boot** and the old on-demand / on-wedge / on-dispatch auto-relaunch is gone — multiple call sites used to each independently decide Chrome was down and shell out to the launcher at the same time, spawning duplicate windows even with a lock around one of them; a wedged or manually-closed browser now surfaces cleanly and is restarted via the launch script instead. The scheduler's per-minute **fired-keys are persisted to disk** (atomic tmp+replace) so a restart inside the same minute doesn't double-fire a scheduled task. The vision module **lazy-imports `pytesseract`** so it loads even where OCR isn't installed. The UI stylesheet is **extracted to a served `static/operator.css`** (was inline in the template) — same look, cacheable and easier to read. Plus a **1Password autofill hint** (the agent tries the inline 1Password suggestion at any login before hunting for credentials), the agy step-by-step directive is factored into a testable constant, and assorted tab-drag / palette / favicon / font fixups.
 

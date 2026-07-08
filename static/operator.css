@@ -1317,3 +1317,70 @@
 
   /* DEMO: fullscreen toggle is pointless (already full-window) — hide it */
   .op-demo #op-full { display: none !important; }
+  /* ── surface switcher (Track C): brand popover + chip + panic STOP ─────── */
+  .op-titlewrap[role="button"] { cursor: pointer; overflow: visible; }
+  .op-titlewrap[role="button"]:hover .op-title { color: var(--fg); }
+  .op-titlewrap[role="button"]:hover .op-brand-caret { opacity: .85; transform: translateY(1px); }
+  .op-brand-caret { margin-left: 4px; opacity: .35; color: var(--muted);
+    vertical-align: middle; transition: opacity .15s ease, transform .18s cubic-bezier(.2,1,.3,1); }
+  .op-titlewrap[aria-expanded="true"] .op-brand-caret { transform: rotate(180deg); opacity: .9; }
+  .op-verline { display: inline-flex; align-items: center; gap: 5px; }
+  .op-surface-chip { font: 700 0.46rem/1 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: .05em; text-transform: uppercase; white-space: nowrap;
+    color: #eab308; background: rgba(234,179,8,.12); border: 1px solid rgba(234,179,8,.35);
+    border-radius: 4px; padding: 1.5px 4px; margin-top: 2px; }
+  .op-surface-chip.real { color: #f87171; background: rgba(248,113,113,.12);
+    border-color: rgba(248,113,113,.4); }
+
+  .op-surface-pop { position: fixed; z-index: 210;
+    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 12px;
+    box-shadow: 0 14px 38px -8px rgba(0,0,0,.72), 0 2px 8px rgba(0,0,0,.35);
+    padding: 5px; min-width: 248px; display: flex; flex-direction: column; gap: 2px;
+    transform-origin: top left;
+    animation: op-ham-in .16s cubic-bezier(.2,1,.3,1); }
+  .op-surface-pop[hidden] { display: none; }
+  .op-surf-item { display: flex; align-items: center; gap: 0.6rem;
+    background: transparent; border: none; cursor: pointer; text-align: left;
+    border-radius: 9px; padding: 0.5rem 0.6rem; color: var(--fg-2);
+    transition: background .12s ease, color .12s ease; }
+  .op-surf-item:hover:not(:disabled) { background: var(--bg-4); color: var(--fg); }
+  .op-surf-item:disabled { opacity: .38; cursor: default; }
+  .op-surf-item.active .op-surf-name { color: var(--fg); }
+  .op-surf-ico { flex: 0 0 auto; display: inline-flex; color: var(--muted); }
+  .op-surf-item:hover:not(:disabled) .op-surf-ico { color: var(--fg-2); }
+  .op-surf-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+  .op-surf-name { font: 600 0.74rem/1.1 'Plus Jakarta Sans', sans-serif;
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .op-surf-warn { color: #eab308; flex: 0 0 auto; }
+  .op-surf-hint { font: 500 0.62rem/1.25 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); }
+  .op-surf-check { flex: 0 0 auto; color: var(--accent); }
+  .op-surf-confirm { display: inline-flex; gap: 5px; flex: 0 0 auto; }
+  .op-surf-confirm button { border-radius: 7px; padding: 0.32rem 0.55rem;
+    font: 600 0.66rem/1 'Plus Jakarta Sans', sans-serif; cursor: pointer;
+    border: 1px solid var(--border-2); background: var(--bg-3); color: var(--fg-2);
+    transition: background .12s ease, color .12s ease, border-color .12s ease; }
+  .op-surf-confirm .op-surf-yes { color: #f87171; border-color: rgba(248,113,113,.4);
+    background: rgba(248,113,113,.08); }
+  .op-surf-confirm .op-surf-yes:hover { background: rgba(248,113,113,.18); color: #fca5a5; }
+  .op-surf-confirm .op-surf-no:hover { background: var(--bg-4); color: var(--fg); }
+
+  /* hard STOP over the feed — always visible while a desktop run is live */
+  .op-panic { position: absolute; top: 52px; right: 14px; z-index: 60;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(180, 30, 30, .92); color: #fff; border: 1px solid rgba(255,120,120,.55);
+    border-radius: 9px; padding: 0.5rem 0.85rem; cursor: pointer;
+    font: 800 0.72rem/1 'Plus Jakarta Sans', sans-serif; letter-spacing: .08em;
+    box-shadow: 0 6px 22px -4px rgba(220,50,50,.5), 0 2px 8px rgba(0,0,0,.4);
+    transition: background .12s ease, transform .12s ease; }
+  .op-panic:hover { background: rgba(210, 35, 35, .98); transform: scale(1.03); }
+  .op-panic:active { transform: scale(.97); }
+  .op-panic[hidden] { display: none; }
+
+  /* desktop surfaces: browser-only chrome (tabs / urlbar / manual steer) dims out */
+  .op[data-surface="desktop-sandbox"] .op-urlbar,
+  .op[data-surface="desktop-real"] .op-urlbar,
+  .op[data-surface="desktop-sandbox"] .op-tabs,
+  .op[data-surface="desktop-real"] .op-tabs { opacity: .35; pointer-events: none; }
+  .op[data-surface="desktop-sandbox"] .op-mode,
+  .op[data-surface="desktop-real"] .op-mode { opacity: .35; pointer-events: none; }

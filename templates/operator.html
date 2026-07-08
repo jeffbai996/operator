@@ -10,7 +10,11 @@
     <div class="op-sheet-handle" id="op-sheet-handle" aria-hidden="true"><span class="op-sheet-grip"></span></div>
     <div class="op-head">
       <span class="op-dot"></span>
-      <span class="op-titlewrap"><span class="op-title">Operator</span><span class="op-ver">v0.7.2</span></span>
+      <span class="op-titlewrap" id="op-brand" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="switch surface">
+        <span class="op-title">Operator<svg class="op-brand-caret" viewBox="0 0 16 16" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></span>
+        <span class="op-verline"><span class="op-ver">v1.0.0</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+      </span>
+      <div class="op-surface-pop" id="op-surface-pop" hidden role="menu" aria-label="surface"></div>
       <div class="op-mode" id="op-mode" data-mode="man">
         <span class="op-mode-thumb" aria-hidden="true"></span>
         <button type="button" class="op-mode-btn" data-mode="man">MAN</button>
@@ -90,6 +94,9 @@
   <div class="op-resizer" id="op-resizer" title="drag to resize chat" role="separator" aria-orientation="vertical"></div>
 
   <section class="op-browser">
+    <button class="op-panic" id="op-panic" hidden type="button" aria-label="STOP the agent">
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"></rect></svg>STOP
+    </button>
     <div class="op-tabs" id="op-tabs" hidden></div>
     <div class="op-urlbar">
       <button class="op-ubtn" id="op-tabs-toggle" title="show tabs" aria-label="show tabs"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="2.2"></rect><path d="M10 3v14M3 10h14"></path></svg></button>
@@ -1263,6 +1270,146 @@
   const DISPATCH = "{{ url_for('operator.operator_dispatch') }}";
   const AGENT_URL = "{{ url_for('operator.operator_agent_state') }}";
 
+  // ── surface switcher (Track C): hover/tap the Operator brand ────────────
+  // browser / desktop-sandbox / desktop-real. The pick swaps the live feed
+  // immediately and routes the next dispatch; desktop-real demands an inline
+  // confirm every session and keeps a hard STOP over the feed while running.
+  const SURFACES_URL = "{{ url_for('operator.operator_surfaces') }}";
+  const SURFACE_SET_URL = "{{ url_for('operator.operator_surface_set') }}";
+  const PANIC_STOP_URL = "{{ url_for('operator.operator_agent_stop') }}";
+  const brandEl = document.getElementById('op-brand');
+  const surfPop = document.getElementById('op-surface-pop');
+  const surfChip = document.getElementById('op-surface-chip');
+  const panicBtn = document.getElementById('op-panic');
+  let _surfaces = [];                    // [{key,label,hint,available,gated}]
+  let _surfaceActive = 'browser';
+  let _realOk = false;                   // per-SESSION consent, never persisted
+  const _SURF_CHIP = { 'desktop-sandbox': 'sandbox', 'desktop-real': 'real desktop' };
+  const _SURF_ICON = {
+    browser: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg>',
+    'desktop-sandbox': '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5M12 12v9"></path></svg>',
+    'desktop-real': '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="1.6"></rect><path d="M9 20h6M12 16.5V20"></path></svg>'
+  };
+  function applySurfaceState(){
+    op.dataset.surface = _surfaceActive;
+    const chipTxt = _SURF_CHIP[_surfaceActive] || '';
+    surfChip.hidden = !chipTxt;
+    surfChip.textContent = chipTxt;
+    surfChip.classList.toggle('real', _surfaceActive === 'desktop-real');
+    // manual steer drives the browser page — meaningless on a desktop surface
+    if (_surfaceActive !== 'browser' && MODE === 'man') {
+      MODE = 'auto'; try { applyMode(); } catch(_){}
+    }
+    refreshPanic();
+  }
+  function refreshPanic(){
+    panicBtn.hidden = !(_surfaceActive !== 'browser' && op.dataset.busy === '1');
+  }
+  // busy is flipped centrally via op.dataset — observe it instead of patching
+  // every setInFlight call site.
+  new MutationObserver(refreshPanic).observe(op, { attributes: true,
+    attributeFilter: ['data-busy', 'data-surface'] });
+  panicBtn.addEventListener('click', async () => {
+    panicBtn.disabled = true;
+    try { await fetch(PANIC_STOP_URL, { method: 'POST' }); } catch(_){}
+    panicBtn.disabled = false;
+  });
+  function renderSurfacePop(){
+    surfPop.innerHTML = '';
+    _surfaces.forEach(s => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'op-surf-item' + (s.key === _surfaceActive ? ' active' : '');
+      row.disabled = s.available === false;
+      row.innerHTML = '<span class="op-surf-ico">' + (_SURF_ICON[s.key]||'') + '</span>'
+        + '<span class="op-surf-body"><span class="op-surf-name">' + s.label
+        + (s.gated ? '<svg class="op-surf-warn" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3.2 22 20H2L12 3.2z"></path><path d="M12 10v4"></path><circle cx="12" cy="17" r="0.6" fill="currentColor"></circle></svg>' : '')
+        + '</span><span class="op-surf-hint">' + (s.available === false ? 'not available on this host' : s.hint) + '</span></span>'
+        + (s.key === _surfaceActive ? '<svg class="op-surf-check" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>' : '');
+      row.addEventListener('click', (e) => { e.stopPropagation(); pickSurface(s, row); });
+      surfPop.appendChild(row);
+    });
+  }
+  function pickSurface(s, row){
+    if (s.key === _surfaceActive) { closeSurfPop(); return; }
+    if (s.key === 'desktop-real' && !row.classList.contains('confirming')) {
+      // two-step consent, inline in the row — every session, no shortcuts
+      row.classList.add('confirming');
+      row.innerHTML = '<span class="op-surf-ico">' + _SURF_ICON[s.key] + '</span>'
+        + '<span class="op-surf-body"><span class="op-surf-name">Drive the real desktop?</span>'
+        + '<span class="op-surf-hint">moves your actual mouse & keyboard — STOP stays on screen</span></span>'
+        + '<span class="op-surf-confirm"><button type="button" class="op-surf-yes">Confirm</button>'
+        + '<button type="button" class="op-surf-no">Cancel</button></span>';
+      row.querySelector('.op-surf-yes').addEventListener('click', (e) => {
+        e.stopPropagation(); setSurface('desktop-real', true); });
+      row.querySelector('.op-surf-no').addEventListener('click', (e) => {
+        e.stopPropagation(); renderSurfacePop(); });
+      return;
+    }
+    setSurface(s.key, false);
+  }
+  async function setSurface(key, confirmed){
+    try {
+      const d = await (await fetch(SURFACE_SET_URL, { method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ surface: key, confirm: confirmed }) })).json();
+      if (d.ok) {
+        _surfaceActive = d.active;
+        if (key === 'desktop-real' && confirmed) _realOk = true;
+        applySurfaceState(); renderSurfacePop(); closeSurfPop();
+      }
+    } catch(_){}
+  }
+  // open/close: hover-intent on fine pointers, tap everywhere, Esc/outside close
+  let _surfTimer = null;
+  function openSurfPop(){
+    if (!_surfaces.length || document.body.classList.contains('op-demo')) return;
+    const r = brandEl.getBoundingClientRect();
+    surfPop.style.left = Math.max(8, r.left - 2) + 'px';
+    surfPop.style.top = (r.bottom + 6) + 'px';
+    renderSurfacePop();
+    surfPop.hidden = false;
+    brandEl.setAttribute('aria-expanded', 'true');
+  }
+  function closeSurfPop(){
+    surfPop.hidden = true;
+    brandEl.setAttribute('aria-expanded', 'false');
+  }
+  brandEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (surfPop.hidden) openSurfPop(); else closeSurfPop();
+  });
+  if (window.matchMedia && matchMedia('(pointer:fine)').matches) {
+    brandEl.addEventListener('mouseenter', () => {
+      clearTimeout(_surfTimer);
+      _surfTimer = setTimeout(openSurfPop, 140);
+    });
+    brandEl.addEventListener('mouseleave', () => {
+      clearTimeout(_surfTimer);
+      _surfTimer = setTimeout(() => { if (!surfPop.matches(':hover')) closeSurfPop(); }, 320);
+    });
+    surfPop.addEventListener('mouseleave', () => {
+      clearTimeout(_surfTimer);
+      _surfTimer = setTimeout(closeSurfPop, 320);
+    });
+    surfPop.addEventListener('mouseenter', () => clearTimeout(_surfTimer));
+  }
+  document.addEventListener('click', (e) => {
+    if (!surfPop.hidden && !surfPop.contains(e.target) && !brandEl.contains(e.target)) closeSurfPop();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !surfPop.hidden) closeSurfPop();
+  });
+  (async () => {
+    try {
+      const d = await (await fetch(SURFACES_URL)).json();
+      _surfaces = d.surfaces || [];
+      _surfaceActive = d.active || 'browser';
+      if (_surfaces.length < 2) brandEl.removeAttribute('role');  // nothing to switch
+      applySurfaceState();
+    } catch(_){}
+  })();
+
   // Code-block scroll trap fix (the owner): a horizontally-scrollable <pre> in a chat
   // bubble swallows vertical wheel events, so scrolling with the cursor over code
   // froze the chat. Delegate: if a wheel happens inside a <pre> that has no vertical
@@ -2396,6 +2543,11 @@
   let _coldSince = 0;
   async function poll() {
     try { const d = await (await fetch(STATUS)).json();
+      // another tab (or a dispatch) may have switched the surface — stay in sync
+      if (d.surface && d.surface !== _surfaceActive) {
+        _surfaceActive = d.surface; applySurfaceState();
+        if (!surfPop.hidden) renderSurfacePop();
+      }
       if (d.url) showUrl(d.url);   // reflect the live page URL (incl. agent navigation)
       if (d.click) showAgentClick(d.click);   // draw the agent cursor where it clicked
       if (d.has_frame) { setState('live', ''); _coldSince = 0;
@@ -2513,7 +2665,8 @@
     op.dataset.busy='1'; setCardText(actTxt, 'Starting up');
     setCardSub(bot, '');
     try { const d = await (await fetch(DISPATCH, { method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify({bot, task:txt, model:(document.getElementById('op-model')||{}).value||'', effort:(document.getElementById('op-effort')||{}).value||''}) })).json();
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({bot, task:txt, model:(document.getElementById('op-model')||{}).value||'', effort:(document.getElementById('op-effort')||{}).value||'',
+        surface: _surfaceActive, real_ok: (_surfaceActive==='desktop-real' && _realOk)}) })).json();
       if (d.ok) { _lastAssistant=''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }   // don't clear _handledState here — a post-steer dispatch needs the '__interrupted__' guard to swallow the killed run's stale 'done'
       else { logRes(d.error || 'failed to start ' + bot, false); settleAction(false); }
     } catch { logRes('failed to start agent', false); settleAction(false); }

@@ -1,0 +1,22 @@
+# openrsc.yaml — starter map (regions-first; sprites added as captured).
+# Open RuneScape Classic web/desktop client at the classic 512x346 game frame,
+# scaled here to its typical centered placement in a 1280x800 viewport. These
+# are CALIBRATION SEEDS — refine against a live perceive() capture of the
+# actual client before trusting exact edges.
+game: openrsc
+viewport: [1280, 800]
+regions:
+  # the whole game canvas (classic client is 512x346, commonly scaled 2x)
+  game: [128, 54, 1024, 692]
+  # minimap sits top-right of the game canvas
+  minimap: [944, 57, 205, 205]
+  # inventory pane (toggled) occupies the right side under the minimap
+  inventory: [936, 265, 212, 360]
+  # chat/message box along the bottom of the canvas
+  chat: [131, 600, 1018, 143]
+colors:
+  # classic RS tree canopy green (broad band; tune per scene)
+  tree: {lo: [80, 0.25, 0.12], hi: [150, 1.0, 0.75], min_area: 250}
+ocr:
+  - {label: chat, region: chat, min_conf: 45}
+templates: {}
