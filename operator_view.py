@@ -1086,10 +1086,10 @@ def operator_stream():
             now = time.monotonic()
             if f and ts != last_sent:
                 last_sent = ts; last_push = now      # push a new frame immediately
-                yield _part(f)
+                yield _part(f, mime)
             elif f and (now - last_push) > 1.0:
                 last_push = now                       # ~1s heartbeat of last frame
-                yield _part(f)
+                yield _part(f, mime)
             elif not f and (now - last_push) > 1.0:
                 last_push = now                       # placeholder heartbeat (no frame yet)
                 yield _part(_PLACEHOLDER_JPEG)
