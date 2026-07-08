@@ -869,6 +869,131 @@ class _Streamer:
 _streamer = _Streamer()
 
 
+# ── Track C: surfaces (browser / desktop-sandbox / desktop-real) ─────────────
+# The active surface decides the live-feed source and what the dispatched agent
+# drives. Module-level state, reset to browser on server restart (safe default).
+import shutil as _shutil
+import subprocess as _fsp
+
+# computer-use/ sits one level up in the standalone layout (this file at repo
+# root) but two levels up if nested inside a monorepo module dir — try both,
+# preferring whichever actually exists on disk.
+_CU_DIR_1UP = Path(__file__).resolve().parent / "computer-use"
+_CU_DIR_2UP = Path(__file__).resolve().parent.parent / "computer-use"
+_CU_DIR = str(_CU_DIR_1UP if _CU_DIR_1UP.is_dir() else _CU_DIR_2UP)
+
+_SURFACE_DEFS = [
+    {"key": "browser", "label": "Browser",
+     "hint": "the logged-in Chrome — today's Operator"},
+    {"key": "desktop-sandbox", "label": "Sandbox desktop",
+     "hint": "isolated virtual desktop (Xvfb) — safe by construction"},
+    {"key": "desktop-real", "label": "Real desktop", "gated": True,
+     "hint": "drives the actual machine — confirm required, STOP always armed"},
+]
+_active_surface = {"name": "browser"}
+
+
+def _surface_available(key: str) -> bool:
+    if key == "browser":
+        return True
+    if key == "desktop-sandbox":
+        return bool(_shutil.which("Xvfb") and _shutil.which("scrot"))
+    if key == "desktop-real":
+        # bare which() fails under the systemd --user unit (interop dirs not on
+        # its PATH) — accept the canonical WSL interop path too, matching the
+        # resolution win_backend.py does.
+        _ps = (_shutil.which("powershell.exe")
+               or ("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+                   if _os_cfg.path.exists(
+                       "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+                   else None))
+        return bool(_ps and _os_cfg.path.exists(
+            _os_cfg.path.join(_CU_DIR, "win_capture.ps1")))
+    return False
+
+
+def _load_cu(fname: str):
+    """Import a computer-use module by path (dir name has a dash)."""
+    import importlib.util
+    p = _os_cfg.path.join(_CU_DIR, fname)
+    spec = importlib.util.spec_from_file_location("cu_feed_" + fname[:-3], p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _DesktopFeed:
+    """Live-feed source for the desktop surfaces — the desktop counterpart of
+    _Streamer. Captures via the same computer-use backends the agent drives
+    (scrot on the Xvfb display / win_capture.ps1 on the real desktop), at a
+    gentler cadence (full-desktop captures are heavier than CDP frames).
+    Serves PNG or JPEG parts; the stream generator reads .mime per frame."""
+
+    def __init__(self) -> None:
+        self.frame: bytes | None = None
+        self.frame_ts: float = 0.0
+        self.mime: str = "image/jpeg"
+        self.last_view: float = 0.0
+        self.detail: str = ""
+        self.surface: str = "desktop-sandbox"
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._mods: dict = {}
+
+    def ensure_running(self, surface: str) -> None:
+        with self._lock:
+            self.last_view = time.monotonic()
+            self.surface = surface
+            alive = self._thread is not None and self._thread.is_alive()
+            if self._running and alive:
+                return
+            self._running = True
+            self._thread = threading.Thread(target=self._run, daemon=True,
+                                            name="operator-desktop-feed")
+            self._thread.start()
+
+    def _run(self) -> None:
+        while self._running:
+            if time.monotonic() - self.last_view > IDLE_STOP_AFTER:
+                break
+            try:
+                path = self._capture()
+                if path:
+                    with open(path, "rb") as f:
+                        data = f.read()
+                    # scrot writes PNG regardless of suffix; sniff the magic
+                    self.mime = ("image/png" if data[:8] == b"\x89PNG\r\n\x1a\n"
+                                 else "image/jpeg")
+                    self.frame = data
+                    self.frame_ts = time.monotonic()
+                    self.detail = ""
+            except Exception as e:  # noqa: BLE001 — feed must idle, not die
+                self.detail = str(e)
+            time.sleep(1.2 if self.surface == "desktop-real" else 0.6)
+        self.frame = None
+        self._running = False
+
+    def _capture(self) -> str | None:
+        if self.surface == "desktop-real":
+            if "win" not in self._mods:
+                self._mods["win"] = _load_cu("win_backend.py")
+            return self._mods["win"].screenshot("windows-primary", _SHOT_DIR)
+        # sandbox: capture only if the display is actually live — the agent's
+        # control MCP brings it up; the feed never launches Xvfb itself.
+        if "display" not in self._mods:
+            self._mods["display"] = _load_cu("display.py")
+            self._mods["actions"] = _load_cu("actions.py")
+        disp = _os_cfg.environ.get("COMPUTER_USE_DISPLAY", ":99")
+        if not self._mods["display"].is_live(disp):
+            self.detail = f"sandbox display {disp} not up yet"
+            return None
+        return self._mods["actions"].screenshot(disp, _SHOT_DIR)
+
+
+_desktop_feed = _DesktopFeed()
+
+
 def _launch_chrome_on_boot() -> None:
     """Launch the bot Chrome exactly once, when the server process starts —
     the only place Chrome gets auto-started now (2026-07-05; see
@@ -919,14 +1044,20 @@ def _cockpit_redirect():  # legacy path → operator
 
 @bp.route("/operator/stream")
 def operator_stream():
-    """MJPEG multipart stream — renders into an <img>. Survives frame gaps."""
-    _streamer.ensure_running()
+    """MJPEG multipart stream — renders into an <img>. Survives frame gaps.
+    Source-switched per frame by the active surface: browser → the CDP
+    _Streamer; desktop surfaces → the _DesktopFeed. Switching surfaces mid-
+    stream just swaps the source, no reconnect needed."""
+    if _active_surface["name"] == "browser":
+        _streamer.ensure_running()
+    else:
+        _desktop_feed.ensure_running(_active_surface["name"])
 
-    def _part(jpeg):
+    def _part(data, mime=b"image/jpeg"):
         return (b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
-                + jpeg + b"\r\n")
+                b"Content-Type: " + mime + b"\r\n"
+                b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n"
+                + data + b"\r\n")
 
     def gen():
         # Emit a placeholder frame IMMEDIATELY so the <img> always has valid
@@ -941,9 +1072,17 @@ def operator_stream():
         # actually yield when the frame is NEW, so the fast poll adds no bandwidth.
         POLL = 0.02
         while True:
-            _streamer.last_view = time.monotonic()
-            f = _streamer.frame
-            ts = _streamer.frame_ts
+            if _active_surface["name"] == "browser":
+                src = _streamer
+                _streamer.ensure_running()
+                mime = b"image/jpeg"
+            else:
+                src = _desktop_feed
+                _desktop_feed.ensure_running(_active_surface["name"])
+                mime = src.mime.encode()
+            src.last_view = time.monotonic()
+            f = src.frame
+            ts = src.frame_ts
             now = time.monotonic()
             if f and ts != last_sent:
                 last_sent = ts; last_push = now      # push a new frame immediately
@@ -1018,6 +1157,16 @@ def operator_status():
             _os_mod.clear_unseen()
         except Exception:
             pass
+    surface = _active_surface["name"]
+    if surface != "browser":
+        # desktop feed: freshness from ITS buffer; no viewport/url/click mapping
+        # (manual control is browser-only — the UI disables it on desktop).
+        _desktop_feed.last_view = time.monotonic()
+        fresh = (_desktop_feed.frame is not None
+                 and (time.monotonic() - _desktop_feed.frame_ts) < 8.0)
+        return jsonify(status=("live" if fresh else "connecting"),
+                       detail=_desktop_feed.detail, has_frame=fresh,
+                       vw=0, vh=0, url="", click=None, surface=surface)
     fresh = (_streamer.frame is not None
              and (time.monotonic() - _streamer.frame_ts) < 6.5)
     cur_url = _streamer.cur_url
@@ -1027,7 +1176,7 @@ def operator_status():
         click = {"x": round(lx, 4), "y": round(ly, 4), "age": round(time.monotonic() - lt, 3)}
     return jsonify(status=_streamer.status, detail=_streamer.detail,
                    has_frame=fresh, vw=_streamer.vw, vh=_streamer.vh, url=cur_url,
-                   click=click)
+                   click=click, surface=surface)
 
 
 @bp.route("/operator/unseen")
@@ -1135,6 +1284,38 @@ def operator_drivers():
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
 
 
+@bp.route("/operator/surfaces")
+def operator_surfaces():
+    """The pickable surfaces (Track C). Demo NEVER sees past the browser —
+    desktop surfaces expose the host machine and are live-cockpit only."""
+    if DEMO:
+        return jsonify(surfaces=[_SURFACE_DEFS[0]], active="browser")
+    out = [dict(s, available=_surface_available(s["key"]))
+           for s in _SURFACE_DEFS]
+    return jsonify(surfaces=out, active=_active_surface["name"])
+
+
+@bp.route("/operator/surface", methods=["POST"])
+def operator_surface_set():
+    """Switch the active surface: swaps the live-feed source immediately and
+    sets the default surface for the next dispatch. desktop-real demands the
+    explicit confirm flag every time (the UI shows the consent step)."""
+    if DEMO:
+        return jsonify(ok=False, error="demo is browser-only"), 403
+    data = request.get_json(silent=True) or request.form
+    name = (data.get("surface") or "").strip()
+    if name not in [s["key"] for s in _SURFACE_DEFS]:
+        return jsonify(ok=False, error=f"unknown surface {name!r}"), 400
+    if not _surface_available(name):
+        return jsonify(ok=False, error=f"{name} not available on this host"), 409
+    if name == "desktop-real" and not data.get("confirm"):
+        return jsonify(ok=False, error="desktop-real needs confirm"), 403
+    _active_surface["name"] = name
+    if name != "browser":
+        _desktop_feed.ensure_running(name)
+    return jsonify(ok=True, active=name)
+
+
 @bp.route("/operator/dispatch", methods=["POST"])
 def operator_dispatch():
     """Start a headless Claude Code agent (as the chosen persona) to do the task
@@ -1146,6 +1327,15 @@ def operator_dispatch():
         return jsonify(ok=False, error="empty task"), 400
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
+    # surface: explicit in the request, else the cockpit's active pick. The
+    # runner re-validates (gating is server-side, not a UI courtesy).
+    surface = (data.get("surface") or _active_surface["name"] or "browser").strip()
+    real_ok = bool(data.get("real_ok"))
+    if DEMO:
+        surface, real_ok = "browser", False
+    if surface != _active_surface["name"] and not DEMO \
+            and surface in [s["key"] for s in _SURFACE_DEFS]:
+        _active_surface["name"] = surface     # feed follows the dispatch
     # explicit user intent: clear the manual-close latch and re-check liveness/
     # status (no longer relaunches — see _ensure_chrome_alive, 2026-07-05).
     try:
@@ -1162,7 +1352,8 @@ def operator_dispatch():
         effort = "medium"
         r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True)
     else:
-        r = operator_agent.runner.start(bot, task, model=model, effort=effort)
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort,
+                                        surface=surface, real_ok=real_ok)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 

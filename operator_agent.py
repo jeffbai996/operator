@@ -47,6 +47,38 @@ _BROWSER_MANDATE = (
     " browse and base the answer ONLY on the pages you visited. Do NOT say you"
     " can't browse — you can. Cite the pages you actually visited."
 )
+# Desktop-surface counterpart of _BROWSER_MANDATE. Swapped into the persona when
+# the user picks a desktop surface in the cockpit (Track C): the agent's tools
+# are the operator-control MCP (computer / perceive / game_macro), NOT Playwright.
+_DESKTOP_MANDATE = (
+    " You are operating a LIVE COMPUTER DESKTOP ({surface_flavor}) via your MCP"
+    " tools — that is your primary capability and the WHOLE POINT of this session."
+    " Your tools: `computer` (action-based: screenshot / left_click / right_click /"
+    " double_click / mouse_move / left_click_drag / type / key / scroll / wait),"
+    " `perceive` (zero-cost local vision: labeled targets by template/colour match"
+    " + OCR text, optional coordinate grid or region crop), and `game_macro`"
+    " (execute a multi-step macro locally at machine speed — clicks by target"
+    " label, waits on conditions, repeats — with zero model round-trips mid-macro;"
+    " it returns a structured result and bails back to you on anything unexpected)."
+    " WORKFLOW: ALWAYS start with computer{action:'screenshot'} to see the desktop."
+    " Act step by step — act, screenshot, VERIFY the result matches your intent,"
+    " correct if not. Two identical blind actions without checking is a bug."
+    " Prefer `perceive` over squinting at pixels when targets are repetitive or"
+    " small; prefer `game_macro` for repetitive multi-step sequences (grinds,"
+    " form-fill loops, game moves) instead of one tool call per click."
+    " There is NO browser tool here — if the task needs a browser, note that the"
+    " user should switch the surface to 'browser'.")
+
+_DESKTOP_FLAVORS = {
+    "desktop-sandbox": ("an ISOLATED sandbox desktop (Xvfb) — nothing outside it"
+                        " can be touched; act freely"),
+    "desktop-real": ("the user's REAL desktop — their actual mouse, keyboard and"
+                     " open applications. They are watching live and can hit STOP"
+                     " at any moment. Be deliberate: verify every click target"
+                     " before clicking, never act on windows the task didn't ask"
+                     " about, and stop and report if the screen state surprises you"),
+}
+
 # Squad self-context for gpt. The Claude bots get this from their own CLAUDE.md +
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
@@ -160,6 +192,13 @@ for _b in AGENT_BOTS.values():
 _DEMO_PERSONA = "You are a capable web-browsing assistant operating a live browser." + _BROWSER_MANDATE
 
 _BROWSE = os.path.expanduser("~/agents/browse")
+_CONTROL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "control")
+
+# the surface axis (Track C): what screen the agent drives. Browser = today's
+# behavior (Playwright on the logged-in Chrome). Desktop surfaces swap the tool
+# set to the operator-control MCP. desktop-real is gated: never default, needs
+# an explicit per-session confirm (real_ok), blocked in demo.
+SURFACES = ("browser", "desktop-sandbox", "desktop-real")
 # MCP config that gives the agent the Playwright tools, attached to :9222 Chrome
 # via the same stdio wrapper the bots use (cdp-endpoint --ensure inside it).
 _MCP_CONFIG = {
@@ -717,6 +756,8 @@ class AgentRunner:
         self.bot: str | None = None
         self.task: str | None = None
         self.state: str = "idle"          # idle | running | done | error
+        self.surface: str = "browser"     # what screen the agent drives (Track C)
+        self._real_ok: bool = False       # per-session desktop-real confirmation
         self.messages: list = []          # [{ts, role, text}] reasoning/replies
         self.started_ts: float = 0.0
         self.model: str = ''
@@ -781,7 +822,9 @@ class AgentRunner:
             return False
         return self._proc.poll() is None
 
-    def start(self, bot: str, task: str, model: str = '', effort: str = '', demo: bool = False) -> dict:
+    def start(self, bot: str, task: str, model: str = '', effort: str = '',
+              demo: bool = False, surface: str = 'browser',
+              real_ok: bool = False) -> dict:
         with self._lock:
             if self.is_running():
                 return {"ok": False, "error": f"{self.bot} is already running a task"}
@@ -789,6 +832,20 @@ class AgentRunner:
             if not b:
                 return {"ok": False, "error": f"'{bot}' can't drive"}
             runtime = b.get("runtime", "claude")
+            # ── surface gating (Track C) ───────────────────────────────────
+            surface = (surface or "browser").strip()
+            if demo:
+                surface = "browser"          # a public demo can never leave the browser
+            if surface not in SURFACES:
+                return {"ok": False, "error": f"unknown surface {surface!r}"}
+            if surface == "desktop-real" and not real_ok:
+                return {"ok": False, "error":
+                        "desktop-real needs explicit confirmation (real_ok)"}
+            if surface != "browser" and runtime != "claude":
+                return {"ok": False, "error":
+                        f"desktop surfaces need a claude driver (got {bot})"}
+            self.surface = surface
+            self._real_ok = bool(real_ok) and surface == "desktop-real"
             if runtime == "codex":
                 binpath = _resolve_codex()
                 if not binpath:
@@ -841,6 +898,19 @@ class AgentRunner:
             return {"ok": True, "bot": bot}
 
     def _run(self, binpath: str, b: dict, task: str) -> None:
+        # Everything before the Popen try-block (prompt build, MCP config,
+        # persona swap) used to run bare — an exception there killed the thread
+        # SILENTLY, leaving state='running' with no process and no error
+        # message (the desktop-sandbox .format() KeyError found it, 2026-07-08).
+        try:
+            self._run_inner(binpath, b, task)
+        except Exception as e:  # noqa: BLE001 — a dead launch must surface
+            self.state = "error"
+            self.ended_ts = time.time()
+            self.messages.append({"ts": time.time(), "role": "error",
+                                  "text": f"launch failed: {e}"})
+
+    def _run_inner(self, binpath: str, b: dict, task: str) -> None:
         self._runtime = b.get("runtime", "claude")
         self._cur_session = ""
         self._agy_buf = []
@@ -878,7 +948,23 @@ class AgentRunner:
         _is_chatty = (len(_convo) < 40 and any(_convo.startswith(w) for w in
             ("hi", "hey", "hello", "yo", "thanks", "thank you", "who are you",
              "which bot", "what can you")))
-        if not _is_chatty:
+        _surface = getattr(self, "surface", "browser")
+        if not _is_chatty and _surface != "browser":
+            # desktop surfaces: a compact directive (the browser one below is
+            # browser-tool-specific and would actively mislead here).
+            task = (
+                "SYSTEM DIRECTIVE — READ FIRST. You are driving a LIVE DESKTOP the "
+                "user is watching in real time (surface: " + _surface + "). Use your "
+                "`computer` tool to act, `perceive` to ground on labeled targets/OCR, "
+                "and `game_macro` for repetitive multi-step sequences. START with "
+                "computer{action:'screenshot'}. Act → screenshot → VERIFY → correct. "
+                "Do NOT answer from memory when the task is about what's on screen. "
+                "When done, end with a short final answer of what you found or did. "
+                "If you genuinely cannot proceed (a human-only gate, a wedged app), "
+                "emit [[TAKE_CONTROL: <what only they can do>]] on its own line and "
+                "end your turn.\n\n"
+                "USER REQUEST: " + task)
+        elif not _is_chatty:
             task = (
                 "SYSTEM DIRECTIVE — READ FIRST. You are driving a LIVE web browser the "
                 "user is watching in real time. You have Playwright browser tools. For "
@@ -1000,6 +1086,11 @@ class AgentRunner:
                 "USER REQUEST: " + task)
         env = dict(os.environ)
         env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["OPERATOR_SURFACE"] = _surface        # control MCP reads the surface
+        if getattr(self, "_real_ok", False):
+            env["OPERATOR_REAL_OK"] = "1"         # per-session desktop-real confirm
+        else:
+            env.pop("OPERATOR_REAL_OK", None)
         env["PATH"] = (os.path.expanduser("~/.local/bin") + ":"
                        + os.path.expanduser("~/.nvm/versions/node/v20.20.2/bin")
                        + ":" + env.get("PATH", ""))
@@ -1125,8 +1216,27 @@ class AgentRunner:
             # claude -p: stream-json, Max/Pro OAuth in the bot's config dir.
             cfg_path = os.path.join(os.path.expanduser("~/.cache/computer-use"),
                                     f"operator-mcp-{self.bot}.json")
-            mcp_cfg = {"mcpServers": {"playwright": {"command": "bash",
-                       "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), self.bot or ""]}}}
+            # Tool routing by surface: browser keeps Playwright (+ the control MCP
+            # for perceive/game_macro); desktop surfaces get ONLY the control MCP
+            # (computer/perceive/game_macro) — a browser tool on a desktop run
+            # would mislead the model. Demo keeps the original playwright-only
+            # config (the control MCP has local-perception file access the public
+            # sandbox must not inherit).
+            _op_entry = {"command": "bash",
+                         "args": [os.path.join(_CONTROL, "operator-mcp.sh")],
+                         "env": {"OPERATOR_SURFACE": _surface,
+                                 "OPERATOR_BOT": self.bot or "",
+                                 **({"OPERATOR_REAL_OK": "1"}
+                                    if getattr(self, "_real_ok", False) else {})}}
+            _pw_entry = {"command": "bash",
+                         "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), self.bot or ""]}
+            if getattr(self, "demo", False):
+                servers = {"playwright": _pw_entry}
+            elif _surface == "browser":
+                servers = {"playwright": _pw_entry, "operator-control": _op_entry}
+            else:
+                servers = {"operator-control": _op_entry}
+            mcp_cfg = {"mcpServers": servers}
             try:
                 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
                 with open(cfg_path, "w") as f:
@@ -1134,12 +1244,25 @@ class AgentRunner:
             except OSError:
                 pass
             env["CLAUDE_CONFIG_DIR"] = b["config_dir"]
+            # desktop surfaces swap the persona's browser mandate for the desktop
+            # one (personas are built as base + _BROWSER_MANDATE, so replace is
+            # exact); the flavor line tells the model sandbox vs real stakes.
+            _persona = b["persona"]
+            if _surface != "browser":
+                # placeholder swap via .replace, NOT .format() — the mandate
+                # text contains literal braces (computer{action:'screenshot'})
+                # that .format() would treat as fields and KeyError on.
+                _persona = _persona.replace(
+                    _BROWSER_MANDATE,
+                    _DESKTOP_MANDATE.replace(
+                        "{surface_flavor}",
+                        _DESKTOP_FLAVORS.get(_surface, "a desktop")))
             cmd = [binpath, "-p", task,
                    "--output-format", "stream-json", "--verbose",
                    "--permission-mode", "bypassPermissions",
                    # --settings/--strict-mcp-config both BREAK --resume (verified).
                    "--mcp-config", cfg_path,
-                   "--append-system-prompt", b["persona"]]
+                   "--append-system-prompt", _persona]
             if resume_id:
                 cmd += ["--resume", resume_id]
             if self.model:
@@ -1740,6 +1863,18 @@ class AgentRunner:
         p = self._proc
         self.handoff = None   # a takeover/stop clears any pending handoff request
         self._stopped = True  # so _flush_agy drops agy's interrupt-noise stdout
+        # Arm the control-layer kill switch FIRST: any in-flight macro/desktop
+        # injection halts on its next op, even before the process tree dies.
+        # Safe for later runs — surfaces only honor a stop newer than their own
+        # start (see control/surfaces.py).
+        try:
+            _stop_path = os.path.expanduser(
+                "~/.cache/computer-use/operator-stop.json")
+            os.makedirs(os.path.dirname(_stop_path), exist_ok=True)
+            with open(_stop_path, "w", encoding="utf-8") as _f:
+                json.dump({"ts": time.time()}, _f)
+        except OSError:
+            pass
         if p and self.is_running():
             import signal as _sig
             # kill the whole process GROUP — codex/agy spawns children (the MCP server,
@@ -1810,6 +1945,7 @@ class AgentRunner:
             # when it emits no new message line for a while.
             "alive": self.is_running(),
             "handoff": self.handoff,   # #4: {reason, ts} when the agent asks for a takeover
+            "surface": getattr(self, "surface", "browser"),
         }
 
 

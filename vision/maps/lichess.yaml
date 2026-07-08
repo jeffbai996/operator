@@ -1,0 +1,20 @@
+# lichess.yaml — starter map (regions-first; sprites added as captured).
+# Reference viewport = the operator's pinned 1280x800 Chrome. Region coords are
+# CALIBRATION SEEDS measured off a default lichess board layout — refine against
+# a live perceive() capture before trusting exact edges.
+game: lichess
+viewport: [1280, 800]
+regions:
+  # main board (8x8; square size = board w/8)
+  board: [222, 62, 634, 634]
+  # right sidebar: clocks + move list
+  sidebar: [880, 62, 340, 634]
+  clock_top: [880, 62, 260, 56]
+  clock_bottom: [880, 640, 260, 56]
+colors:
+  # last-move / selected-square highlight (lichess default green-yellow tint)
+  highlight: {lo: [45, 0.25, 0.45], hi: [75, 1.0, 1.0], min_area: 400}
+ocr:
+  - {label: clock_top, region: clock_top, min_conf: 40}
+  - {label: clock_bottom, region: clock_bottom, min_conf: 40}
+templates: {}
