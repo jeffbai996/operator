@@ -146,29 +146,66 @@ def delete() -> None:
 
 
 # ── live stream (the feed's frame source) ────────────────────────────────────
+# Marker in the ffmpeg arg list so we can find + kill the feed process INSIDE
+# the container by name (docker exec doesn't forward host-side signals to the
+# exec'd process — see stop_stream). Unique enough not to match anything else.
+_FEED_TAG = "op_feed_stream"
+
+
 def open_stream(fps: int = 15, quality: int = 8) -> subprocess.Popen:
     """One long-lived MJPEG pipe out of the container: ffmpeg grabs :1 (pointer
     drawn) and writes concatenated JPEGs to stdout. The caller owns the process
-    (read .stdout, kill() when done). Raises SandboxError if it dies at once —
-    e.g. an old image without ffmpeg — so the caller can fall back to scrot.
+    (read .stdout, stop_stream() when done). Raises SandboxError if it dies at
+    once — e.g. an old image without ffmpeg — so the caller can fall back to scrot.
 
     15fps/q8 measured: ~34KB/frame, ~480 KB/s on the wire — double the old
     8fps/q6 cadence (the choppy-slideshow feel) for +60% bandwidth, trivial
     over a LAN/tunnel. `-fflags nobuffer -flags low_delay` stop ffmpeg holding a
     frame in the mux queue → each JPEG hits stdout the instant it's encoded
-    (cuts a frame-time of glass-to-glass latency)."""
+    (cuts a frame-time of glass-to-glass latency).
+
+    LEAK GUARD: reap any prior feed ffmpeg INSIDE the container before starting a
+    new one. `docker exec` runs ffmpeg in the container, but a host-side
+    Popen.kill() only kills the exec *client* — the container-side ffmpeg orphans
+    and keeps grabbing X11 (N stacked grabs = 'persistent lag'). So we guarantee
+    at-most-one feed here, and stop_stream reaches inside to kill it."""
     ensure()
+    # kill any orphaned prior feed first (idempotent; no-op if none). -9: a feed
+    # ffmpeg has no state worth flushing, and plain SIGTERM makes it do a clean
+    # mux-shutdown that lingers ~1s — a hard kill is instant and correct here.
+    _run(["exec", "-u", "opuser", CONTAINER, "pkill", "-9", "-f", _FEED_TAG],
+         timeout=5, check=False)
     p = subprocess.Popen(
         [_docker(), "exec", "-u", "opuser", "-e", f"DISPLAY={DISPLAY}", CONTAINER,
-         "ffmpeg", "-loglevel", "quiet", "-fflags", "nobuffer", "-flags", "low_delay",
+         "ffmpeg", "-nostdin", "-loglevel", "quiet",
+         "-fflags", "nobuffer", "-flags", "low_delay",
          "-f", "x11grab", "-draw_mouse", "1",
          "-video_size", f"{SCREEN_W}x{SCREEN_H}", "-framerate", str(fps),
-         "-i", DISPLAY, "-f", "mjpeg", "-q:v", str(quality), "-"],
+         "-i", DISPLAY, "-f", "mjpeg", "-q:v", str(quality),
+         "-metadata", f"comment={_FEED_TAG}", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     time.sleep(0.3)
     if p.poll() is not None:
         raise SandboxError("ffmpeg stream did not start (image missing ffmpeg?)")
     return p
+
+
+def stop_stream(proc: subprocess.Popen | None) -> None:
+    """Tear down a feed opened by open_stream — BOTH ends. Killing the host-side
+    exec client (proc) does NOT stop the ffmpeg inside the container, so we also
+    `pkill -f` the tagged process in the container. Without this second step every
+    surface-switch / reconnect leaked one ffmpeg that kept grabbing X11 → the feed
+    got progressively laggier the longer a session ran. Idempotent + best-effort."""
+    if proc is not None:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        _run(["exec", "-u", "opuser", CONTAINER, "pkill", "-9", "-f", _FEED_TAG],
+             timeout=5, check=False)
+    except Exception:  # noqa: BLE001 — container may be gone; nothing to reap
+        pass
 
 
 def split_jpegs(buf: bytes) -> tuple[list[bytes], bytes]:

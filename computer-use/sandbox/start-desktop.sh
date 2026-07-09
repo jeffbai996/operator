@@ -47,6 +47,13 @@ dbus-launch --exit-with-session startxfce4 &
 for i in $(seq 1 40); do xdotool search --class xfdesktop >/dev/null 2>&1 && break; sleep 0.25; done
 # belt-and-braces: pin to one workspace even if an old xfconf survives
 xdotool set_num_desktops 1 || true
+# The home volume PERSISTS across container restarts, and so does chromium's
+# SingletonLock — it points at the *previous* run's PID+hostname. On restart
+# that PID is gone but chromium sees the lock and refuses to start ("profile
+# appears to be in use by another Chromium process on another computer") → the
+# in-VM browser silently never launches. Clear the stale lock on every boot;
+# it's only meaningful within one live session.
+rm -f "$HOME/.config/chromium/Singleton"* 2>/dev/null || true
 # boot with a visible app so a fresh sandbox never reads as a dead feed
 chromium --no-sandbox --test-type --no-first-run --start-maximized https://www.google.com >/dev/null 2>&1 &
 # keep the container alive

@@ -1064,8 +1064,12 @@ class _DesktopFeed:
                     self.frame_ts = time.monotonic()
                     self.detail = ""
         finally:
+            # stop_stream kills BOTH the host exec client AND the container-side
+            # ffmpeg — a bare proc.kill() leaves the in-container ffmpeg orphaned,
+            # still grabbing X11; those stacked up and made the feed lag worse the
+            # longer a session ran.
             try:
-                proc.kill()
+                sb.stop_stream(proc)
             except Exception:  # noqa: BLE001
                 pass
         return True
