@@ -383,23 +383,25 @@ class _DesktopSurface(_BaseSurface):
 
 
 class SandboxSurface(_DesktopSurface):
-    """The isolated Xvfb display — safe by construction."""
+    """A REAL isolated Linux desktop, running in a Docker container (own rootfs,
+    network/PID namespace, non-root user). Driven via `docker exec` scrot/xdotool
+    — nothing it does can touch the host. The container is persistent: it survives
+    leaving Operator and is only destroyed by an explicit delete."""
     name = "desktop-sandbox"
 
     def __init__(self) -> None:
         super().__init__()
-        self._display_mod = _load_cu_module("display.py")
-        self._actions_mod = _load_cu_module("actions.py")
-        self._display = self._display_mod.ensure()
+        self._sb = _load_cu_module("sandbox_container.py")
+        self._sb.ensure()
 
     def _exec(self, action: dict) -> None:
-        self._actions_mod.execute(action, self._display)
+        self._sb.execute(action)
 
     def _shot(self) -> str:
-        return self._actions_mod.screenshot(self._display, self._out_dir)
+        return self._sb.screenshot(self._out_dir)
 
     def size(self) -> tuple:
-        return self._display_mod.screen_size()
+        return self._sb.size()
 
 
 class RealDesktopSurface(_DesktopSurface):

@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-1.1.0-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -22,6 +22,12 @@
 
 <p><sub><i>The saved-task launchpad — one-tap tasks on the idle stage, each pinned to the sites it uses. Hit <b>Go</b> and the prompt dispatches straight to the agent.</i></sub></p>
 
+<p>
+  <img src="docs/img/operator-sandbox.png" alt="The Docker sandbox desktop surface">
+</p>
+
+<p><sub><i>The sandbox desktop surface — a persistent Docker container (Chromium, terminal, file manager on a real window manager) the agent drives by pixel coordinate, streamed live. Steer it by hand or hand it to any runtime; nothing outside the container can be touched.</i></sub></p>
+
 ---
 
 A live **browser / computer-use agent cockpit**. Watch a real Chrome in real time, steer it manually, or hand control to a subscription-backed agent — Claude, GPT, or Gemini — that drives the browser and reports back.
@@ -37,14 +43,24 @@ A live **browser / computer-use agent cockpit**. Watch a real Chrome in real tim
 ```bash
 git clone https://github.com/jeffbai996/operator
 cd operator
+./start.sh                    # → open http://127.0.0.1:5005
+```
+
+One script does everything: venv + deps, launches the automation Chrome
+(sign into your sites in that window, once), reports which agent runtimes and
+surfaces it found, and serves the cockpit. Idempotent — re-run it any time.
+No required config; `.env.example` documents the optional knobs.
+
+<details>
+<summary>Manual steps (what start.sh does)</summary>
+
+```bash
 pip install -r requirements.txt
 cp .env.example .env          # optional — defaults are fine
-
-# launch the browser the agent drives (logged-in, separate profile):
-bash browse/chrome-attach.sh  # sign into your sites in the window it opens, once
-
+bash browse/chrome-attach.sh  # the browser the agent drives (logged-in, separate profile)
 python app.py                 # open http://127.0.0.1:5005
 ```
+</details>
 
 **Agent runtime — bring your own subscription** (no metered API key, the cheap path):
 - **Claude** — install the `claude` CLI and `claude login` (creds in `~/.claude`)
@@ -54,9 +70,9 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** full hands-off computer-use shipped in **v1.0.0** — browser, an
-> isolated sandbox desktop, and (gated, confirm-required) the real desktop, all
-> with local perception and a fast macro controller for repetitive sequences.
+> **Status:** **v1.1.0** — the sandbox desktop is a real Docker container you can
+> watch, steer by hand, and hand to **any** runtime (Claude, GPT, Gemini — driver
+> parity shipped early); plus one-command onboarding via `./start.sh`.
 
 ## What it does
 
@@ -94,27 +110,29 @@ computer-use/             sandbox (Xvfb) + real-desktop (PowerShell/WSL) backend
 
 ## Run
 
-Mounted as a Flask blueprint by a host app — it registers `operator_view.bp`, the template extends the host's `_base.html`, and it's served behind the host app (optionally a reverse proxy / tunnel).
+Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.0.0.1:5005`. It also still works as a Flask blueprint — register `operator_view.bp` on any host app and serve it behind a reverse proxy / tunnel.
 
 ---
 
 ## Roadmap
 
-**v1.1 — perception depth + the canvas-game showcase**
+**v1.2 — perception depth + the canvas-game showcase**
 - Self-hosted OpenRSC demo (zero ToS risk) — the flagship RuneScape-class canvas run.
 - Sprite-capture workflow: lift template sprites from live frames into `vision/maps/`.
 - Map auto-calibration: derive region geometry from perception (blob grids) instead of static seed coordinates, so maps survive layout/viewport changes.
 - Desktop + macro combined: `game_macro` on the sandbox desktop — grind a native app the way a canvas game is ground.
 - OCR in anger: system tesseract, text conditions and chat/tooltip reading in real macros.
 
-**v1.2 — continuity + driver parity**
+**v1.3 — continuity**
 - Long-lived controller sessions: controller state and watchers persist across `game_macro` calls; events push to the planner instead of being polled.
 - Auto-replan loop: on a macro yield the planner re-decides and continues under a hard step/token budget — sustained autonomous play sessions.
-- Driver parity: the operator-control MCP wired into the GPT and Gemini runtimes, so desktop surfaces and `game_macro` stop being Claude-only.
+- ~~Driver parity~~ — shipped early, in v1.1.0.
 
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.1.0** — **the sandbox grows up: a real Docker desktop, manual steer, and driver parity**. The sandbox surface is now a **persistent Docker container** (Xvfb → openbox → taskbar → Chromium already open at boot) instead of a host Xvfb — nothing outside the container can be touched, it survives restarts, and only an explicit Delete destroys it (the feed auto-provisions a fresh one after). It runs at **1024×768 (XGA)** — the resolution vision-model click grounding is calibrated around — with the **mouse pointer drawn in every frame**, so the agent can *see* where its cursor landed, measure a miss, and correct it instead of re-guessing (plus click-precision and date-picker directives that encode exactly that tactic). One **virtual desktop only**: stock openbox ships four, and a stray wheel-scroll on the root window silently switched — every open app "vanished" mid-run. **Desktop taskbar**: on desktop surfaces the browser URL bar collapses into a taskbar — app launcher (Chromium / Terminal / Files), the game-map picker's new home, container Restart, and a two-tap Delete. **Manual steer on desktop surfaces**: full manual interaction — click/double/triple, **right-click** (ported to the browser surface too, via CDP), drag, scroll, typing and key chords, and **live hover streaming** (move your pointer over the feed and the container's cursor tracks it). **Driver parity, pulled forward from the roadmap**: the operator-control MCP now wires itself into the GPT (Codex) and Gemini (Antigravity) runtimes at dispatch, so desktop surfaces and `game_macro` are no longer Claude-only. **Activity tab-follow**: the live view follows the tab the agent is *driving* (URL-change detection, not visibility polling — CDP-driven tabs never report visible), gated on a live run so it can't steal focus while a human steers. **Clean desktop trace labels**: `computer`/`perceive`/`game_macro` calls read like browser ones — "Clicking (512, 384)", "Reading the screen", "Running macro · 4 steps". **Launchpad polish**: example task cards on fresh installs; **Go is the only launch trigger** (tapping elsewhere on a card is inert); X-only dismiss with a real touch-size target; overlay scroll no longer leaks to the page on iOS. **Inline screenshots**: agent-posted screenshots from any runtime render as image cards in the chat with a lightbox zoom (file-path links from non-Claude runtimes included), and chat code blocks word-wrap instead of sideways-scrolling. **One-command onboarding**: `./start.sh` — venv, deps, the automation Chrome, runtime/surface detection, serve.
 
 **v1.0.0** — **full hands-off computer-use — perception, game_macro, desktop surfaces**. This fulfills the `v1.0.0` promise: the agent can now drive **three surfaces** — the logged-in browser (as before), an **isolated sandbox desktop** (Xvfb — nothing outside it can be touched), and the **real desktop** (gated: never the default, needs an explicit per-session confirm, panic-**STOP** always on screen). Switch from a popover on the brand mark; the live feed follows whichever surface is active, mid-session, no reconnect. **Local perception** (`vision/`): a `perceive` tool grounds the agent in labeled on-screen targets without a single extra model call — template + colour-blob matching, OCR text extraction, per-game region maps (Lichess, OpenRSC shipped), and an optional coordinate grid or region-crop overlay for when raw pixels are still the fastest read. **game_macro planner/controller split** (`control/`): instead of one LLM round-trip per click, the model emits a multi-step macro once — click-by-target-label, waits on local conditions, repeats — and a local controller executes and verifies it at machine speed with **zero mid-macro model calls**, bailing back to the planner only on completion or genuine surprise. **Trace integration**: every macro op and perception call streams into the same live action trace as browser tool calls, so a desktop run reads exactly like a browser one — thinking interleaved with what actually happened on screen.
 

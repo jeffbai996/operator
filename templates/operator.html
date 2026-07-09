@@ -11,8 +11,11 @@
     <div class="op-head">
       <span class="op-dot"></span>
       <span class="op-titlewrap" id="op-brand" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="switch surface">
-        <span class="op-title">Operator<svg class="op-brand-caret" viewBox="0 0 16 16" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></span>
-        <span class="op-verline"><span class="op-ver">v1.0.0</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+        <span class="op-brand-text">
+          <span class="op-title">Operator</span>
+          <span class="op-verline"><span class="op-ver">v1.0.1</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+        </span>
+        <svg class="op-brand-caret" viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1.5l4 3.5 4-3.5"></path></svg>
       </span>
       <div class="op-surface-pop" id="op-surface-pop" hidden role="menu" aria-label="surface"></div>
       <div class="op-mode" id="op-mode" data-mode="man">
@@ -152,10 +155,34 @@
           <input type="checkbox" id="op-set-glide" checked></div>
       </div>
     </div>
+    <!-- desktop taskbar: takes the URL bar's slot on the sandbox/computer
+         surfaces — desktop controls live here, not in the mode popover. -->
+    <div class="op-taskbar" id="op-taskbar" aria-label="desktop controls">
+      <span class="op-tb-name" id="op-tb-name">Sandbox</span>
+      <div class="op-tb-group op-tb-sandbox">
+        <button type="button" class="op-tb-btn" data-app="chromium" title="open Chromium"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3.6"></circle><path d="M12 8.4h8.2M9 14l-4.1 7.1M15.1 14l4.1 7.1" stroke-width="1.5"></path></svg>Chromium</button>
+        <button type="button" class="op-tb-btn" data-app="xfce4-terminal" title="open a terminal"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="13" rx="2"></rect><path d="M6 8l2.6 2L6 12M10.5 12.5h3.5"></path></svg>Terminal</button>
+        <button type="button" class="op-tb-btn" data-app="pcmanfm" title="open the file manager"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5a2 2 0 0 1 2-2h3.2l2 2.2h5.8a2 2 0 0 1 2 2v6.8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2V5.5z"></path></svg>Files</button>
+      </div>
+      <div class="op-tb-game" id="op-tb-game" hidden>
+        <button type="button" class="op-tb-btn" id="op-tb-game-btn" aria-haspopup="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9h12a4 4 0 0 1 4 4v2.5a2.5 2.5 0 0 1-4.6 1.4L16 15H8l-1.4 1.9A2.5 2.5 0 0 1 2 15.5V13a4 4 0 0 1 4-4z"></path><path d="M7.5 12h3M9 10.5v3M15.2 11.4h.01M17.4 13h.01"></path></svg><span id="op-tb-game-lbl">Game</span><svg viewBox="0 0 10 6" width="8" height="5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l4 4 4-4"></path></svg></button>
+        <div class="op-tb-menu" id="op-tb-game-menu" hidden></div>
+      </div>
+      <span class="op-tb-spacer"></span>
+      <div class="op-tb-group op-tb-sandbox">
+        <button type="button" class="op-tb-btn" id="op-tb-restart" title="restart the sandbox — apps close, disk persists"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 6a7 7 0 1 0 1.5 5"></path><path d="M16.5 3v3.2H13.3"></path></svg>Restart</button>
+        <button type="button" class="op-tb-btn danger" id="op-tb-delete" title="delete the sandbox — next boot is factory-fresh"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M8 6V4.5A1.5 1.5 0 0 1 9.5 3h1A1.5 1.5 0 0 1 12 4.5V6M6.5 6l.7 9.5A1.5 1.5 0 0 0 8.7 17h2.6a1.5 1.5 0 0 0 1.5-1.4L13.5 6"></path></svg><span id="op-tb-del-lbl">Delete</span></button>
+      </div>
+    </div>
     <div class="op-stage" id="op-stage" tabindex="0" aria-label="live browser — click to interact, focus to type">
       <img class="op-view" id="op-view" alt="">
       <div class="op-lp" id="op-lp" hidden>
-        <div class="op-lp-title">SAVED TASKS</div>
+        <div class="op-lp-bar">
+          <span class="op-lp-title">SAVED TASKS</span>
+          <button type="button" class="op-lp-close" id="op-lp-x" aria-label="close saved tasks" title="close">
+            <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg>
+          </button>
+        </div>
         <div class="op-lp-grid" id="op-lp-grid"></div>
       </div>
       <span class="op-kbhint">tap to focus/steer · type to send keys</span>
@@ -165,6 +192,7 @@
       <div class="op-overlay" id="op-overlay">
         <div class="op-spinner"></div>
         <div id="op-overlay-text">connecting to Chrome…</div>
+        <div id="op-overlay-sub" class="op-overlay-sub" hidden></div>
       </div>
     </div>
   </section>
@@ -212,6 +240,7 @@
       <input type="text" class="op-nt-input" id="op-nt-sched" placeholder="5-field cron: min hour dom mon dow — e.g. 15 6 * * 1-5" autocomplete="off" spellcheck="false" hidden>
       <div class="op-nt-hint op-nt-sched-sum" id="op-nt-sched-sum"></div>
       <div class="op-nt-foot">
+        <button type="button" class="op-nt-btn danger" id="op-nt-delete" hidden>Delete</button>
         <button type="button" class="op-nt-btn" id="op-nt-cancel">Cancel</button>
         <button type="button" class="op-nt-btn primary" id="op-nt-save">Save task</button>
       </div>
@@ -328,6 +357,7 @@
   const actTxt = document.getElementById('op-action-txt');
   const actSub = document.getElementById('op-action-sub');
   const overlayText = document.getElementById('op-overlay-text');
+  const overlaySub = document.getElementById('op-overlay-sub');
 
   const STREAM = "{{ url_for('operator.operator_stream') }}";
   const STATUS = "{{ url_for('operator.operator_status') }}";
@@ -459,13 +489,27 @@
       try {
         const mob = window.matchMedia('(max-width: 820px)').matches;
         const full = document.body.classList.contains('op-full');
-        const h = (mob && !full) ? (document.querySelector('header.site')?.offsetHeight || 0) : 0;
+        const hdr = document.querySelector('header.site');
+        const h = (mob && !full) ? (hdr?.offsetHeight || 0) : 0;
         document.getElementById('op').style.setProperty('--op-hdr-h', h + 'px');
+        // Mobile bug (recurring): if setHdr runs before the header has laid out,
+        // offsetHeight is 0, the fixed browser stage docks at top:0 and paints
+        // over the host-app nav → "the header disappeared". If we're mobile,
+        // not fullscreen, the header exists but measured 0, retry until it's real.
+        if (mob && !full && hdr && h === 0) {
+          requestAnimationFrame(setHdr);
+        }
       } catch(_){}
     }
     setHdr();
+    // measure again after fonts/layout settle — the first synchronous read often
+    // lands 0 on a cold mobile paint.
+    requestAnimationFrame(() => requestAnimationFrame(setHdr));
+    setTimeout(setHdr, 120); setTimeout(setHdr, 400);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(setHdr);
+    window.addEventListener('load', setHdr);
     window.addEventListener('resize', setHdr);
-    window.addEventListener('orientationchange', setHdr);
+    window.addEventListener('orientationchange', () => setTimeout(setHdr, 60));
     document.getElementById('op-full')?.addEventListener('click', () => setTimeout(setHdr, 50));
   })();
   // stop iOS Safari's zoom-on-focus of the small chat input (keeps the compact font
@@ -612,18 +656,42 @@
   }
   let _lastImgLoad = 0;
   let _wasLost = false;
+  let _desktopNoFrame = false;   // last poll said a desktop surface has no live frame
   function signalLost(){ view.style.visibility='hidden';   // hide the broken-? glyph
     _wasLost = true;
-    if (overlayText) overlayText.textContent = 'SIGNAL LOST'; op.classList.add('op-signal-lost');
+    op.classList.remove('op-surface-idle');
+    if (overlayText) overlayText.textContent = 'SIGNAL LOST';
+    if (overlaySub) { overlaySub.hidden = true; overlaySub.textContent = ''; }
+    op.classList.add('op-signal-lost');
     // the card must agree with the overlay — never show "Ready" over a dead feed.
     if (op.dataset.busy !== '1') { try { setCardText(actTxt, 'Reconnecting'); } catch(_){} } }
-  function signalOk(){ const wasLost = op.classList.contains('op-signal-lost');
-    op.classList.remove('op-signal-lost'); view.style.visibility='visible';
+  // Desktop surface at rest: the virtual desktop hasn't been started yet. A
+  // calm "here's how to start it" state, distinct from a lost signal.
+  function desktopIdle(){ _wasLost = false;
+    if (op.classList.contains('op-surface-idle')) return;   // idempotent — no per-poll churn
+    view.style.visibility='hidden';
+    setState('idle', '');
+    if (overlayText) overlayText.textContent = 'Not started';
+    if (overlaySub) { overlaySub.hidden = false;
+      overlaySub.textContent = 'Send a task to start the desktop.'; }
+    op.classList.add('op-signal-lost', 'op-surface-idle');
+    if (op.dataset.busy !== '1') { try { setCardText(actTxt, 'Idle'); } catch(_){} } }
+  function signalOk(){
+    // The desktop stream always heartbeats a placeholder JPEG, so the <img>
+    // fires 'load' even when the virtual desktop hasn't started. Don't let that
+    // clear the deterministic "Not started" idle state (poll owns it via
+    // has_frame); only a real frame (has_frame:true) exits idle. Return BEFORE
+    // touching visibility — otherwise the placeholder load unhides the feed and
+    // the next poll re-hides it, flickering at the ~1s heartbeat cadence.
+    if (_desktopNoFrame && _isGameSurface() && op.dataset.busy !== '1') return;
+    const wasLost = op.classList.contains('op-signal-lost');
+    op.classList.remove('op-signal-lost', 'op-surface-idle'); view.style.visibility='visible';
+    if (overlaySub) overlaySub.hidden = true;
     // feed came back while idle → settle the card to its proper idle label.
     if (wasLost && op.dataset.busy !== '1') {
       try { setCardText(actTxt, idleCardText()); } catch(_){} } }
   view.addEventListener('load', () => { _hasFrame = true; _lastImgLoad = Date.now();
-    view.style.visibility='visible'; signalOk(); backoff = 600; });
+    signalOk(); backoff = 600; });   // signalOk owns visibility (skips it when desktop-idle)
   view.addEventListener('error', () => { signalLost(); scheduleReconnect(); });
   connectStream();
   // tab was backgrounded (browser suspends the MJPEG + timers) → on return,
@@ -1237,6 +1305,8 @@
       if (typeof _seenMsg!=='undefined') _seenMsg.clear();
       setFollowUp();
       _clearBtn.dataset.busy='0';
+      // back to a fresh idle stage → bring the launchpad (examples) back
+      try { initLaunchpad(); } catch(_){}
     };
     // wipe agent memory immediately (network); animate the UI out, then empty.
     try { fetch("{{ url_for('operator.operator_agent_reset') }}", {method:'POST',
@@ -1276,6 +1346,8 @@
   // confirm every session and keeps a hard STOP over the feed while running.
   const SURFACES_URL = "{{ url_for('operator.operator_surfaces') }}";
   const SURFACE_SET_URL = "{{ url_for('operator.operator_surface_set') }}";
+  const MAPS_URL = "{{ url_for('operator.operator_maps') }}";
+  const SANDBOX_CTL_URL = "{{ url_for('operator.operator_sandbox_ctl') }}";
   const PANIC_STOP_URL = "{{ url_for('operator.operator_agent_stop') }}";
   const brandEl = document.getElementById('op-brand');
   const surfPop = document.getElementById('op-surface-pop');
@@ -1284,7 +1356,10 @@
   let _surfaces = [];                    // [{key,label,hint,available,gated}]
   let _surfaceActive = 'browser';
   let _realOk = false;                   // per-SESSION consent, never persisted
-  const _SURF_CHIP = { 'desktop-sandbox': 'sandbox', 'desktop-real': 'real desktop' };
+  let _maps = [];                        // shipped game maps (vision/maps/)
+  let _activeMap = '';                   // '' = none; folded into dispatch text only
+  const _isGameSurface = () => _surfaceActive !== 'browser';   // desktop = game-capable
+  const _SURF_CHIP = { 'desktop-sandbox': 'sandbox', 'desktop-real': 'computer' };
   const _SURF_ICON = {
     browser: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg>',
     'desktop-sandbox': '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5M12 12v9"></path></svg>',
@@ -1296,14 +1371,24 @@
     surfChip.hidden = !chipTxt;
     surfChip.textContent = chipTxt;
     surfChip.classList.toggle('real', _surfaceActive === 'desktop-real');
-    // manual steer drives the browser page — meaningless on a desktop surface
-    if (_surfaceActive !== 'browser' && MODE === 'man') {
-      MODE = 'auto'; try { applyMode(); } catch(_){}
+    // taskbar title follows the surface
+    const tbn = document.getElementById('op-tb-name');
+    if (tbn) tbn.textContent = _surfaceActive === 'desktop-real' ? 'Computer' : 'Sandbox';
+    // manual steer works on every surface now — /operator/steer routes to the
+    // desktop backends when a desktop surface is active (no forced AUTO).
+    // saved-task launchpad is browser-only — hide on desktop, re-show on return
+    // to an idle browser surface.
+    const lp = document.getElementById('op-lp');
+    if (lp) {
+      if (_isGameSurface()) lp.hidden = true;
+      else if (!log.children.length) { try { initLaunchpad(); } catch(_){} }
     }
     refreshPanic();
   }
   function refreshPanic(){
-    panicBtn.hidden = !(_surfaceActive !== 'browser' && op.dataset.busy === '1');
+    // desktop-REAL only: the always-visible hard stop is for runs that drive
+    // the actual machine. Sandbox is isolated — the composer's stop suffices.
+    panicBtn.hidden = !(_surfaceActive === 'desktop-real' && op.dataset.busy === '1');
   }
   // busy is flipped centrally via op.dataset — observe it instead of patching
   // every setInFlight call site.
@@ -1324,7 +1409,7 @@
       row.innerHTML = '<span class="op-surf-ico">' + (_SURF_ICON[s.key]||'') + '</span>'
         + '<span class="op-surf-body"><span class="op-surf-name">' + s.label
         + (s.gated ? '<svg class="op-surf-warn" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3.2 22 20H2L12 3.2z"></path><path d="M12 10v4"></path><circle cx="12" cy="17" r="0.6" fill="currentColor"></circle></svg>' : '')
-        + '</span><span class="op-surf-hint">' + (s.available === false ? 'not available on this host' : s.hint) + '</span></span>'
+        + '</span><span class="op-surf-hint">' + (s.available === false ? (s.unavailable_hint || 'not available on this host') : s.hint) + '</span></span>'
         + (s.key === _surfaceActive ? '<svg class="op-surf-check" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>' : '');
       row.addEventListener('click', (e) => { e.stopPropagation(); pickSurface(s, row); });
       surfPop.appendChild(row);
@@ -1336,8 +1421,8 @@
       // two-step consent, inline in the row — every session, no shortcuts
       row.classList.add('confirming');
       row.innerHTML = '<span class="op-surf-ico">' + _SURF_ICON[s.key] + '</span>'
-        + '<span class="op-surf-body"><span class="op-surf-name">Drive the real desktop?</span>'
-        + '<span class="op-surf-hint">moves your actual mouse & keyboard — STOP stays on screen</span></span>'
+        + '<span class="op-surf-body"><span class="op-surf-name">Take control of the computer?</span>'
+        + '<span class="op-surf-hint">Operator will use your mouse and keyboard.</span></span>'
         + '<span class="op-surf-confirm"><button type="button" class="op-surf-yes">Confirm</button>'
         + '<button type="button" class="op-surf-no">Cancel</button></span>';
       row.querySelector('.op-surf-yes').addEventListener('click', (e) => {
@@ -1363,7 +1448,7 @@
   // open/close: hover-intent on fine pointers, tap everywhere, Esc/outside close
   let _surfTimer = null;
   function openSurfPop(){
-    if (!_surfaces.length || document.body.classList.contains('op-demo')) return;
+    if (!_surfaces.length) return;   // demo included — it gets browser + sandbox
     const r = brandEl.getBoundingClientRect();
     surfPop.style.left = Math.max(8, r.left - 2) + 'px';
     surfPop.style.top = (r.bottom + 6) + 'px';
@@ -1407,8 +1492,84 @@
       _surfaceActive = d.active || 'browser';
       if (_surfaces.length < 2) brandEl.removeAttribute('role');  // nothing to switch
       applySurfaceState();
+      try { _maps = (await (await fetch(MAPS_URL)).json()).maps || []; } catch(_){}
+      renderTbGame();
     } catch(_){}
   })();
+
+  // ── desktop taskbar: the game picker's home + sandbox controls ────────────
+  const tbGame = document.getElementById('op-tb-game');
+  const tbGameBtn = document.getElementById('op-tb-game-btn');
+  const tbGameLbl = document.getElementById('op-tb-game-lbl');
+  const tbGameMenu = document.getElementById('op-tb-game-menu');
+  function renderTbGame(){
+    if (!tbGame) return;
+    tbGame.hidden = !_maps.length;
+    tbGameLbl.textContent = _activeMap || 'Game';
+    tbGameMenu.innerHTML = '';
+    ['', ..._maps].forEach(m => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'op-tb-mi' + (m === _activeMap ? ' active' : '');
+      b.textContent = m || 'None';
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _activeMap = m;
+        tbGameMenu.hidden = true;
+        renderTbGame();
+      });
+      tbGameMenu.appendChild(b);
+    });
+  }
+  if (tbGameBtn) {
+    tbGameBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); tbGameMenu.hidden = !tbGameMenu.hidden;
+    });
+    document.addEventListener('click', (e) => {
+      if (!tbGameMenu.hidden && !tbGame.contains(e.target)) tbGameMenu.hidden = true;
+    });
+  }
+  async function _tbPost(body){
+    const r = await fetch(SANDBOX_CTL_URL, { method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+    return r.json();
+  }
+  document.querySelectorAll('#op-taskbar [data-app]').forEach(b => {
+    b.addEventListener('click', async () => {
+      if (b.disabled) return;
+      b.disabled = true;
+      try { await _tbPost({ action: 'launch', app: b.dataset.app }); } catch(_){}
+      setTimeout(() => { b.disabled = false; }, 900);   // app needs a beat to map
+    });
+  });
+  const tbRestart = document.getElementById('op-tb-restart');
+  if (tbRestart) tbRestart.addEventListener('click', async () => {
+    if (tbRestart.disabled) return;
+    tbRestart.disabled = true; tbRestart.classList.add('busy');
+    try { await _tbPost({ action: 'restart' }); } catch(_){}
+    tbRestart.classList.remove('busy'); tbRestart.disabled = false;
+  });
+  const tbDelete = document.getElementById('op-tb-delete');
+  const tbDelLbl = document.getElementById('op-tb-del-lbl');
+  let _tbDelArm = null;
+  if (tbDelete) tbDelete.addEventListener('click', async () => {
+    if (tbDelete.disabled) return;
+    if (!tbDelete.classList.contains('confirm')) {      // two-tap: arm, then fire
+      tbDelete.classList.add('confirm');
+      tbDelLbl.textContent = 'Confirm delete';
+      clearTimeout(_tbDelArm);
+      _tbDelArm = setTimeout(() => {
+        tbDelete.classList.remove('confirm'); tbDelLbl.textContent = 'Delete';
+      }, 2600);
+      return;
+    }
+    clearTimeout(_tbDelArm);
+    tbDelete.disabled = true; tbDelLbl.textContent = 'Deleting…';
+    try { await _tbPost({ action: 'delete' }); } catch(_){}
+    // the feed's next capture boots a factory-fresh desktop automatically
+    tbDelete.classList.remove('confirm'); tbDelLbl.textContent = 'Delete';
+    tbDelete.disabled = false;
+  });
 
   // Code-block scroll trap fix (the owner): a horizontally-scrollable <pre> in a chat
   // bubble swallows vertical wheel events, so scrolling with the cursor over code
@@ -1423,6 +1584,20 @@
       e.preventDefault();
     }
   }, { passive: false });
+  // screenshot lightbox: tap an inline agent screenshot to view it full-size;
+  // tap anywhere (or Esc) to dismiss.
+  log.addEventListener('click', (e) => {
+    const im = e.target.closest && e.target.closest('.op-md-img');
+    if (!im) return;
+    const ov = document.createElement('div'); ov.className = 'op-lightbox';
+    const big = document.createElement('img'); big.src = im.src; big.alt = im.alt || '';
+    ov.appendChild(big);
+    const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    ov.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(ov);
+  });
   const caretSel = document.getElementById('op-action-caret');
   const pickWrap = document.getElementById('op-pick-wrap');
   const modeBox = document.getElementById('op-mode');
@@ -1455,55 +1630,122 @@
   // homepage style. Fresh sessions only — the overlay vanishes for good the
   // moment the conversation starts (any log entry), and never renders in MAN
   // mode or the demo (CSS-gated too).
+  // Clean display names for common connector sites (YouTube, not youtube.com).
+  // Anything not listed falls back to the bare domain — fine for random links.
+  const _SITE_LABELS = {
+    'ubereats.com':'Uber Eats', 'doordash.com':'DoorDash', 'instacart.com':'Instacart',
+    'opentable.com':'OpenTable', 'resy.com':'Resy', 'amazon.com':'Amazon',
+    'reuters.com':'Reuters', 'bloomberg.com':'Bloomberg', 'youtube.com':'YouTube',
+    'google.com':'Google', 'expedia.com':'Expedia', 'booking.com':'Booking.com',
+    'airbnb.com':'Airbnb', 'yelp.com':'Yelp', 'linkedin.com':'LinkedIn',
+    'github.com':'GitHub', 'zillow.com':'Zillow', 'spotify.com':'Spotify',
+    'lichess.org':'Lichess', 'alltrails.com':'AllTrails',
+  };
+  const _siteLabel = (dom) => _SITE_LABELS[dom.replace(/^www\./,'')] || dom;
+
+  // Example tasks shown when the user has none saved. Specific, descriptive
+  // titles; clicking one loads it into the composer to tweak (and connect the
+  // site) rather than running blind. Marked isExample so the card reads "Go".
+  const _LP_EXAMPLES = [
+    { name: 'Book a table for two at Mott 32', prompt: 'On OpenTable, find a table for two at Mott 32 this Friday around 7pm and show me what times are available.', sites: ['opentable.com'], isExample: true },
+    { name: 'Order sushi for dinner from a top-rated spot', prompt: 'Open Uber Eats, find a top-rated sushi restaurant near me that can deliver now, and build a cart for two — stop before placing the order so I can review it.', sites: ['ubereats.com'], isExample: true },
+    { name: 'Restock this week’s grocery staples', prompt: 'On Instacart, fill my cart with this week’s staples: milk, eggs, bread, coffee, bananas, and chicken. Stop at checkout for me to confirm.', sites: ['instacart.com'], isExample: true },
+    { name: 'Find the cheapest flights to Hawaii', prompt: 'Search Google Flights for round-trip fares from my city to Hawaii next month, 7–10 nights, and list the three cheapest reasonable options with times.', sites: ['google.com'], isExample: true },
+    { name: 'Track my in-transit Amazon orders', prompt: 'Check my recent Amazon orders and tell me which items are still in transit and when each is expected to arrive.', sites: ['amazon.com'], isExample: true },
+    { name: 'Brief me on today’s top news stories', prompt: 'Open Reuters and Bloomberg and give me a short brief of today’s top business and world stories.', sites: ['reuters.com','bloomberg.com'], isExample: true },
+    { name: 'Compare well-reviewed Barcelona hotels', prompt: 'On Booking.com, find three well-reviewed hotels in central Barcelona for a weekend next month under $200/night and summarize the trade-offs.', sites: ['booking.com'], isExample: true },
+    { name: 'Plan a Saturday hike near me', prompt: 'On AllTrails, find three well-rated well-rated day hikes near me for this Saturday, and summarize distance, elevation, and difficulty for each.', sites: ['alltrails.com'], isExample: true },
+  ];
+
   function initLaunchpad(){
     const lp = document.getElementById('op-lp');
     const grid = document.getElementById('op-lp-grid');
     if (!lp || !grid || op.classList.contains('op-demo')) return;
+    // Saved tasks are a browser-surface concept — they carry site connectors and
+    // steer a web page. Don't show the launchpad on sandbox/computer surfaces.
+    if (typeof _isGameSurface === 'function' && _isGameSurface()) { lp.hidden = true; return; }
     if (log.children.length) return;             // conversation already going
     const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
-    (async  => {
+    (async () => {
       let tasks = [];
       try { const d = await (await fetch(TASKS_URL)).json(); tasks = d.ok ? (d.tasks || []) : []; } catch {}
       if (log.children.length) return;           // something started while fetching
+      const isEmpty = !tasks.length;
+      const items = isEmpty ? _LP_EXAMPLES : tasks.slice(0, 7);
       grid.textContent = '';
-      tasks.slice(0, 7).forEach(t => {
-        const c = document.createElement('button'); c.type = 'button'; c.className = 'op-lp-card';
-        const nm = document.createElement('div'); nm.className = 'op-lp-name'; nm.textContent = t.name; c.appendChild(nm);
-        const pr = document.createElement('div'); pr.className = 'op-lp-prompt'; pr.textContent = t.prompt; c.appendChild(pr);
-        const meta = document.createElement('div'); meta.className = 'op-lp-meta';
-        (t.sites || []).slice(0, 2).forEach(s => {
-          const chip = document.createElement('span'); chip.className = 'op-lp-site';
-          if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)) {   // looks like a domain → favicon
-            const fv = document.createElement('img'); fv.alt = '';
-            fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(s) + '&sz=32';
-            fv.addEventListener('error', () => fv.remove());
-            chip.appendChild(fv);
-          }
-          const tx = document.createElement('span'); tx.textContent = s; chip.appendChild(tx);
-          meta.appendChild(chip);
-        });
-        if (t.schedule) {   // scheduled task → a small clock chip (v0.7.0)
-          const sc = document.createElement('span'); sc.className = 'op-lp-site op-lp-sched';
-          sc.textContent = '⏱ ' + cronToHuman(t.schedule);
-          sc.title = t.schedule;
-          meta.appendChild(sc);
-        }
-        const who = document.createElement('span'); who.className = 'op-lp-bot';
-        who.textContent = [t.bot, t.model].filter(Boolean).join(' · '); meta.appendChild(who);
-        c.appendChild(meta);
-        const run = document.createElement('span'); run.className = 'op-lp-run'; run.textContent = '▶ Run'; c.appendChild(run);
-        c.addEventListener('click', () => { lp.hidden = true; if (window._opRunSavedTask) window._opRunSavedTask(t); });
-        grid.appendChild(c);
-      });
+      grid.classList.toggle('op-lp-examples', isEmpty);
+      items.forEach(t => grid.appendChild(buildLpCard(t, lp)));
       const add = document.createElement('button'); add.type = 'button'; add.className = 'op-lp-card op-lp-new';
       add.textContent = '＋ Save a task';
       add.addEventListener('click', () => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
       grid.appendChild(add);
+      const xBtn = document.getElementById('op-lp-x');
+      if (xBtn && !xBtn._wired) { xBtn._wired = true;
+        xBtn.addEventListener('click', (e) => { e.stopPropagation(); lp.hidden = true; }); }
+      // the X is the ONLY dismiss — a stray backdrop tap must not drop the
+      // launchpad
       lp.hidden = false;
       new MutationObserver((m, obs) => {
         if (log.children.length) { lp.hidden = true; obs.disconnect(); }
       }).observe(log, { childList: true });
     })();
+  }
+
+  // one launchpad card — shared by saved tasks and the example set.
+  const _PLAY_SVG = '<svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M4.5 3.2v9.6a.6.6 0 0 0 .93.5l7.2-4.8a.6.6 0 0 0 0-1l-7.2-4.8a.6.6 0 0 0-.93.5z"/></svg>';
+  const _PENCIL_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.8-2.8L5 17v3z"/><path d="M13.5 6.5l4 4"/></svg>';
+  function buildLpCard(t, lp){
+    const c = document.createElement('div');
+    c.className = 'op-lp-card' + (t.isExample ? ' op-lp-example' : '');
+    const nm = document.createElement('div'); nm.className = 'op-lp-name'; nm.textContent = t.name; c.appendChild(nm);
+    const pr = document.createElement('div'); pr.className = 'op-lp-prompt'; pr.textContent = t.prompt; c.appendChild(pr);
+    const meta = document.createElement('div'); meta.className = 'op-lp-meta';
+    (t.sites || []).slice(0, 2).forEach(s => {
+      const chip = document.createElement('span'); chip.className = 'op-lp-site';
+      const dom = s.split('/')[0];
+      if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(dom)) {   // looks like a domain → favicon
+        const fv = document.createElement('img'); fv.alt = '';
+        fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(dom) + '&sz=32';
+        fv.addEventListener('error', () => fv.remove());
+        chip.appendChild(fv);
+      }
+      const tx = document.createElement('span'); tx.textContent = _siteLabel(dom); chip.appendChild(tx);
+      meta.appendChild(chip);
+    });
+    if (t.schedule) {
+      const sc = document.createElement('span'); sc.className = 'op-lp-site op-lp-sched';
+      sc.textContent = '⏱ ' + cronToHuman(t.schedule); sc.title = t.schedule; meta.appendChild(sc);
+    }
+    if (!t.isExample) {
+      const who = document.createElement('span'); who.className = 'op-lp-bot';
+      who.textContent = [t.bot, t.model].filter(Boolean).join(' · '); meta.appendChild(who);
+    }
+    c.appendChild(meta);
+    const activate = () => {
+      lp.hidden = true;
+      if (t.isExample) {   // Go sends the example straight to the agent (like typing it + Enter)
+        if (MODE !== 'auto') { MODE = 'auto'; try { applyMode(); } catch(_){} }
+        try { logUser(t.prompt); } catch(_){}
+        dispatchTask(t.prompt);
+      } else {
+        if (window._opRunSavedTask) window._opRunSavedTask(t);   // runs the stored bundle
+      }
+    };
+    // Go button — the primary action; revealed on card hover (always shown on touch).
+    const go = document.createElement('button'); go.type = 'button'; go.className = 'op-lp-go';
+    go.innerHTML = _PLAY_SVG + '<span>Go</span>';
+    go.addEventListener('click', (e) => { e.stopPropagation(); activate(); });
+    c.appendChild(go);
+    // Edit (user tasks only) — flat pencil, appears on hover.
+    if (!t.isExample && t.slug && window._opEditSavedTask) {
+      const ed = document.createElement('button'); ed.type = 'button'; ed.className = 'op-lp-edit';
+      ed.title = 'Edit'; ed.setAttribute('aria-label','edit task'); ed.innerHTML = _PENCIL_SVG;
+      ed.addEventListener('click', (e) => { e.stopPropagation(); lp.hidden = true; window._opEditSavedTask(t); });
+      c.appendChild(ed);
+    }
+    // ONLY the Go button launches — a tap anywhere else on the
+    // card is inert, so browsing the grid can't accidentally fire a task.
+    return c;
   }
   // cron → short human label (v0.7.0): reverses the shapes the scheduler UI
   // compiles (hourly/daily/weekdays/weekly/monthly); anything else shows raw.
@@ -1538,6 +1780,8 @@
     const sitesIn = document.getElementById('op-nt-sites');
     const pillsEl = document.getElementById('op-nt-pills');
     const sugEl = document.getElementById('op-nt-sug');
+    const _delBtn = document.getElementById('op-nt-delete');
+    const _titleEl = document.getElementById('op-nt-title');
     const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
 
     // ── sites/tools pill input (#6): chips + icon autocomplete ──
@@ -1565,6 +1809,7 @@
       {v:'spotify.com'}, {v:'wikipedia.org'}, {v:'weather.com'}, {v:'lichess.org'},
     ];
     let _pills = [];
+    let _editSlug = null;   // set while editing an existing task → save() updates in place
     function fav(d){ return 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(d) + '&sz=32'; }
     function letterIcon(name){
       const s = document.createElement('span'); s.className = 'op-nt-letter';
@@ -1662,7 +1907,7 @@
     }
     function schedHuman(){
       const rep = repSel.value, {m} = _timeParts();
-      if (!rep) return 'Runs only when you press ▶.';
+      if (!rep) return '';   // "Manual only" is self-explanatory — no helper line
       if (rep === 'hourly')   return 'Runs every hour at :' + String(m).padStart(2, '0') + '.';
       if (rep === 'daily')    return 'Runs every day at ' + _fmtTime() + '.';
       if (rep === 'weekdays') return 'Runs Mon–Fri at ' + _fmtTime() + '.';
@@ -1704,10 +1949,43 @@
       name.value = ''; sitesIn.value = '';
       schedReset();
       _pills = []; pillsEl.querySelectorAll('.op-nt-pill').forEach(p => p.remove());
+      _editSlug = null;
+      _titleEl.textContent = 'Save task';
+      document.getElementById('op-nt-save').textContent = 'Save task';
+      _delBtn.hidden = true; _delBtn.textContent = 'Delete';
       veil.hidden = false;
       setTimeout(() => name.focus(), 0);
     }
-    function closeModal(){ veil.hidden = true; }
+    // Edit an existing saved task: prefill every field + its site pills, remember
+    // the slug so save() updates in place (backend keeps `created`).
+    function openModalWith(t){
+      name.value = t.name || '';
+      prompt.value = t.prompt || '';
+      sitesIn.value = '';
+      schedReset();
+      _pills = []; pillsEl.querySelectorAll('.op-nt-pill').forEach(p => p.remove());
+      (t.sites || (t.site ? [t.site] : [])).forEach(s => {
+        (String(s).split(',')).map(x => x.trim()).filter(Boolean).forEach(v => addPill(v));
+      });
+      _editSlug = t.slug || null;
+      _titleEl.textContent = 'Edit task';
+      document.getElementById('op-nt-save').textContent = 'Save changes';
+      _delBtn.hidden = !_editSlug; _delBtn.textContent = 'Delete';   // delete lives in the edit menu
+      veil.hidden = false;
+      setTimeout(() => name.focus(), 0);
+    }
+    function closeModal(){ veil.hidden = true; _editSlug = null; _delBtn.textContent = 'Delete'; }
+    async function delTask(){
+      if (!_editSlug) return;
+      // two-tap confirm inline on the button (no separate dialog)
+      if (_delBtn.textContent !== 'Confirm delete') { _delBtn.textContent = 'Confirm delete'; return; }
+      try {
+        const r = await fetch(TASKS_URL + '/' + encodeURIComponent(_editSlug), { method: 'DELETE' });
+        const d = await r.json().catch(() => ({}));
+        if (d.ok) { logRes('deleted', true); closeModal(); if (typeof initLaunchpad === 'function') { try { initLaunchpad(); } catch(_){} } }
+        else logRes(d.error || 'delete failed', false);
+      } catch { logRes('delete failed', false); }
+    }
     async function save(){
       const n = name.value.trim(), p = prompt.value.trim();
       if (!n) { name.focus(); return; }
@@ -1720,6 +1998,7 @@
         bot: (typeof selectedBot === 'function') ? selectedBot() : '',
         model: (document.getElementById('op-model')||{}).value || '',
         effort: (document.getElementById('op-effort')||{}).value || '' };
+      if (_editSlug) body.slug = _editSlug;   // update in place
       try { const d = await (await fetch(TASKS_URL, { method:'POST',
           headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
         if (d.ok) { logRes('saved “' + n + '”', true); closeModal(); }
@@ -1727,7 +2006,12 @@
       catch { logRes('save failed', false); }
     }
     window._opOpenSaveModal = openModal;   // launchpad's ＋ card opens the dialog too
+    window._opEditSavedTask = openModalWith;   // launchpad card's pencil opens prefilled
     btn.addEventListener('click', openModal);
+    _delBtn.addEventListener('click', (e) => { e.preventDefault(); delTask(); });
+    // reset the two-tap delete confirm if the user touches anything else
+    [name, prompt, sitesIn].forEach(el => el && el.addEventListener('input', () => {
+      if (_delBtn.textContent === 'Confirm delete') _delBtn.textContent = 'Delete'; }));
     document.getElementById('op-nt-close').addEventListener('click', closeModal);
     document.getElementById('op-nt-cancel').addEventListener('click', closeModal);
     document.getElementById('op-nt-save').addEventListener('click', save);
@@ -2300,9 +2584,13 @@
   function openHam() {
     const r = hamBtn.getBoundingClientRect();
     // anchor the fixed menu just under the button, right-aligned to it
-    ham.style.top = (r.bottom + 4) + 'px';
+    const top = r.bottom + 4;
+    ham.style.top = top + 'px';
     ham.style.left = 'auto';
     ham.style.right = (window.innerWidth - r.right) + 'px';
+    // cap to the space actually below the button so a tall menu (high zoom /
+    // short viewport) scrolls inside itself instead of running off the bottom
+    ham.style.maxHeight = Math.max(160, (window.innerHeight - top - 10)) + 'px';
     ham.hidden = false;
   }
   hamBtn.addEventListener('click', e => {
@@ -2550,15 +2838,24 @@
       }
       if (d.url) showUrl(d.url);   // reflect the live page URL (incl. agent navigation)
       if (d.click) showAgentClick(d.click);   // draw the agent cursor where it clicked
-      if (d.has_frame) { setState('live', ''); _coldSince = 0;
+      if (d.has_frame) { setState('live', ''); _coldSince = 0; _desktopNoFrame = false;
         // server healthy → if we were showing SIGNAL LOST, reconnect ONCE to
         // resume real frames, then trust the open MJPEG connection (no per-poll
         // reconnect — that caused the ~1/sec flicker).
         if (_wasLost) { _wasLost = false; connectStream(); }
         signalOk();
       }
-      else if (d.status === 'error') { setState('error', 'disconnected'); signalLost(); _coldSince = _coldSince||Date.now(); }
+      else if (d.status === 'error') { _desktopNoFrame = false; setState('error', 'disconnected'); signalLost(); _coldSince = _coldSince||Date.now(); }
+      else if (_isGameSurface() && op.dataset.busy !== '1') {
+        _desktopNoFrame = true;
+        // Desktop surface, idle, no frame yet = the virtual desktop hasn't
+        // started (the agent's first task boots it). This is a normal resting
+        // state, NOT a lost signal — show it immediately and deterministically
+        // off the server's has_frame, no 6s cold wait, no alarming glyph.
+        desktopIdle();
+      }
       else {
+        _desktopNoFrame = false;
         if (!_coldSince) _coldSince = Date.now();
         const coldMs = Date.now() - _coldSince;
         // brief gaps: the server heartbeats the last frame, so stay as-is (no
@@ -2652,6 +2949,13 @@
   }
   async function dispatchTask(txt){
     const bot = selectedBot();
+    // Game (Track C): fold the picked game into the task so the agent passes
+    // map:"<name>" to perceive/game_macro. Works on any surface. No host state.
+    if (_activeMap) {
+      txt = '[Active game map: "' + _activeMap + '" — pass map:"' + _activeMap
+          + '" to your perceive and game_macro tool calls so perception is scoped '
+          + 'to this game.]\n\n' + txt;
+    }
     // slash palette (#30 v2): remember the last dispatched bundle so "/save"
     // can store it as a re-runnable task (the draft is gone by save time).
     window._opLastDispatch = { task: txt, bot,
@@ -2773,6 +3077,7 @@
   stage.addEventListener('pointerdown', e => {
     if (e.pointerType === 'touch') return;       // touch handled by touch* events below
     if (e.button !== 0) return;
+    if (_overlayTarget(e)) return;               // overlay (launchpad) owns its own press
     const n = viewToNorm(e.clientX, e.clientY); if (!n) return;
     try { stage.setPointerCapture(e.pointerId); } catch(_){}
     _down = { n, cx: e.clientX, cy: e.clientY }; _dragging = false; _holding = false;
@@ -2818,7 +3123,15 @@
   function _endTouch(){ _tN=null; _tStart=null; _tHolding=false; _tDragging=false;
     setTimeout(()=>{ _touchHandled=false; }, 400); }
 
+  // Interactive overlays that sit ON TOP of the feed (launchpad cards, the panic
+  // STOP) own their own taps — the feed steer handler must NOT intercept them, or
+  // iOS's preventDefault kills the tap and "none of the buttons work" (iPad).
+  function _overlayTarget(e){
+    const t = e.target;
+    return t && t.closest && t.closest('.op-lp, .op-panic, .op-handoff, .op-takeover-btn');
+  }
   stage.addEventListener('touchstart', e => {
+    if (_overlayTarget(e)) return;   // let the overlay handle its own tap
     if (!e.touches.length) return;
     if (e.touches.length >= 2) {   // 2-finger pinch → let Safari zoom the page natively
       if (_tHoldTimer) { clearTimeout(_tHoldTimer); _tHoldTimer = null; }
@@ -2838,6 +3151,7 @@
   }, {passive:false});
   let _tScroll = false, _tLastY = 0, _tLastX = 0, _tScrollDy = 0, _tScrollDx = 0, _tScrollT = null;
   stage.addEventListener('touchmove', e => {
+    if (_overlayTarget(e)) return;   // let the overlay scroll/handle its own move
     if (!e.touches.length || !_tStart) return;
     if (e.touches.length >= 2) {   // pinch in progress → release steering, let native zoom run
       if (_tHoldTimer) { clearTimeout(_tHoldTimer); _tHoldTimer = null; }
@@ -2871,6 +3185,7 @@
     }
   }, {passive:false});
   stage.addEventListener('touchend', e => {
+    if (_overlayTarget(e)) return;   // overlay tap — don't preventDefault its click
     if (_tScroll) { _tScroll = false; e.preventDefault(); _endTouch(); return; }
     if (_tHoldTimer) { clearTimeout(_tHoldTimer); _tHoldTimer = null; }
     e.preventDefault();
@@ -2898,6 +3213,22 @@
     if (_tHolding) act({kind:'mouseup_at', x:(_tN?_tN.x:0.5), y:(_tN?_tN.y:0.5)}, null, true);
     _endTouch();
   });
+  // hover passthrough (MAN mode only — in AUTO your mouse would fight the
+  // agent's cursor): stream throttled pointer moves so menus, tooltips and
+  // hover states react on the remote side like a real mouse. Desktop surfaces
+  // get real X11/win motion; the browser gets CDP mouseMoved.
+  let _mvTs = 0, _mvLast = null;
+  stage.addEventListener('mousemove', e => {
+    if (MODE !== 'man') return;
+    const now = performance.now();
+    if (now - _mvTs < 90) return;
+    const n = viewToNorm(e.clientX, e.clientY);
+    if (!n) return;
+    if (_mvLast && Math.abs(n.x - _mvLast.x) < 0.004
+                && Math.abs(n.y - _mvLast.y) < 0.004) return;
+    _mvTs = now; _mvLast = n;
+    act({kind:'move', x:n.x, y:n.y}, null, true);
+  });
   // dblclick: swallow the native event only — the click handler below already
   // forwarded each physical click with its native detail count (1,2,3…), so the
   // remote page has the real double/triple-click. Dispatching dblclick_at here
@@ -2908,6 +3239,7 @@
   stage.addEventListener('contextmenu', e => { e.preventDefault(); const n=viewToNorm(e.clientX,e.clientY); if(!n) return;
     ripple(e.clientX,e.clientY); act({kind:'rclick_at',x:n.x,y:n.y}, null, true); });
   stage.addEventListener('click', e => { if (_touchHandled) return;   // touch already handled it
+    if (_overlayTarget(e)) return;   // click originated on an overlay (launchpad etc.) — don't steer the page
     stage.focus(); const n=viewToNorm(e.clientX,e.clientY); if(!n) return;
     ripple(e.clientX,e.clientY);
     // e.detail = native multi-click count (2=word select, 3=paragraph select) —
@@ -2921,6 +3253,7 @@
   // mouse wheel / trackpad scroll → scroll the bot browser by the same delta.
   let _wheelDx = 0, _wheelDy = 0, _wheelT = null;
   stage.addEventListener('wheel', e => {
+    if (_overlayTarget(e)) return;   // wheel over the launchpad scrolls IT, not the page
     e.preventDefault();
     _wheelDx += e.deltaX; _wheelDy += e.deltaY;
     // coalesce rapid wheel events into one steer (~50ms) so we don't flood the server

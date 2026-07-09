@@ -79,6 +79,9 @@ def demo():
     yield app.test_client(), mod, rec
     OA.runner = orig
     os.environ.pop("OPERATOR_DEMO", None)
+    # the demo module scopes the sandbox to its own container via env — scrub it
+    # so a later live reload in this process doesn't inherit the demo name
+    os.environ.pop("OPERATOR_SANDBOX_CONTAINER", None)
     importlib.reload(OV)
 
 
@@ -92,10 +95,29 @@ def test_surfaces_lists_all_three_live(live):
     assert all("available" in s for s in d["surfaces"])
 
 
-def test_surfaces_demo_is_browser_only(demo):
+def test_surfaces_demo_grays_out_real_keeps_sandbox(demo):
     c, mod, _ = demo
+    mod._surface_available = lambda k: k != "desktop-real"
     d = c.get("/operator/surfaces").get_json()
-    assert [s["key"] for s in d["surfaces"]] == ["browser"]
+    by = {s["key"]: s for s in d["surfaces"]}
+    assert set(by) == {"browser", "desktop-sandbox", "desktop-real"}
+    # Computer shows but stays grayed out — with demo-specific copy
+    assert by["desktop-real"]["available"] is False
+    assert by["desktop-real"]["unavailable_hint"]
+    assert by["desktop-sandbox"]["available"] is True
+
+
+# ── /operator/maps (game-map picker source) ──────────────────────────────────
+def test_maps_lists_shipped_maps_live(live):
+    c, mod, _ = live
+    d = c.get("/operator/maps").get_json()
+    # regions-first starters that ship with the module
+    assert "lichess" in d["maps"] and "openrsc" in d["maps"]
+
+
+def test_maps_empty_in_demo(demo):
+    c, mod, _ = demo
+    assert c.get("/operator/maps").get_json()["maps"] == []
 
 
 # ── /operator/surface (switch) ───────────────────────────────────────────────
@@ -134,10 +156,89 @@ def test_switch_unavailable_surface_409(live):
     assert r.status_code == 409
 
 
-def test_switch_blocked_in_demo(demo):
+def test_switch_demo_allows_sandbox_blocks_real(demo):
     c, mod, _ = demo
-    r = c.post("/operator/surface", json={"surface": "desktop-sandbox"})
+    mod._surface_available = lambda k: True
+    mod._desktop_feed.ensure_running = lambda s: None
+    # real desktop: hard 403, even with confirm — live-cockpit only
+    r = c.post("/operator/surface", json={"surface": "desktop-real",
+                                          "confirm": True})
     assert r.status_code == 403
+    # the (demo-scoped) sandbox is fair game
+    r2 = c.post("/operator/surface", json={"surface": "desktop-sandbox"})
+    assert r2.status_code == 200 and r2.get_json()["active"] == "desktop-sandbox"
+    mod._active_surface["name"] = "browser"
+
+
+def test_demo_scopes_sandbox_container_env(demo):
+    # the demo instance must never touch the live sandbox container
+    assert os.environ.get("OPERATOR_SANDBOX_CONTAINER") == "operator-sandbox-demo"
+
+
+# ── /operator/sandbox/ctl (taskbar controls) ─────────────────────────────────
+class _SbRec:
+    """Stands in for sandbox_container — records lifecycle calls."""
+
+    def __init__(self):
+        self.calls = []
+
+    def ensure(self, *a, **k):
+        self.calls.append("ensure")
+
+    def stop(self):
+        self.calls.append("stop")
+
+    def delete(self):
+        self.calls.append("delete")
+
+    def launch(self, app):
+        self.calls.append(("launch", app))
+
+
+def _wire_sb(mod):
+    rec = _SbRec()
+    mod._surface_available = lambda k: True
+    mod._load_cu = lambda fname: rec
+    return rec
+
+
+def test_sandbox_ctl_launch_is_whitelisted(live):
+    c, mod, _ = live
+    rec = _wire_sb(mod)
+    r = c.post("/operator/sandbox/ctl", json={"action": "launch",
+                                              "app": "chromium"})
+    assert r.status_code == 200
+    assert "ensure" in rec.calls and ("launch", "chromium") in rec.calls
+    # anything off the whitelist never reaches the container
+    r2 = c.post("/operator/sandbox/ctl", json={"action": "launch",
+                                               "app": "bash"})
+    assert r2.status_code == 400
+    assert ("launch", "bash") not in rec.calls
+
+
+def test_sandbox_ctl_restart_and_delete(live):
+    c, mod, _ = live
+    rec = _wire_sb(mod)
+    assert c.post("/operator/sandbox/ctl",
+                  json={"action": "restart"}).status_code == 200
+    assert rec.calls == ["stop", "ensure"]      # soft stop, then re-ensure
+    assert c.post("/operator/sandbox/ctl",
+                  json={"action": "delete"}).status_code == 200
+    assert rec.calls[-1] == "delete"
+
+
+def test_sandbox_ctl_unknown_action_400(live):
+    c, mod, _ = live
+    _wire_sb(mod)
+    r = c.post("/operator/sandbox/ctl", json={"action": "nuke"})
+    assert r.status_code == 400
+
+
+def test_sandbox_ctl_unavailable_host_409(live):
+    c, mod, _ = live
+    mod._surface_available = lambda k: k == "browser"
+    r = c.post("/operator/sandbox/ctl", json={"action": "restart"})
+    assert r.status_code == 409
 
 
 # ── dispatch pass-through ────────────────────────────────────────────────────

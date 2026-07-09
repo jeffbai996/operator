@@ -35,6 +35,10 @@ DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
 # Chrome), never :9222 (the logged-in browser). The unguessable path gate is the
 # WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
 CDP_URL = _os_cfg.environ.get("OPERATOR_DEMO_CDP") or "http://127.0.0.1:9222"
+if DEMO:
+    # the demo may view/drive the SANDBOX surface, but never the owner's container —
+    # scope it to its own (sandbox_container.py reads this at load).
+    _os_cfg.environ.setdefault("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox-demo")
 FRAME_INTERVAL = 0.066     # ~15fps (the owner's pick)
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
@@ -397,6 +401,39 @@ class _Streamer:
             live = [p for p in ctx.pages if not p.is_closed()]
             if len(live) < 2:
                 return  # single tab → nothing to follow
+            # ACTIVITY BEATS VISIBILITY (owner report: "the view doesn't track
+            # the tab the bot is using — some bots, not others"): agents drive
+            # pages over CDP, which never foregrounds them — the MCP picks its
+            # current tab at connect independent of Chrome's focus, and navigate/
+            # click never activate a target (only the explicit tab tools do). So
+            # a tab whose URL changed since the last poll is the one being DRIVEN;
+            # follow it and bring it to front (which also keeps its renderer from
+            # being background-throttled and makes later visibility polls agree).
+            # ONLY while an agent run is live: outside a run, "URL activity" is
+            # SPA churn in idle tabs (Google Travel pushStates on its own), and
+            # yanking focus then kills in-page popups the USER is working with
+            # (1Password's inline menu dies on blur) — and in manual mode a view
+            # switch would re-aim the user's steer clicks at the wrong page.
+            urls = {pg: pg.url for pg in live}
+            prev = getattr(self, "_tab_urls", {})
+            self._tab_urls = urls
+            try:
+                _busy = operator_agent.runner.is_running()
+            except Exception:  # noqa: BLE001
+                _busy = False
+            moved = ([pg for pg in live if pg in prev and prev[pg] != urls[pg]]
+                     if _busy else [])
+            if moved:
+                pg = moved[-1]                       # most recently registered mover
+                if pg is not self._page:
+                    self._page = pg
+                    self._cdp = None
+                    self._update_viewport()
+                try:
+                    await asyncio.wait_for(pg.bring_to_front(), timeout=0.5)
+                except Exception:  # noqa: BLE001 — foregrounding is best-effort
+                    pass
+                return
             # current page already visible? then don't churn.
             async def _vis(pg):
                 try:
@@ -727,6 +764,14 @@ class _Streamer:
                 x = float(action.get("x", 0)) * dims["w"]
                 y = float(action.get("y", 0)) * dims["h"]
                 await self._cdp_click(p, x, y, button="right", clicks=1)
+            elif kind == "move":                   # hover at normalized x,y (menus, tooltips)
+                dims = await self._viewport_dims(p)
+                x = float(action.get("x", 0)) * dims["w"]
+                y = float(action.get("y", 0)) * dims["h"]
+                sess = await self._cdp_session(p)
+                await asyncio.wait_for(
+                    sess.send("Input.dispatchMouseEvent",
+                              {"type": "mouseMoved", "x": x, "y": y}), timeout=4)
             elif kind == "type":
                 await p.keyboard.type(val, delay=35)
             elif kind == "key":
@@ -884,11 +929,11 @@ _CU_DIR = str(_CU_DIR_1UP if _CU_DIR_1UP.is_dir() else _CU_DIR_2UP)
 
 _SURFACE_DEFS = [
     {"key": "browser", "label": "Browser",
-     "hint": "the logged-in Chrome — today's Operator"},
-    {"key": "desktop-sandbox", "label": "Sandbox desktop",
-     "hint": "isolated virtual desktop (Xvfb) — safe by construction"},
-    {"key": "desktop-real", "label": "Real desktop", "gated": True,
-     "hint": "drives the actual machine — confirm required, STOP always armed"},
+     "hint": "Controls a Chrome browser."},
+    {"key": "desktop-sandbox", "label": "Sandbox",
+     "hint": "Controls an isolated virtual desktop."},
+    {"key": "desktop-real", "label": "Computer", "gated": True,
+     "hint": "Controls this machine directly. Requires confirmation."},
 ]
 _active_surface = {"name": "browser"}
 
@@ -897,7 +942,9 @@ def _surface_available(key: str) -> bool:
     if key == "browser":
         return True
     if key == "desktop-sandbox":
-        return bool(_shutil.which("Xvfb") and _shutil.which("scrot"))
+        # the sandbox is a Docker container now (sandbox_container.py), not the
+        # old host-Xvfb path — Xvfb/scrot live INSIDE the image.
+        return bool(_shutil.which("docker"))
     if key == "desktop-real":
         # bare which() fails under the systemd --user unit (interop dirs not on
         # its PATH) — accept the canonical WSL interop path too, matching the
@@ -979,16 +1026,17 @@ class _DesktopFeed:
             if "win" not in self._mods:
                 self._mods["win"] = _load_cu("win_backend.py")
             return self._mods["win"].screenshot("windows-primary", _SHOT_DIR)
-        # sandbox: capture only if the display is actually live — the agent's
-        # control MCP brings it up; the feed never launches Xvfb itself.
-        if "display" not in self._mods:
-            self._mods["display"] = _load_cu("display.py")
-            self._mods["actions"] = _load_cu("actions.py")
-        disp = _os_cfg.environ.get("COMPUTER_USE_DISPLAY", ":99")
-        if not self._mods["display"].is_live(disp):
-            self.detail = f"sandbox display {disp} not up yet"
+        # sandbox: a REAL isolated Docker desktop. Bring the container up (once)
+        # and capture it via docker exec. ensure() is idempotent + persistent —
+        # the container survives across switches; it is never torn down here.
+        if "sandbox" not in self._mods:
+            self._mods["sandbox"] = _load_cu("sandbox_container.py")
+        try:
+            self._mods["sandbox"].ensure()
+        except Exception as e:  # noqa: BLE001 — surface the reason, keep idling
+            self.detail = f"starting sandbox desktop… ({e})"
             return None
-        return self._mods["actions"].screenshot(disp, _SHOT_DIR)
+        return self._mods["sandbox"].screenshot(_SHOT_DIR)
 
 
 _desktop_feed = _DesktopFeed()
@@ -1020,7 +1068,7 @@ threading.Thread(target=_launch_chrome_on_boot, daemon=True, name="operator-chro
 @bp.route("/operator")
 def operator_page():
     from flask import make_response
-    # demo: serve the standalone, de-PII'd template (no squad chrome/nav, no owner
+    # demo: serve the standalone, de-PII'd template (no host-app chrome/nav, no owner
     # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
     _tmpl = "operator_demo.html" if DEMO else "operator.html"
     resp = make_response(render_template(_tmpl))
@@ -1127,22 +1175,37 @@ _SHOT_DIR = _os_cfg.path.realpath(_os_cfg.path.expanduser(
     _os_cfg.environ.get("COMPUTER_USE_OUTPUT_DIR")
     or _os_cfg.environ.get("PLAYWRIGHT_OUTPUT_DIR")
     or "~/.cache/computer-use"))
+# agents also drop screenshots into their per-bot session cwd (gpt/codex saves
+# there rather than the MCP output dir) — serve those too, same guarantees.
+_SHOT_DIRS = [_SHOT_DIR] + [
+    _os_cfg.path.realpath(_os_cfg.path.expanduser("~/.operator-sessions/" + _b))
+    for _b in ("claude-a", "claude-b", "gpt", "gemma")]
+
+
+def _find_shot(base: str) -> str | None:
+    """Locate a screenshot by basename across the servable dirs (first hit)."""
+    for d in _SHOT_DIRS:
+        target = _os_cfg.path.realpath(_os_cfg.path.join(d, base))
+        if _os_cfg.path.commonpath([target, d]) == d and _os_cfg.path.isfile(target):
+            return d
+    return None
 
 
 @bp.route("/operator/shot/<path:name>")
 def operator_shot(name):
     """Serve an agent screenshot PNG/JPG by basename from the computer-use output
-    dir. Basename-only + extension whitelist + realpath containment → no traversal."""
+    dir or a bot session dir. Basename-only + extension whitelist + realpath
+    containment → no traversal."""
     from flask import send_from_directory, abort
     base = _os_cfg.path.basename(name)            # strip any path components
     if not base or base != name or base.startswith("."):
         abort(404)
     if _os_cfg.path.splitext(base)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
         abort(404)
-    target = _os_cfg.path.realpath(_os_cfg.path.join(_SHOT_DIR, base))
-    if _os_cfg.path.commonpath([target, _SHOT_DIR]) != _SHOT_DIR or not _os_cfg.path.isfile(target):
+    d = _find_shot(base)
+    if d is None:
         abort(404)
-    resp = send_from_directory(_SHOT_DIR, base)
+    resp = send_from_directory(d, base)
     resp.headers["Cache-Control"] = "public, max-age=86400"
     return resp
 
@@ -1192,6 +1255,104 @@ def operator_unseen():
         return jsonify(count=0)
 
 
+def _img_dims(data: bytes) -> tuple | None:
+    """(w, h) from PNG/JPEG header bytes — no PIL dependency in the server."""
+    try:
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return (int.from_bytes(data[16:20], "big"),
+                    int.from_bytes(data[20:24], "big"))
+        if data[:2] == b"\xff\xd8":                     # JPEG: scan SOF marker
+            i = 2
+            while i < len(data) - 9:
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = data[i + 1]
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    return (int.from_bytes(data[i + 7:i + 9], "big"),
+                            int.from_bytes(data[i + 5:i + 7], "big"))
+                i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _desktop_steer(action: dict) -> dict:
+    """Manual steer for the desktop surfaces — the same normalized-coordinate
+    gestures the browser stage sends, injected via the surface's own backend
+    (docker-exec xdotool for the sandbox, win input for the real desktop)."""
+    surface = _active_surface["name"]
+    mod = _load_cu("sandbox_container.py" if surface == "desktop-sandbox"
+                   else "win_backend.py")
+    # frame size: sandbox is fixed; real desktop = the last streamed frame's
+    # dims (win_backend scales image→physical coords itself at exec time)
+    if surface == "desktop-sandbox":
+        w, h = mod.size()
+    else:
+        dims = _img_dims(_desktop_feed.frame or b"")
+        if not dims:
+            return {"ok": False, "error": "no desktop frame yet"}
+        w, h = dims
+
+    def _xy(nx, ny):
+        return [max(0, min(w - 1, int(float(nx or 0) * w))),
+                max(0, min(h - 1, int(float(ny or 0) * h)))]
+
+    def _run(a: dict) -> None:
+        if surface == "desktop-sandbox":
+            mod.ensure()
+            mod.execute(a)
+        else:
+            mod.execute(a, "windows-primary")
+
+    kind = action.get("kind")
+    try:
+        if kind == "move":
+            _run({"action": "mouse_move", "coordinate": _xy(action["x"], action["y"])})
+        elif kind in ("click_at", "dblclick_at"):
+            n = action.get("count") or (2 if kind == "dblclick_at" else 1)
+            act_name = {1: "left_click", 2: "double_click"}.get(
+                min(int(n), 3), "triple_click")
+            if surface == "desktop-real" and act_name == "triple_click":
+                act_name = "double_click"          # win backend caps at double
+            _run({"action": act_name, "coordinate": _xy(action["x"], action["y"])})
+        elif kind == "rclick_at":
+            _run({"action": "right_click", "coordinate": _xy(action["x"], action["y"])})
+        elif kind == "drag":
+            _run({"action": "left_click_drag",
+                  "start_coordinate": _xy(action.get("x0"), action.get("y0")),
+                  "coordinate": _xy(action.get("x1"), action.get("y1"))})
+        elif kind in ("mousedown_at", "mouseup_at"):
+            _run({"action": "mouse_move", "coordinate": _xy(action["x"], action["y"])})
+            _run({"action": "left_mouse_down" if kind == "mousedown_at"
+                  else "left_mouse_up"})
+        elif kind == "scroll":
+            dx, dy = action.get("dx"), action.get("dy")
+            if isinstance(dy, (int, float)) and dy:
+                _run({"action": "scroll",
+                      "scroll_direction": "down" if dy > 0 else "up",
+                      "scroll_amount": max(1, min(10, round(abs(dy) / 80)))})
+            if isinstance(dx, (int, float)) and dx:
+                _run({"action": "scroll",
+                      "scroll_direction": "right" if dx > 0 else "left",
+                      "scroll_amount": max(1, min(10, round(abs(dx) / 80)))})
+        elif kind == "type":
+            _run({"action": "type", "text": str(action.get("value", ""))})
+        elif kind in ("key", "key_down", "key_up"):
+            k = kind
+            if surface == "desktop-real" and kind != "key":
+                # win backend has no keydown/keyup — degrade a hold to one press
+                if kind == "key_up":
+                    return {"ok": True}
+                k = "key"
+            _run({"action": k, "text": str(action.get("value", ""))})
+        else:
+            return {"ok": False, "error": f"{kind!r} not supported on this surface"}
+        return {"ok": True}
+    except Exception as e:  # noqa: BLE001 — surface the reason to the cockpit
+        return {"ok": False, "error": str(e)}
+
+
 @bp.route("/operator/steer", methods=["POST"])
 def operator_steer():
     data = request.get_json(silent=True) or request.form
@@ -1217,6 +1378,10 @@ def operator_steer():
               "count": data.get("count")}
     if not action["kind"]:
         return jsonify(ok=False, error="missing action kind"), 400
+    # desktop surfaces: same gestures, injected via the surface backend instead
+    # of CDP — manual steer works everywhere the feed does.
+    if _active_surface["name"] != "browser":
+        return jsonify(_desktop_steer(action))
     return jsonify(_streamer.run_action(action))
 
 
@@ -1268,7 +1433,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
         return None
     last = evs[-1]
     if time.time() - last.get("ts", 0) <= window_s:
-        # demo: never leak squad bot names to a public visitor -> generic label.
+        # demo: never leak host bot names to a public visitor -> generic label.
         _b = "assistant" if DEMO else last.get("bot")
         return {"bot": _b, "action": last.get("action"),
                 "detail": last.get("detail", "")}
@@ -1278,7 +1443,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
 @bp.route("/operator/drivers")
 def operator_drivers():
     """The pickable drivers — the operator runs them headless. In demo mode this is
-    a single generic 'gpt' driver (never leak squad bot names to a public visitor)."""
+    a single generic 'gpt' driver (never leak host bot names to a public visitor)."""
     if DEMO:
         return jsonify(drivers=[{"key": "bot", "label": "bot"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
@@ -1286,12 +1451,17 @@ def operator_drivers():
 
 @bp.route("/operator/surfaces")
 def operator_surfaces():
-    """The pickable surfaces (Track C). Demo NEVER sees past the browser —
-    desktop surfaces expose the host machine and are live-cockpit only."""
-    if DEMO:
-        return jsonify(surfaces=[_SURFACE_DEFS[0]], active="browser")
+    """The pickable surfaces (Track C). Demo gets the browser + the (isolated,
+    demo-scoped) sandbox; the REAL desktop exposes the host machine, so it shows
+    but stays grayed out — live-cockpit only."""
     out = [dict(s, available=_surface_available(s["key"]))
            for s in _SURFACE_DEFS]
+    if DEMO:
+        for s in out:
+            if s["key"] == "desktop-real":
+                s["available"] = False
+                s["unavailable_hint"] = "Live cockpit only."
+        return jsonify(surfaces=out, active=_active_surface["name"])
     return jsonify(surfaces=out, active=_active_surface["name"])
 
 
@@ -1300,10 +1470,10 @@ def operator_surface_set():
     """Switch the active surface: swaps the live-feed source immediately and
     sets the default surface for the next dispatch. desktop-real demands the
     explicit confirm flag every time (the UI shows the consent step)."""
-    if DEMO:
-        return jsonify(ok=False, error="demo is browser-only"), 403
     data = request.get_json(silent=True) or request.form
     name = (data.get("surface") or "").strip()
+    if DEMO and name == "desktop-real":
+        return jsonify(ok=False, error="the real desktop is live-cockpit only"), 403
     if name not in [s["key"] for s in _SURFACE_DEFS]:
         return jsonify(ok=False, error=f"unknown surface {name!r}"), 400
     if not _surface_available(name):
@@ -1314,6 +1484,65 @@ def operator_surface_set():
     if name != "browser":
         _desktop_feed.ensure_running(name)
     return jsonify(ok=True, active=name)
+
+
+# Game maps live in vision/maps/ — scanned directly (no heavy import). Selecting
+# one only scopes the agent's perceive/game_macro calls; there's no host-side
+# "active map" state — the pick is folded into the dispatched task text.
+_MAPS_DIR = str(Path(__file__).resolve().parent / "vision" / "maps")
+
+
+@bp.route("/operator/maps")
+def operator_maps():
+    """Game maps shippable to perceive/game_macro. Demo never plays games."""
+    if DEMO:
+        return jsonify(maps=[])
+    names = []
+    try:
+        for f in sorted(_os_cfg.listdir(_MAPS_DIR)):
+            base, ext = _os_cfg.path.splitext(f)
+            if ext in (".yaml", ".yml", ".json"):
+                names.append(base)
+    except FileNotFoundError:
+        pass
+    return jsonify(maps=names)
+
+
+# apps the taskbar can launch inside the sandbox (whitelist — the route never
+# execs a client-supplied binary name).
+_SANDBOX_APPS = {"chromium": "Chromium", "xfce4-terminal": "Terminal",
+                 "pcmanfm": "Files"}
+
+
+@bp.route("/operator/sandbox/ctl", methods=["POST"])
+def operator_sandbox_ctl():
+    """Taskbar controls for the sandbox desktop. launch/restart act on the
+    persistent container; delete is the ONE destructive teardown — the next
+    capture boots a factory-fresh desktop. Demo instances act on their own
+    container (OPERATOR_SANDBOX_CONTAINER is demo-scoped at module load),
+    so this is safe to expose there too."""
+    if not _surface_available("desktop-sandbox"):
+        return jsonify(ok=False, error="sandbox not available on this host"), 409
+    data = request.get_json(silent=True) or request.form
+    act = (data.get("action") or "").strip()
+    sb = _load_cu("sandbox_container.py")
+    try:
+        if act == "launch":
+            app_name = (data.get("app") or "").strip()
+            if app_name not in _SANDBOX_APPS:
+                return jsonify(ok=False, error=f"unknown app {app_name!r}"), 400
+            sb.ensure()
+            sb.launch(app_name)
+        elif act == "restart":
+            sb.stop()
+            sb.ensure()
+        elif act == "delete":
+            sb.delete()
+        else:
+            return jsonify(ok=False, error=f"unknown action {act!r}"), 400
+    except Exception as e:  # noqa: BLE001 — surface the reason to the taskbar
+        return jsonify(ok=False, error=str(e)), 500
+    return jsonify(ok=True)
 
 
 @bp.route("/operator/dispatch", methods=["POST"])
@@ -1332,8 +1561,11 @@ def operator_dispatch():
     surface = (data.get("surface") or _active_surface["name"] or "browser").strip()
     real_ok = bool(data.get("real_ok"))
     if DEMO:
+        # the demo agent only drives the browser (desktop drive is claude-runtime
+        # only) — snap the feed back too so a user parked on the sandbox surface
+        # watches the screen the agent is actually on.
         surface, real_ok = "browser", False
-    if surface != _active_surface["name"] and not DEMO \
+    if surface != _active_surface["name"] \
             and surface in [s["key"] for s in _SURFACE_DEFS]:
         _active_surface["name"] = surface     # feed follows the dispatch
     # explicit user intent: clear the manual-close latch and re-check liveness/
@@ -1346,7 +1578,7 @@ def operator_dispatch():
         pass
     if DEMO:
         # public demo: Sonnet 4.6 via gemma/agy runtime, effort locked to medium.
-        # ignore any client-sent bot/model. demo=True strips squad context/identity/tools.
+        # ignore any client-sent bot/model. demo=True strips host context/identity/tools.
         bot = "gemma"
         model = "Claude Sonnet 4.6 (Thinking)"
         effort = "medium"
@@ -1364,7 +1596,7 @@ def operator_dispatch():
 # handoff spec). Persistence + slug logic live in operator_tasks.py; these routes
 # are thin wrappers that, on /run, do exactly what /operator/dispatch does.
 # LIVE COCKPIT ONLY — never exposed in the public demo (would leak/enumerate the
-# squad's saved tasks + let a visitor run arbitrary stored prompts).
+# owner's saved tasks + let a visitor run arbitrary stored prompts).
 
 
 def _task_public(slug: str, t: dict) -> dict:
@@ -1509,8 +1741,8 @@ def operator_driver_status():
         since = 0.0
     reasoning = []
     bot = (request.args.get("bot") or (drv or {}).get("bot") or "").strip()
-    # in demo mode the agent has no squad transcript to tail (and we must not read
-    # any squad bot's transcript) -> the live trace comes from the agent runner only.
+    # in demo mode the agent has no host transcript to tail (and we must not read
+    # any host bot's transcript) -> the live trace comes from the agent runner only.
     if bot and not DEMO:
         reasoning = _tail_reasoning(bot, since)
     return jsonify(driver=drv, events=_recent_events(30), reasoning=reasoning)

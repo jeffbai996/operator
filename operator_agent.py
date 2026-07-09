@@ -63,6 +63,19 @@ _DESKTOP_MANDATE = (
     " WORKFLOW: ALWAYS start with computer{action:'screenshot'} to see the desktop."
     " Act step by step — act, screenshot, VERIFY the result matches your intent,"
     " correct if not. Two identical blind actions without checking is a bug."
+    " CLICK PRECISION: coordinates are pixels in the screenshot you just took,"
+    " 1:1 — no scaling. The MOUSE POINTER IS VISIBLE in every screenshot: after"
+    " a click that didn't take, find the pointer, measure the offset between it"
+    " and the intended target, and re-click corrected by that offset — never"
+    " re-guess blind. For small or dense targets (calendar cells, dropdown rows,"
+    " tight toolbars) do NOT eyeball the full frame: call perceive with"
+    " region=[x,y,w,h] + return_image=true for a full-resolution crop (crop"
+    " pixel (0,0) = the region's (x,y) — add the offset back), or grid=true for"
+    " a coordinate-grid overlay, then click the derived exact point."
+    " DATE PICKERS / dense grids: prefer NOT clicking cells at all — type the"
+    " date into the field if it accepts text, or click once to open the widget"
+    " and drive it with arrow keys + Enter. If you must click cells, crop-zoom"
+    " first (perceive region) and verify each pick before moving on."
     " Prefer `perceive` over squinting at pixels when targets are repetitive or"
     " small; prefer `game_macro` for repetitive multi-step sequences (grinds,"
     " form-fill loops, game moves) instead of one tool call per click."
@@ -70,8 +83,18 @@ _DESKTOP_MANDATE = (
     " user should switch the surface to 'browser'.")
 
 _DESKTOP_FLAVORS = {
-    "desktop-sandbox": ("an ISOLATED sandbox desktop (Xvfb) — nothing outside it"
-                        " can be touched; act freely"),
+    "desktop-sandbox": ("an ISOLATED Linux desktop running in a Docker container"
+                        " (its own filesystem, network and user — nothing on the"
+                        " host can be touched). Act freely. THE ENVIRONMENT:"
+                        " 1024x768 screen, openbox window manager, a taskbar at"
+                        " the BOTTOM edge (open windows appear there — click one"
+                        " to focus it; the clock is bottom-right). Chromium is"
+                        " usually already open — to browse, click its window,"
+                        " press ctrl+l, type the URL, press Return. Other apps:"
+                        " xfce4-terminal and pcmanfm (files) — right-click the"
+                        " bare desktop for a launcher menu, or run them from the"
+                        " terminal. If the screen looks empty, a window may be"
+                        " minimized — check the taskbar first."),
     "desktop-real": ("the user's REAL desktop — their actual mouse, keyboard and"
                      " open applications. They are watching live and can hit STOP"
                      " at any moment. Be deliberate: verify every click target"
@@ -209,12 +232,14 @@ _MCP_CONFIG = {
 
 
 def _strip_agy_global_mcp(config_dir: str) -> None:
-    """Remove the playwright entry Operator wired into agy's GLOBAL mcp_config.json.
-    agy has no per-run --mcp-config flag, so a run must add the server to the fixed
-    ~/.gemini/config/mcp_config.json — but leaving it there means the user's NORMAL
-    gemma (Discord/terminal) inherits the browser tool. So we strip it back out when
-    the run ends (finally), restoring the prior state: preserve other servers; delete
-    the file if playwright was the only one. Best-effort; never raises."""
+    """Remove the entries Operator wired into agy's GLOBAL mcp_config.json
+    (playwright + operator-control). agy has no per-run --mcp-config flag, so a
+    run must add its servers to the fixed ~/.gemini/config/mcp_config.json — but
+    leaving them there means the user's NORMAL gemma (Discord/terminal) inherits
+    the browser/desktop tools. So we strip them back out when the run ends
+    (finally), restoring the prior state: preserve other servers; delete the
+    file if ours were the only ones. Best-effort; never raises."""
+    _OURS = ("playwright", "operator-control")
     try:
         mcp_path = os.path.join(config_dir, "config", "mcp_config.json")
         if not os.path.exists(mcp_path):
@@ -222,9 +247,10 @@ def _strip_agy_global_mcp(config_dir: str) -> None:
         with open(mcp_path) as f:
             d = json.load(f)
         servers = d.get("mcpServers")
-        if not isinstance(servers, dict) or "playwright" not in servers:
+        if not isinstance(servers, dict) or not any(k in servers for k in _OURS):
             return
-        del servers["playwright"]
+        for k in _OURS:
+            servers.pop(k, None)
         if servers:
             d["mcpServers"] = servers
             tmp = mcp_path + ".tmp"
@@ -232,14 +258,35 @@ def _strip_agy_global_mcp(config_dir: str) -> None:
                 json.dump(d, f, indent=2)
             os.replace(tmp, mcp_path)
         else:
-            # playwright was the only server -> remove the file so global gemma is clean
+            # ours were the only servers -> remove the file so global gemma is clean
             os.remove(mcp_path)
         # agy caches one tool-schema json per MCP tool under antigravity-cli/mcp/<server>;
-        # drop the playwright cache so a normal session doesn't see stale browser tools.
+        # drop our caches so a normal session doesn't see stale browser/desktop tools.
         import shutil
-        cache = os.path.join(config_dir, "antigravity-cli", "mcp", "playwright")
-        shutil.rmtree(cache, ignore_errors=True)
+        for k in _OURS:
+            cache = os.path.join(config_dir, "antigravity-cli", "mcp", k)
+            shutil.rmtree(cache, ignore_errors=True)
     except Exception:
+        pass
+
+
+def _ensure_codex_control_mcp(config_dir: str) -> None:
+    """Idempotently wire the operator-control MCP into codex's config.toml
+    (driver parity). A static entry is safe: the MCP reads OPERATOR_SURFACE /
+    OPERATOR_REAL_OK from the process env it inherits at spawn, so the same
+    entry serves every surface. Best-effort; never raises."""
+    try:
+        path = os.path.join(config_dir, "config.toml")
+        if not os.path.exists(path):
+            return
+        with open(path) as f:
+            txt = f.read()
+        if "[mcp_servers.operator-control]" in txt:
+            return
+        with open(path, "a") as f:
+            f.write('\n[mcp_servers.operator-control]\ncommand = "bash"\n'
+                    'args = ["' + os.path.join(_CONTROL, "operator-mcp.sh") + '"]\n')
+    except OSError:
         pass
 
 
@@ -267,6 +314,44 @@ _ACTION_LABELS = {
     "browser_console_messages": "Reading console", "browser_network_requests": "Inspecting network",
     "browser_pdf_save": "Saving PDF", "browser_go_back": "Going back", "browser_go_forward": "Going forward",
 }
+
+
+# the control MCP's `computer` tool multiplexes every desktop action behind one
+# name — label by its `action` arg so the trace reads "Clicking (420, 315)"
+# instead of a bare "Using computer" (which could mean anything).
+_COMPUTER_ACTION_LABELS = {
+    "screenshot": "Took screenshot", "left_click": "Clicking",
+    "right_click": "Right-clicking", "middle_click": "Middle-clicking",
+    "double_click": "Double-clicking", "triple_click": "Triple-clicking",
+    "mouse_move": "Moving cursor", "left_click_drag": "Dragging",
+    "left_mouse_down": "Pressing mouse", "left_mouse_up": "Releasing mouse",
+    "type": "Typing", "key": "Pressing", "hold_key": "Holding key",
+    "scroll": "Scrolling", "wait": "Waiting",
+}
+
+
+def _computer_label(args: dict) -> tuple[str, str]:
+    """computer{action,...} -> (label, detail) mirroring the browser_* trace style:
+    coords for pointer actions, the text/key for keyboard, direction for scroll."""
+    act = str(args.get("action") or "").lower()
+    label = _COMPUTER_ACTION_LABELS.get(act)
+    if not label:                        # unknown/new action — still name it
+        return ("Using computer", act.replace("_", " "))
+    def _xy(v):
+        return (f"({v[0]}, {v[1]})"
+                if isinstance(v, (list, tuple)) and len(v) >= 2 else "")
+    if act == "left_click_drag":
+        d = (_xy(args.get("start_coordinate")) + " → " + _xy(args.get("coordinate"))).strip(" →")
+    elif act in ("type", "key", "hold_key"):
+        d = str(args.get("text") or "")[:120]
+    elif act == "scroll":
+        d = (str(args.get("scroll_direction") or "") + " " + _xy(args.get("coordinate"))).strip()
+    elif act == "wait":
+        dur = args.get("duration")
+        d = f"{dur:g}s" if isinstance(dur, (int, float)) else ""
+    else:
+        d = _xy(args.get("coordinate"))
+    return label, _scrub_detail(d)
 
 
 # non-browser tools the agent might call (web search, fetch, etc.) — show these in
@@ -388,6 +473,22 @@ def _action_label(tool: str, args: dict) -> tuple[str, str]:
     if not bare.startswith("browser_"):
         if low in _SKIP_TOOLS:
             return "", ""
+        # desktop control MCP (computer / perceive / game_macro): action-aware
+        # labels so a desktop trace reads as cleanly as a browser one.
+        if low == "computer":
+            return _computer_label(args if isinstance(args, dict) else {})
+        if low == "perceive":
+            d = str(args.get("map") or "") if isinstance(args, dict) else ""
+            return "Reading the screen", _scrub_detail(d)
+        if low == "game_macro":
+            d = ""
+            if isinstance(args, dict):
+                ops = args.get("ops")
+                d = f"{len(ops)} steps" if isinstance(ops, list) and ops else ""
+                m = str(args.get("map") or "")
+                if m:
+                    d = (d + " · " + m).strip(" ·")
+            return "Running macro", d
         nb = _NONBROWSER_LABELS.get(low)
         if nb is None:
             # try to generalize to present-continuous ("fetch_messages" -> "Fetching
@@ -544,27 +645,39 @@ def _clean_gemma_text(text: str) -> str:
     t = _re.sub(r'(?m)^\s*\*?\*?(?:Thought for \d+s?:?|Thinking with \[[^\]]+\] effort\.{0,3})\*?\*?\s*\n?', '', t, count=1)
     # drop "🛑 Task started:" (and bare "Task started:") progress lines
     t = _re.sub(r'(?m)^\s*(?:🛑|🟢|▶️?)?\s*Task started:.*$', '', t)
-    # ![alt](file:///.../shot.png) -> rewrite to the cockpit's screenshot route so it
-    # renders INLINE (file:// can't load in a browser). Only screenshots that live in
-    # the computer-use output dir are servable; basename-match into that dir, else fall
-    # back to a plain "took a screenshot" note. The route does its own safety checks.
+    # screenshot references -> rewrite to the cockpit's /operator/shot route so
+    # they render INLINE (file:// and absolute paths can't load in a browser).
+    # Agents phrase these several ways — claude emits ![alt](file:///...), gpt
+    # emits a PLAIN [name.jpeg](/abs/path.jpeg) link into its session cwd — so
+    # match image-suffixed file://+absolute paths in BOTH image and plain link
+    # form. Servable dirs mirror the route's whitelist (output dir + per-bot
+    # session dirs); basename-match into them, else fall back to a text note.
     import os as _os_sc
-    _shot_dir = _os_sc.path.realpath(_os_sc.path.expanduser(
+    _shot_dirs = [_os_sc.path.realpath(_os_sc.path.expanduser(
         _os_sc.environ.get("COMPUTER_USE_OUTPUT_DIR")
         or _os_sc.environ.get("PLAYWRIGHT_OUTPUT_DIR")
-        or "~/.cache/computer-use"))
+        or "~/.cache/computer-use"))] + [
+        _os_sc.path.realpath(_os_sc.path.expanduser("~/.operator-sessions/" + _b))
+        for _b in ("claude-a", "claude-b", "gpt", "gemma")]
+
+    def _servable(base):
+        return (base and _os_sc.path.splitext(base)[1].lower()
+                in ('.png', '.jpg', '.jpeg', '.webp')
+                and any(_os_sc.path.isfile(_os_sc.path.join(d, base))
+                        for d in _shot_dirs))
 
     def _shot_sub(m):
         alt, path = m.group(1), m.group(2)
-        # file:///abs/path  ->  /abs/path
-        p = _re.sub(r'^file://', '', path)
-        base = _os_sc.path.basename(p)
-        if base and _os_sc.path.splitext(base)[1].lower() in ('.png', '.jpg', '.jpeg', '.webp') \
-                and _os_sc.path.isfile(_os_sc.path.join(_shot_dir, base)):
+        base = _os_sc.path.basename(_re.sub(r'^file://', '', path))
+        if _servable(base):
             return '![%s](operator/shot/%s)' % (alt or 'screenshot', base)
         return 'took a screenshot'
 
-    t = _re.sub(r'!\[([^\]]*)\]\((file://[^)]*)\)', _shot_sub, t)
+    # image form: ![alt](file:///... | /abs/...)
+    t = _re.sub(r'!\[([^\]]*)\]\((file://[^)]*|/[^)]*)\)', _shot_sub, t)
+    # plain-link form pointing at an image file -> promote to an inline image
+    t = _re.sub(r'(?<!!)\[([^\]]*)\]\(((?:file://)?/[^)]+\.(?:png|jpe?g|webp))\)',
+                _shot_sub, t, flags=_re.IGNORECASE)
     # any other ![](non-http, non-route) image -> drop it (keep nothing; non-renderable)
     t = _re.sub(r'!\[[^\]]*\]\((?!https?://|/?operator/shot/)[^)]*\)', '', t)
     # [label](file:///...) plain (non-image) link -> a browser can't load file:// either;
@@ -841,9 +954,10 @@ class AgentRunner:
             if surface == "desktop-real" and not real_ok:
                 return {"ok": False, "error":
                         "desktop-real needs explicit confirmation (real_ok)"}
-            if surface != "browser" and runtime != "claude":
-                return {"ok": False, "error":
-                        f"desktop surfaces need a claude driver (got {bot})"}
+            # driver parity (v1.2 roadmap, landed 2026-07-08): every runtime gets
+            # the operator-control MCP — codex via a static config.toml entry,
+            # agy via the per-run mcpServers write, claude per-run. The MCP reads
+            # OPERATOR_SURFACE/OPERATOR_REAL_OK from the inherited process env.
             self.surface = surface
             self._real_ok = bool(real_ok) and surface == "desktop-real"
             if runtime == "codex":
@@ -1106,6 +1220,7 @@ class AgentRunner:
                 env["CODEX_HOME"] = os.path.expanduser("~/operator-demo/codex")
             else:
                 env["CODEX_HOME"] = b["config_dir"]
+                _ensure_codex_control_mcp(b["config_dir"])   # driver parity
             # PARITY: on the first turn of a gpt thread (no resume yet), prepend the same
             # host boot context the Claude bots get from their SessionStart hook. On
             # resumes, codex already threaded it — don't re-send (avoids per-turn bloat).
@@ -1168,9 +1283,15 @@ class AgentRunner:
                 servers = existing.get("mcpServers")
                 if not isinstance(servers, dict):
                     servers = {}
-                # add/overwrite ONLY the playwright entry; leave everything else as-is.
+                # add/overwrite ONLY our entries; leave everything else as-is.
                 servers["playwright"] = {"command": "bash",
                     "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), self.bot or ""]}
+                # driver parity: gemma gets the control MCP too (computer/perceive/
+                # game_macro). Never in demo — it has local-perception file access
+                # the public sandbox must not inherit.
+                if not getattr(self, "demo", False):
+                    servers["operator-control"] = {"command": "bash",
+                        "args": [os.path.join(_CONTROL, "operator-mcp.sh")]}
                 existing["mcpServers"] = servers
                 tmp = mcp_path + ".tmp"
                 with open(tmp, "w") as f:

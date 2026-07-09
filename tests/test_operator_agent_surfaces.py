@@ -1,6 +1,6 @@
 """Track C tests — AgentRunner surface gating: validation is SERVER-side (the
-UI confirm is a courtesy), demo can never leave the browser, desktop surfaces
-are claude-runtime only, stop() arms the control-layer kill switch.
+UI confirm is a courtesy), demo can never leave the browser, every runtime may
+drive desktop surfaces (driver parity), stop() arms the control-layer kill switch.
 
 Run from the repo root:  PYTHONPATH=. pytest tests/test_operator_agent_surfaces.py -q
 """
@@ -37,9 +37,14 @@ def test_desktop_real_with_confirm_starts(runner):
     assert runner.surface == "desktop-real" and runner._real_ok is True
 
 
-def test_desktop_surface_needs_claude_runtime(runner):
+def test_desktop_surface_open_to_all_runtimes(runner):
+    # driver parity (2026-07-08): desktop dispatch is no longer claude-only —
+    # codex/agy get the operator-control MCP too. (Binary resolution is
+    # host-dependent, so assert the claude-gate is gone, not a clean start.)
     r = runner.start("gpt", "t", surface="desktop-sandbox")
-    assert not r["ok"] and "claude" in r["error"]
+    assert "claude" not in (r.get("error") or "")
+    if r["ok"]:
+        assert runner.surface == "desktop-sandbox"
 
 
 def test_demo_forces_browser(runner):
@@ -86,7 +91,7 @@ def test_desktop_launch_path_builds_without_raising(monkeypatch, tmp_path):
     assert r.state == "done", (r.state, r.messages[-3:])
     # the desktop persona actually swapped in (flavor text present in cmd)
     joined = " ".join(str(c) for c in launched["cmd"])
-    assert "ISOLATED sandbox" in joined
+    assert "ISOLATED Linux desktop" in joined
     assert "{surface_flavor}" not in joined
 
 
