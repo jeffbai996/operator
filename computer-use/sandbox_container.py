@@ -5,9 +5,17 @@ app it ran had the host user's filesystem, network, and credentials). This runs
 the desktop inside a Docker container instead — its own rootfs, network/PID
 namespace, and a non-root user. Nothing it does can reach the host.
 
-The host drives it exactly like the local Xvfb path, but through `docker exec`:
-  - capture: `docker exec <c> scrot <tmp>` → copy the PNG out → return its path
-  - input:   `docker exec <c> xdotool <...>` (same action dicts as actions.py)
+The host drives it exactly like the local Xvfb path, but through `docker exec` —
+with PERSISTENT pipes, because a fresh exec per frame/action costs ~100ms each
+on WSL and made the feed ~1fps and manual steer visibly laggy:
+  - live feed: ONE long-lived `docker exec ffmpeg -f x11grab … -f mjpeg -`
+    (open_stream) that the feed thread reads JPEG-by-JPEG. Falls back to
+    per-frame scrot if ffmpeg is missing (older images).
+  - input: ONE long-lived `docker exec sh` (started lazily); each action writes
+    an `xdotool …` line + an ack echo and waits for the ack — synchronous like
+    the old per-exec path, at pipe latency instead of exec latency.
+  - agent screenshots: still per-call scrot PNG (`screenshot()`) — the model
+    wants full-quality stills, and one exec per model turn is noise.
 
 Lifecycle (design rule): the container is PERSISTENT. It is created on first use
 and survives leaving Operator, restarts, and idle — `--restart unless-stopped`.
@@ -19,8 +27,10 @@ One job per file: container lifecycle + capture + input for the sandbox surface.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
+import threading
 import time
 
 CONTAINER = os.environ.get("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox")
@@ -38,7 +48,7 @@ _RUN_ARGS = [
     "--name", CONTAINER,
     "--detach",
     "--restart", "unless-stopped",     # survive host/docker restarts + idle
-    "--memory", "2g",
+    "--memory", "3g",              # XFCE session + chromium need headroom over 2g
     "--cpus", "2",
     "--shm-size", "512m",              # chromium needs shared memory
     "--security-opt", "no-new-privileges",
@@ -129,6 +139,40 @@ def delete() -> None:
     _run(["rm", "-f", CONTAINER], timeout=20, check=False)
 
 
+# ── live stream (the feed's frame source) ────────────────────────────────────
+def open_stream(fps: int = 8, quality: int = 6) -> subprocess.Popen:
+    """One long-lived MJPEG pipe out of the container: ffmpeg grabs :1 (pointer
+    drawn) and writes concatenated JPEGs to stdout. The caller owns the process
+    (read .stdout, kill() when done). Raises SandboxError if it dies at once —
+    e.g. an old image without ffmpeg — so the caller can fall back to scrot."""
+    ensure()
+    p = subprocess.Popen(
+        [_docker(), "exec", "-u", "opuser", "-e", f"DISPLAY={DISPLAY}", CONTAINER,
+         "ffmpeg", "-loglevel", "quiet", "-f", "x11grab", "-draw_mouse", "1",
+         "-video_size", f"{SCREEN_W}x{SCREEN_H}", "-framerate", str(fps),
+         "-i", DISPLAY, "-f", "mjpeg", "-q:v", str(quality), "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    time.sleep(0.3)
+    if p.poll() is not None:
+        raise SandboxError("ffmpeg stream did not start (image missing ffmpeg?)")
+    return p
+
+
+def split_jpegs(buf: bytes) -> tuple[list[bytes], bytes]:
+    """Split an MJPEG byte buffer into complete JPEG frames + the unfinished
+    tail. Pure function (unit-tested); frames are SOI(FFD8)…EOI(FFD9) spans."""
+    frames = []
+    while True:
+        soi = buf.find(b"\xff\xd8")
+        if soi < 0:
+            return frames, b""            # no frame start — drop garbage
+        eoi = buf.find(b"\xff\xd9", soi + 2)
+        if eoi < 0:
+            return frames, buf[soi:]      # incomplete frame — keep as tail
+        frames.append(buf[soi:eoi + 2])
+        buf = buf[eoi + 2:]
+
+
 # ── capture ──────────────────────────────────────────────────────────────────
 def screenshot(out_dir: str) -> str:
     """Capture the sandbox desktop → a PNG on the HOST, returning its path.
@@ -159,8 +203,50 @@ def _norm_key(combo: str) -> str:
     return "+".join(parts)
 
 
+# One long-lived `docker exec sh` per process: xdotool lines go down its stdin,
+# an echoed ack token comes back — synchronous (the caller's next screenshot
+# can't race the click) at ~5ms instead of ~100ms of exec setup per action.
+_pipe: subprocess.Popen | None = None
+_pipe_lock = threading.Lock()
+_ACK = "__op_ack__"
+
+
+def _input_pipe() -> subprocess.Popen:
+    global _pipe
+    if _pipe is None or _pipe.poll() is not None:
+        _pipe = subprocess.Popen(
+            [_docker(), "exec", "-i", "-u", "opuser", "-e", f"DISPLAY={DISPLAY}",
+             CONTAINER, "sh"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)
+    return _pipe
+
+
 def _xdotool(args: list[str]) -> None:
-    _exec(["xdotool", *args], timeout=10)
+    global _pipe
+    line = ("xdotool " + " ".join(shlex.quote(a) for a in args)
+            + f" 2>/dev/null; echo {_ACK}\n").encode()
+    with _pipe_lock:
+        for attempt in (1, 2):     # one retry — the pipe dies with the container
+            p = _input_pipe()
+            try:
+                p.stdin.write(line)
+                p.stdin.flush()
+                while True:        # drain until our ack (xdotool itself is silent)
+                    out = p.stdout.readline()
+                    if not out:
+                        raise OSError("input pipe closed")
+                    if out.strip() == _ACK.encode():
+                        return
+            except OSError:
+                try:
+                    p.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+                _pipe = None
+                if attempt == 2:
+                    raise SandboxError("sandbox input pipe died") from None
+                ensure()           # container may have restarted underneath us
 
 
 def execute(action: dict) -> None:
@@ -219,7 +305,7 @@ def execute(action: dict) -> None:
 
 def launch(app: str) -> None:
     """Launch a GUI app inside the sandbox (detached). e.g. 'chromium', 'xfce4-terminal'."""
-    extra = ["--no-sandbox", "--no-first-run"] if app == "chromium" else []
+    extra = ["--no-sandbox", "--test-type", "--no-first-run"] if app == "chromium" else []
     _run(["exec", "-d", "-u", "opuser", "-e", f"DISPLAY={DISPLAY}", CONTAINER,
           app, *extra], check=False)
 

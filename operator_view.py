@@ -959,14 +959,22 @@ def _surface_available(key: str) -> bool:
     return False
 
 
+_CU_CACHE: dict = {}
+
+
 def _load_cu(fname: str):
-    """Import a computer-use module by path (dir name has a dash)."""
-    import importlib.util
-    p = _os_cfg.path.join(_CU_DIR, fname)
-    spec = importlib.util.spec_from_file_location("cu_feed_" + fname[:-3], p)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Import a computer-use module by path (dir name has a dash). CACHED —
+    sandbox_container holds live pipe state (the persistent xdotool shell), and
+    a fresh exec_module per steer action re-created its docker exec every time:
+    ~130ms/action instead of ~10ms through the warm pipe."""
+    if fname not in _CU_CACHE:
+        import importlib.util
+        p = _os_cfg.path.join(_CU_DIR, fname)
+        spec = importlib.util.spec_from_file_location("cu_feed_" + fname[:-3], p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CU_CACHE[fname] = mod
+    return _CU_CACHE[fname]
 
 
 class _DesktopFeed:
@@ -987,6 +995,7 @@ class _DesktopFeed:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._mods: dict = {}
+        self._stream_dead_until = 0.0   # cooldown after an ffmpeg-stream failure
 
     def ensure_running(self, surface: str) -> None:
         with self._lock:
@@ -1004,6 +1013,12 @@ class _DesktopFeed:
         while self._running:
             if time.monotonic() - self.last_view > IDLE_STOP_AFTER:
                 break
+            # sandbox: prefer the persistent MJPEG stream (~8fps, one exec for
+            # its whole life) over per-frame scrot execs (~1fps, laggy)
+            if (self.surface == "desktop-sandbox"
+                    and time.monotonic() >= self._stream_dead_until
+                    and self._stream()):
+                continue      # stream ended (switch/pipe death) — re-decide
             try:
                 path = self._capture()
                 if path:
@@ -1020,6 +1035,40 @@ class _DesktopFeed:
             time.sleep(1.2 if self.surface == "desktop-real" else 0.6)
         self.frame = None
         self._running = False
+
+    def _stream(self) -> bool:
+        """Read the sandbox's long-lived ffmpeg MJPEG pipe until the surface
+        changes, the viewer idles out, or the pipe dies. Returns True if the
+        stream ran; False → fall back to scrot polling (with a cooldown, so an
+        image without ffmpeg doesn't pay the spawn cost on every frame)."""
+        if "sandbox" not in self._mods:
+            self._mods["sandbox"] = _load_cu("sandbox_container.py")
+        sb = self._mods["sandbox"]
+        try:
+            proc = sb.open_stream()
+        except Exception as e:  # noqa: BLE001 — ffmpeg missing / container down
+            self.detail = f"starting sandbox desktop… ({e})"
+            self._stream_dead_until = time.monotonic() + 45
+            return False
+        tail = b""
+        try:
+            while (self._running and self.surface == "desktop-sandbox"
+                   and time.monotonic() - self.last_view <= IDLE_STOP_AFTER):
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break                    # container gone — outer loop re-decides
+                frames, tail = sb.split_jpegs(tail + chunk)
+                if frames:
+                    self.mime = "image/jpeg"
+                    self.frame = frames[-1]
+                    self.frame_ts = time.monotonic()
+                    self.detail = ""
+        finally:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        return True
 
     def _capture(self) -> str | None:
         if self.surface == "desktop-real":
@@ -1300,7 +1349,9 @@ def _desktop_steer(action: dict) -> dict:
 
     def _run(a: dict) -> None:
         if surface == "desktop-sandbox":
-            mod.ensure()
+            # no ensure() here — that's a docker-inspect subprocess (~80ms) per
+            # action; the input pipe already self-heals (its retry calls ensure
+            # when the pipe is dead), so a live pipe means a live container.
             mod.execute(a)
         else:
             mod.execute(a, "windows-primary")
@@ -1511,7 +1562,7 @@ def operator_maps():
 # apps the taskbar can launch inside the sandbox (whitelist — the route never
 # execs a client-supplied binary name).
 _SANDBOX_APPS = {"chromium": "Chromium", "xfce4-terminal": "Terminal",
-                 "pcmanfm": "Files"}
+                 "thunar": "Files", "mousepad": "Editor"}
 
 
 @bp.route("/operator/sandbox/ctl", methods=["POST"])

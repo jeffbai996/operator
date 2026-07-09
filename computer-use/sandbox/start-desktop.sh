@@ -1,24 +1,49 @@
 #!/bin/bash
-# Boot the isolated desktop: Xvfb :1 → openbox → tint2 panel → chromium.
+# Boot the isolated desktop: Xvfb :1 → dbus → a full XFCE4 session → chromium.
 set -e
 # XGA on purpose — the model's click grounding is calibrated around 1024x768;
 # keep in sync with sandbox_container.GEOMETRY
 Xvfb :1 -screen 0 1024x768x24 -nolisten tcp &
-# clients (openbox/tint2/chromium/scrot/xdotool) all read DISPLAY from env —
-# openbox 3.6 has NO --display flag (it exits on one, leaving a WM-less black
-# screen; that exact bug shipped once).
+# clients all read DISPLAY from env — never pass a --display flag (openbox 3.6
+# had none and died on one; that exact bug shipped once)
 export DISPLAY=:1
 for i in $(seq 1 40); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.25; done
-xsetroot -solid "#1c2230" || true
-openbox &
-sleep 0.5
-# one virtual desktop only — openbox defaults to 4 and a wheel-scroll on the
-# root window silently switches, making every open app "vanish" mid-run
+
+# XFCE preferences BEFORE the session starts (first boot only — xfconf files
+# persist in the container layer afterwards and the user may change them):
+# Greybird + elementary icons (the xubuntu look), ONE workspace (stock is 4 and
+# a wheel-scroll on the desktop silently switched — every open app "vanished"
+# mid-run), and no session-save prompts on logout.
+CFG="$HOME/.config/xfce4/xfconf/xfce-perchannel-xml"
+if [ ! -f "$CFG/xsettings.xml" ]; then
+  mkdir -p "$CFG"
+  cat > "$CFG/xsettings.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="Greybird"/>
+    <property name="IconThemeName" type="string" value="elementary-xfce-dark"/>
+  </property>
+</channel>
+EOF
+  cat > "$CFG/xfwm4.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="Greybird"/>
+    <property name="workspace_count" type="int" value="1"/>
+  </property>
+</channel>
+EOF
+fi
+
+# the full desktop session: xfwm4 + panel + xfdesktop (wallpaper, icons)
+dbus-launch --exit-with-session startxfce4 &
+# wait for the window manager before launching apps
+for i in $(seq 1 40); do xdotool search --class xfdesktop >/dev/null 2>&1 && break; sleep 0.25; done
+# belt-and-braces: pin to one workspace even if an old xfconf survives
 xdotool set_num_desktops 1 || true
-# no -c flag: tint2 generates its default taskbar config (a /dev/null config
-# renders nothing at all)
-tint2 >/dev/null 2>&1 &
 # boot with a visible app so a fresh sandbox never reads as a dead feed
-chromium --no-sandbox --no-first-run --start-maximized https://www.google.com >/dev/null 2>&1 &
+chromium --no-sandbox --test-type --no-first-run --start-maximized https://www.google.com >/dev/null 2>&1 &
 # keep the container alive
 sleep infinity
