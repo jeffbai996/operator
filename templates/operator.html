@@ -13,7 +13,7 @@
       <span class="op-titlewrap" id="op-brand" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="switch surface">
         <span class="op-brand-text">
           <span class="op-title">Operator</span>
-          <span class="op-verline"><span class="op-ver">v1.0.2</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+          <span class="op-verline"><span class="op-ver">v1.0.3</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
         </span>
         <svg class="op-brand-caret" viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1.5l4 3.5 4-3.5"></path></svg>
       </span>
@@ -164,6 +164,11 @@
         <button type="button" class="op-tb-btn" data-app="xfce4-terminal" title="open a terminal"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="13" rx="2"></rect><path d="M6 8l2.6 2L6 12M10.5 12.5h3.5"></path></svg>Terminal</button>
         <button type="button" class="op-tb-btn" data-app="thunar" title="open the file manager"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5a2 2 0 0 1 2-2h3.2l2 2.2h5.8a2 2 0 0 1 2 2v6.8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2V5.5z"></path></svg>Files</button>
         <button type="button" class="op-tb-btn" data-app="mousepad" title="open a text editor"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3.5h12v13H4z"></path><path d="M7 7h6M7 10h6M7 13h3.5"></path></svg>Editor</button>
+        <div class="op-tb-xfer" id="op-tb-xfer">
+          <button type="button" class="op-tb-btn" id="op-tb-xfer-btn" title="move files in / out of the sandbox"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8.5V3M6 3L3.8 5.2M6 3l2.2 2.2"></path><path d="M14 11.5V17m0 0l2.2-2.2M14 17l-2.2-2.2"></path></svg>Transfer</button>
+          <div class="op-tb-menu op-xfer-menu" id="op-tb-xfer-menu" hidden></div>
+          <input type="file" id="op-xfer-input" hidden>
+        </div>
       </div>
       <div class="op-tb-game" id="op-tb-game" hidden>
         <button type="button" class="op-tb-btn" id="op-tb-game-btn" aria-haspopup="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9h12a4 4 0 0 1 4 4v2.5a2.5 2.5 0 0 1-4.6 1.4L16 15H8l-1.4 1.9A2.5 2.5 0 0 1 2 15.5V13a4 4 0 0 1 4-4z"></path><path d="M7.5 12h3M9 10.5v3M15.2 11.4h.01M17.4 13h.01"></path></svg><span id="op-tb-game-lbl">Game</span><svg viewBox="0 0 10 6" width="8" height="5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l4 4 4-4"></path></svg></button>
@@ -1571,6 +1576,68 @@
     tbDelete.classList.remove('confirm'); tbDelLbl.textContent = 'Delete';
     tbDelete.disabled = false;
   });
+
+  // ── Transfer: files in / out of the sandbox home ──────────────────────────
+  const XFER_FILES_URL = "{{ url_for('operator.operator_sandbox_files') }}";
+  const XFER_UP_URL = "{{ url_for('operator.operator_sandbox_upload') }}";
+  const XFER_FILE_BASE = "{{ url_for('operator.operator_sandbox_file', rel='_R_') }}".replace('_R_', '');
+  const xfer = document.getElementById('op-tb-xfer');
+  const xferBtn = document.getElementById('op-tb-xfer-btn');
+  const xferMenu = document.getElementById('op-tb-xfer-menu');
+  const xferInput = document.getElementById('op-xfer-input');
+  const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB'
+                       : n > 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+  async function renderXfer(){
+    xferMenu.textContent = '';
+    const up = document.createElement('button'); up.type = 'button';
+    up.className = 'op-tb-mi op-xfer-up';
+    up.textContent = '⇧ Send a file to the sandbox…';
+    up.addEventListener('click', (e) => { e.stopPropagation(); xferInput.click(); });
+    xferMenu.appendChild(up);
+    let d = null;
+    try { d = await (await fetch(XFER_FILES_URL)).json(); } catch(_){}
+    let any = false;
+    Object.entries((d && d.dirs) || {}).forEach(([dir, files]) => {
+      if (!files.length) return;
+      const h = document.createElement('div'); h.className = 'op-xfer-dir';
+      h.textContent = dir; xferMenu.appendChild(h);
+      files.sort((a, b) => b.mtime - a.mtime).forEach(f => {
+        const a = document.createElement('a');
+        a.className = 'op-tb-mi op-xfer-file';
+        a.href = XFER_FILE_BASE + dir + '/' + encodeURIComponent(f.name);
+        a.setAttribute('download', f.name);
+        const nm = document.createElement('span'); nm.className = 'op-xfer-name'; nm.textContent = f.name;
+        const sz = document.createElement('span'); sz.className = 'op-xfer-size'; sz.textContent = fmtSize(f.size);
+        a.appendChild(nm); a.appendChild(sz);
+        xferMenu.appendChild(a); any = true;
+      });
+    });
+    if (!any) {
+      const e = document.createElement('div'); e.className = 'op-xfer-empty';
+      e.textContent = d && d.ok === false ? (d.error || 'unavailable')
+        : 'Nothing yet — Downloads, Desktop and Documents show up here.';
+      xferMenu.appendChild(e);
+    }
+  }
+  if (xferBtn) {
+    xferBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      xferMenu.hidden = !xferMenu.hidden;
+      if (!xferMenu.hidden) renderXfer();
+    });
+    document.addEventListener('click', (e) => {
+      if (!xferMenu.hidden && !xfer.contains(e.target)) xferMenu.hidden = true;
+    });
+    xferInput.addEventListener('change', async () => {
+      const f = xferInput.files && xferInput.files[0];
+      if (!f) return;
+      const fd = new FormData(); fd.append('file', f);
+      xferBtn.disabled = true;
+      try { await fetch(XFER_UP_URL, { method: 'POST', body: fd }); } catch(_){}
+      xferBtn.disabled = false; xferInput.value = '';
+      if (!xferMenu.hidden) renderXfer();
+    });
+  }
 
   // Code-block scroll trap fix (the owner): a horizontally-scrollable <pre> in a chat
   // bubble swallows vertical wheel events, so scrolling with the cursor over code

@@ -37,6 +37,10 @@ EOF
 EOF
 fi
 
+# the standard user dirs — xfdesktop shows ~/Desktop; Transfer (the cockpit's
+# file exchange) reads/writes Downloads/Desktop/Documents
+mkdir -p "$HOME/Desktop" "$HOME/Downloads" "$HOME/Documents"
+
 # the full desktop session: xfwm4 + panel + xfdesktop (wallpaper, icons)
 dbus-launch --exit-with-session startxfce4 &
 # wait for the window manager before launching apps

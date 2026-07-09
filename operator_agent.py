@@ -95,7 +95,10 @@ _DESKTOP_FLAVORS = {
                         " xfce4-terminal, thunar (files), mousepad (editor) —"
                         " launch from the Applications menu, the bottom dock, or"
                         " the terminal. If the screen looks empty, a window may"
-                        " be minimized — check the top panel's window list."),
+                        " be minimized — check the top panel's window list."
+                        " FILES: anything the user sent you is in ~/Downloads;"
+                        " save results to ~/Downloads, ~/Desktop or ~/Documents"
+                        " — the user can download from those three."),
     "desktop-real": ("the user's REAL desktop — their actual mouse, keyboard and"
                      " open applications. They are watching live and can hit STOP"
                      " at any moment. Be deliberate: verify every click target"

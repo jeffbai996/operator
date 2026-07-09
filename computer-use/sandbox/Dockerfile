@@ -11,9 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb x11-xserver-utils x11-utils xdotool scrot ffmpeg \
       dbus-x11 \
       xfce4 xfce4-terminal thunar mousepad ristretto galculator \
+      atril xarchiver \
+      libreoffice-writer libreoffice-calc libreoffice-gtk3 \
       greybird-gtk-theme elementary-xfce-icon-theme \
       desktop-base \
       chromium \
+      curl wget git unzip ca-certificates python3 nano \
       fonts-dejavu fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 

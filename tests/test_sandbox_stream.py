@@ -55,3 +55,22 @@ def test_garbage_before_soi_dropped():
 def test_no_frame_at_all_drops_garbage():
     frames, tail = sb.split_jpegs(b"no jpeg markers here")
     assert frames == [] and tail == b""
+
+
+# ── safe_rel: the Transfer path gate ─────────────────────────────────────────
+import pytest
+
+
+def test_safe_rel_accepts_exchange_dirs():
+    assert sb.safe_rel("Downloads/report.csv") == "Downloads/report.csv"
+    assert sb.safe_rel("Desktop/a b.png") == "Desktop/a b.png"
+
+
+@pytest.mark.parametrize("bad", [
+    "Downloads/../../../etc/passwd", "/etc/passwd", "Downloads",
+    "secrets/x", "Downloads/.hidden", "Downloads/..", "Downloads/a/b",
+    "Downloads\\..\\x",
+])
+def test_safe_rel_rejects_escapes(bad):
+    with pytest.raises(sb.SandboxError):
+        sb.safe_rel(bad)

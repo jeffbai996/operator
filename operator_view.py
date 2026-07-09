@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request, send_file
 import operator_agent  # the headless-claude agent runner (option 1)
 import operator_tasks as operator_tasks_store  # saved-task store (#30)
 
@@ -1594,6 +1594,68 @@ def operator_sandbox_ctl():
     except Exception as e:  # noqa: BLE001 — surface the reason to the taskbar
         return jsonify(ok=False, error=str(e)), 500
     return jsonify(ok=True)
+
+
+# ── sandbox file exchange (Transfer) ─────────────────────────────────────────
+# In and out of the container's Downloads/Desktop/Documents only; path shape is
+# validated by sandbox_container.safe_rel. NEVER in the demo — the demo box is
+# shared between strangers, and one visitor must not see another's files.
+def _sandbox_files_guard():
+    if DEMO:
+        return jsonify(ok=False, error="file transfer is live-cockpit only"), 403
+    if not _surface_available("desktop-sandbox"):
+        return jsonify(ok=False, error="sandbox not available on this host"), 409
+    return None
+
+
+@bp.route("/operator/sandbox/files")
+def operator_sandbox_files():
+    guard = _sandbox_files_guard()
+    if guard:
+        return guard
+    sb = _load_cu("sandbox_container.py")
+    try:
+        return jsonify(ok=True, dirs=sb.list_files())
+    except Exception as e:  # noqa: BLE001
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@bp.route("/operator/sandbox/upload", methods=["POST"])
+def operator_sandbox_upload():
+    guard = _sandbox_files_guard()
+    if guard:
+        return guard
+    sb = _load_cu("sandbox_container.py")
+    if (request.content_length or 0) > sb.MAX_FILE_BYTES:
+        return jsonify(ok=False, error="file too large"), 413
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(ok=False, error="no file"), 400
+    import tempfile
+    import werkzeug.utils as _wu
+    name = _wu.secure_filename(f.filename) or "upload"
+    try:
+        with tempfile.TemporaryDirectory(dir=_SHOT_DIR) as td:
+            tmp = _os.path.join(td, name)
+            f.save(tmp)
+            rel = sb.put_file(tmp, name)
+        return jsonify(ok=True, path=rel)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@bp.route("/operator/sandbox/file/<path:rel>")
+def operator_sandbox_file(rel: str):
+    guard = _sandbox_files_guard()
+    if guard:
+        return guard
+    sb = _load_cu("sandbox_container.py")
+    try:
+        out = sb.get_file(rel, _os.path.join(_SHOT_DIR, "sandbox-out"))
+    except Exception as e:  # noqa: BLE001
+        return jsonify(ok=False, error=str(e)), 400
+    return send_file(out, as_attachment=True,
+                     download_name=_os.path.basename(out))
 
 
 @bp.route("/operator/dispatch", methods=["POST"])

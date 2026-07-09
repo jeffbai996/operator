@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.2-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-1.0.3-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -70,7 +70,7 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.2** — the sandbox desktop is a real Docker container you can
+> **Status:** **v1.0.3** — the sandbox desktop is a real Docker container you can
 > watch, steer by hand, and hand to **any** runtime (Claude, GPT, Gemini — driver
 > parity shipped early); plus one-command onboarding via `./start.sh`.
 
@@ -131,6 +131,8 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.3** — **the sandbox becomes a usable computer**. **File transfer**: a Transfer control on the desktop taskbar sends files into the container's `~/Downloads` and downloads anything the agent saves to `Downloads` / `Desktop` / `Documents` (whitelisted dirs only, traversal-proof path gate, 200MB cap, disabled on shared demo instances). **Persistent home**: `/home/opuser` now lives on a named Docker volume, so an image upgrade keeps your files — only the two-tap Delete factory-resets (it removes the volume too). **A real app set**: LibreOffice Writer/Calc, PDF viewer (Atril), archive manager, image viewer, calculator, nano, plus `curl`/`wget`/`git`/`unzip`/`python3` in the terminal. The agent is told where the exchange dirs are, so "save the report where I can grab it" just works.
 
 **v1.0.2** — **the sandbox looks and feels like a computer**. The container desktop is now a **full XFCE4 session** (Greybird theme, app menu, window-list panel, wallpaper, Thunar/Mousepad/Ristretto/galculator) instead of a bare openbox + tint2 shell. And the feed/input latency got attacked at the root: the live feed is now **one long-lived ffmpeg MJPEG pipe** out of the container (~7–8 fps JPEG) instead of a scrot + two `docker exec`s per frame (~1 fps of heavy PNGs), and manual-steer input goes down **one persistent shell pipe** with an ack handshake instead of a fresh `docker exec` per action — warm steer round-trips dropped from ~130–210ms to **~5ms**. (Older images without ffmpeg fall back to the scrot path automatically.)
 
