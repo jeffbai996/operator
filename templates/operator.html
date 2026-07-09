@@ -195,6 +195,9 @@
       <div class="op-agent-cursor" id="op-agent-cursor" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="18" height="18" style="margin:-2px 0 0 -3px"><path d="M5 3l14 7-6 1.6L9.7 18 5 3z" fill="#fff" stroke="#0a0c14" stroke-width="1.3" stroke-linejoin="round"/></svg>
       </div>
+      <div class="op-steer-cursor" id="op-steer-cursor" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" style="margin:-2px 0 0 -3px"><path d="M5 3l14 7-6 1.6L9.7 18 5 3z" fill="#fff" stroke="#0a0c14" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      </div>
       <div class="op-overlay" id="op-overlay">
         <div class="op-spinner"></div>
         <div id="op-overlay-text">connecting to Chrome…</div>
@@ -2896,6 +2899,26 @@
     clearTimeout(_agentCursor._fade);
     _agentCursor._fade = setTimeout(()=>_agentCursor.classList.remove('show'), 5000);
   }
+  // MANUAL-steer local cursor: snap a client-drawn pointer to normalized coords
+  // the INSTANT you act, so input feels immediate even while the video feed (the
+  // ground-truth ffmpeg-drawn pointer) is still catching up over the wire. Only
+  // meaningful on a desktop surface in MAN mode; CSS hides it otherwise.
+  const _steerCursor = document.getElementById('op-steer-cursor');
+  function steerCursorAt(nx, ny){
+    if (!_steerCursor || _surfaceActive === 'browser' || MODE !== 'man') return;
+    if (typeof nx !== 'number' || typeof ny !== 'number') return;
+    const r = stage.getBoundingClientRect();
+    const nW = view.naturalWidth, nH = view.naturalHeight;
+    if (!nW || !nH) return;
+    const sc = Math.min(r.width / nW, r.height / nH);
+    const dW = nW * sc, dH = nH * sc;
+    const ox = (r.width - dW) / 2, oy = (r.height - dH) / 2;
+    _steerCursor.style.left = (ox + nx * dW) + 'px';
+    _steerCursor.style.top  = (oy + ny * dH) + 'px';
+    _steerCursor.classList.add('show');
+    clearTimeout(_steerCursor._fade);
+    _steerCursor._fade = setTimeout(() => _steerCursor.classList.remove('show'), 2500);
+  }
   let _coldSince = 0;
   async function poll() {
     try { const d = await (await fetch(STATUS)).json();
@@ -2968,6 +2991,15 @@
   async function act(action, userLabel, silent) {
     if (userLabel) logUser(userLabel);
     if (!silent) setAction(action.kind, action.value || '', true);
+    // draw the local steer cursor at this action's target the moment it fires —
+    // instant feedback that doesn't wait on the video feed's round-trip.
+    if (action && (action.kind === 'click_at' || action.kind === 'rclick_at'
+        || action.kind === 'dblclick_at' || action.kind === 'move'
+        || action.kind === 'mousedown_at' || action.kind === 'mouseup_at'
+        || action.kind === 'drag')) {
+      if (action.kind === 'drag') steerCursorAt(action.x1, action.y1);
+      else steerCursorAt(action.x, action.y);
+    }
     const _rl = document.getElementById('op-reload');
     const _dot = document.getElementById('op-dotstat');
     const _hl = document.getElementById('op-nav-hairline');
