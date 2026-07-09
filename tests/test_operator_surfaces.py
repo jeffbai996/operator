@@ -194,6 +194,21 @@ class _SbRec:
     def launch(self, app):
         self.calls.append(("launch", app))
 
+    MAX_FILE_BYTES = 200 * 1024 * 1024
+
+    def list_files(self):
+        self.calls.append("list_files")
+        return {"Downloads": [{"name": "r.csv", "size": 12, "mtime": 1}],
+                "Desktop": [], "Documents": []}
+
+    def put_file(self, host_path, dest_name):
+        self.calls.append(("put_file", dest_name))
+        return f"Downloads/{dest_name}"
+
+    def get_file(self, rel, out_dir):
+        self.calls.append(("get_file", rel))
+        raise RuntimeError("nope")   # route must map errors to a 400
+
 
 def _wire_sb(mod):
     rec = _SbRec()
@@ -271,3 +286,32 @@ def test_status_reports_surface(live):
     c, mod, _ = live
     d = c.get("/operator/status").get_json()
     assert d["surface"] == "browser"
+
+
+# ── /operator/sandbox file exchange (Transfer) ───────────────────────────────
+def test_xfer_list_and_upload(live):
+    c, mod, _ = live
+    rec = _wire_sb(mod)
+    r = c.get("/operator/sandbox/files")
+    assert r.status_code == 200 and r.get_json()["dirs"]["Downloads"][0]["name"] == "r.csv"
+    import io
+    r2 = c.post("/operator/sandbox/upload",
+                data={"file": (io.BytesIO(b"hello"), "notes.txt")},
+                content_type="multipart/form-data")
+    assert r2.status_code == 200 and r2.get_json()["path"] == "Downloads/notes.txt"
+    assert ("put_file", "notes.txt") in rec.calls
+
+
+def test_xfer_download_error_maps_to_400(live):
+    c, mod, _ = live
+    _wire_sb(mod)
+    r = c.get("/operator/sandbox/file/Downloads/r.csv")
+    assert r.status_code == 400
+
+
+def test_xfer_blocked_in_demo(demo):
+    c, mod, _ = demo
+    _wire_sb(mod)
+    assert c.get("/operator/sandbox/files").status_code == 403
+    assert c.post("/operator/sandbox/upload").status_code == 403
+    assert c.get("/operator/sandbox/file/Downloads/x").status_code == 403

@@ -43,7 +43,10 @@ GEOMETRY = "1024x768x24"
 SCREEN_W, SCREEN_H = 1024, 768
 
 # Resource + safety caps for the container. No host bind-mounts (that would
-# breach isolation); non-root user is baked into the image.
+# breach isolation) — the home dir persists in a NAMED VOLUME instead, so an
+# image upgrade (rm container + recreate) keeps the user's files. The two-tap
+# Delete stays a true factory reset: delete() removes the volume too.
+HOME_VOLUME = f"{CONTAINER}-home"
 _RUN_ARGS = [
     "--name", CONTAINER,
     "--detach",
@@ -52,6 +55,7 @@ _RUN_ARGS = [
     "--cpus", "2",
     "--shm-size", "512m",              # chromium needs shared memory
     "--security-opt", "no-new-privileges",
+    "-v", f"{HOME_VOLUME}:/home/opuser",
 ]
 
 
@@ -135,8 +139,10 @@ def stop() -> None:
 
 def delete() -> None:
     """EXPLICIT teardown — the only thing that destroys the sandbox. Removes the
-    container and its writable layer. A fresh `ensure()` starts a clean desktop."""
+    container, its writable layer AND the home volume (a factory reset means the
+    files go too). A fresh `ensure()` starts a clean desktop."""
     _run(["rm", "-f", CONTAINER], timeout=20, check=False)
+    _run(["volume", "rm", HOME_VOLUME], timeout=20, check=False)
 
 
 # ── live stream (the feed's frame source) ────────────────────────────────────
@@ -301,6 +307,73 @@ def execute(action: dict) -> None:
     if kind == "wait":
         return
     raise SandboxError(f"unknown action {kind!r}")
+
+
+# ── file exchange (the cockpit's Transfer control) ───────────────────────────
+# Only these home subdirs are reachable from the cockpit — the rest of the
+# container filesystem stays the agent's own business.
+FILE_DIRS = ("Downloads", "Desktop", "Documents")
+MAX_FILE_BYTES = 200 * 1024 * 1024
+
+
+def safe_rel(rel: str) -> str:
+    """Validate a cockpit-supplied path as '<FILE_DIR>/<name>' — no traversal,
+    no absolute paths, no nested dirs, no hidden files. Pure function (tested).
+    Returns the normalized relative path or raises SandboxError."""
+    parts = [p for p in str(rel).replace("\\", "/").split("/") if p]
+    if len(parts) != 2 or parts[0] not in FILE_DIRS:
+        raise SandboxError(f"path must be one of {FILE_DIRS}/<file>")
+    name = parts[1]
+    if name in (".", "..") or name.startswith(".") or "\x00" in name:
+        raise SandboxError("bad filename")
+    return f"{parts[0]}/{name}"
+
+
+def put_file(host_path: str, dest_name: str) -> str:
+    """Copy a host file into the sandbox user's Downloads. Returns the
+    container-relative path. docker cp writes root-owned; chown after."""
+    name = safe_rel(f"Downloads/{dest_name}").split("/", 1)[1]
+    ensure()
+    _exec(["mkdir", "-p", "/home/opuser/Downloads"], check=False)
+    _run(["cp", host_path, f"{CONTAINER}:/home/opuser/Downloads/{name}"], timeout=60)
+    _run(["exec", "-u", "root", CONTAINER, "chown", "opuser:opuser",
+          f"/home/opuser/Downloads/{name}"], check=False)
+    return f"Downloads/{name}"
+
+
+def list_files() -> dict:
+    """Files in the exchange dirs → {dir: [{name, size, mtime}]}. One exec."""
+    ensure()
+    script = (
+        "for d in " + " ".join(FILE_DIRS) + "; do "
+        "  [ -d \"$HOME/$d\" ] || continue; "
+        "  for f in \"$HOME/$d\"/*; do "
+        "    [ -f \"$f\" ] && stat -c \"$d|%n|%s|%Y\" \"$f\"; "
+        "  done; "
+        "done")
+    r = _exec(["sh", "-c", script], timeout=15, check=False)
+    out: dict = {d: [] for d in FILE_DIRS}
+    for line in r.stdout.decode(errors="replace").splitlines():
+        try:
+            d, path, size, mtime = line.split("|")
+            out[d].append({"name": os.path.basename(path),
+                           "size": int(size), "mtime": int(mtime)})
+        except ValueError:
+            continue
+    return out
+
+
+def get_file(rel: str, out_dir: str) -> str:
+    """Copy '<dir>/<name>' out of the sandbox → a host path (size-capped)."""
+    rel = safe_rel(rel)
+    ensure()
+    r = _exec(["stat", "-c", "%s", f"/home/opuser/{rel}"], timeout=10)
+    if int(r.stdout.decode().strip() or 0) > MAX_FILE_BYTES:
+        raise SandboxError("file too large to download")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, os.path.basename(rel))
+    _run(["cp", f"{CONTAINER}:/home/opuser/{rel}", out_path], timeout=120)
+    return out_path
 
 
 def launch(app: str) -> None:

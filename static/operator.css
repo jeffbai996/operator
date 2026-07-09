@@ -1580,6 +1580,24 @@
     padding: 0.42rem 0.55rem; cursor: pointer; }
   .op-tb-mi:hover { background: var(--bg-4); color: var(--fg); }
   .op-tb-mi.active { color: #3fb950; }
+
+  /* Transfer — file exchange popover off the taskbar */
+  .op-tb-xfer { position: relative; }
+  .op-xfer-menu { min-width: 240px; max-width: 320px; max-height: 300px;
+    overflow-y: auto; }
+  .op-xfer-up { color: #3fb950; font-weight: 700; }
+  .op-xfer-dir { font: 700 0.54rem/1 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
+    padding: 0.5rem 0.55rem 0.2rem; user-select: none; }
+  .op-xfer-file { display: flex; align-items: baseline; gap: 0.6rem;
+    text-decoration: none; }
+  .op-xfer-name { flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .op-xfer-size { font-size: 0.6rem; color: var(--muted); flex: 0 0 auto; }
+  .op-xfer-empty { font: 500 0.66rem/1.45 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); padding: 0.5rem 0.55rem 0.4rem; max-width: 230px; }
+  /* the demo sandbox is shared between strangers — no file exchange there */
+  .op-demo .op-tb-xfer { display: none; }
   @media (max-width: 700px) {
     /* phones: one scrollable row, label dropped for room */
     .op-tb-name { display: none; }
