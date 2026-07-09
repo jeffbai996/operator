@@ -5,6 +5,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$HERE/venv"
+PY="${VISION_TEST_PYTHON:-$VENV/bin/python3}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # copy the modules flat (NOT __init__.py — its relative imports only work when
@@ -16,4 +17,4 @@ done
 cp "$HERE"/tests/test_*.py "$TMP/"
 cp -R "$HERE/maps" "$TMP/maps"
 cd "$TMP"
-"$VENV/bin/python3" -m pytest -q "$@"
+"$PY" -m pytest -q "$@"
