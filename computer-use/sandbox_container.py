@@ -152,17 +152,19 @@ def delete() -> None:
 _FEED_TAG = "op_feed_stream"
 
 
-def open_stream(fps: int = 15, quality: int = 8) -> subprocess.Popen:
+def open_stream(fps: int = 10, quality: int = 8) -> subprocess.Popen:
     """One long-lived MJPEG pipe out of the container: ffmpeg grabs :1 (pointer
     drawn) and writes concatenated JPEGs to stdout. The caller owns the process
     (read .stdout, stop_stream() when done). Raises SandboxError if it dies at
     once — e.g. an old image without ffmpeg — so the caller can fall back to scrot.
 
-    15fps/q8 measured: ~34KB/frame, ~480 KB/s on the wire — double the old
-    8fps/q6 cadence (the choppy-slideshow feel) for +60% bandwidth, trivial
-    over a LAN/tunnel. `-fflags nobuffer -flags low_delay` stop ffmpeg holding a
-    frame in the mux queue → each JPEG hits stdout the instant it's encoded
-    (cuts a frame-time of glass-to-glass latency).
+    10fps/q8: ~34KB/frame, ~340 KB/s. MJPEG (multipart/x-mixed-replace) has NO
+    frame-dropping — if a client can't decode as fast as frames arrive, they
+    queue in the connection buffer and playback falls PROGRESSIVELY behind. A
+    desktop is mostly static, so a lower cadence the client can always keep up
+    with beats a high one it can't → the feed stays near-live. Perceived input
+    latency is handled separately by a client-drawn cursor overlay (instant).
+    `-fflags nobuffer -flags low_delay` stop ffmpeg holding a frame in the queue.
 
     LEAK GUARD: reap any prior feed ffmpeg INSIDE the container before starting a
     new one. `docker exec` runs ffmpeg in the container, but a host-side

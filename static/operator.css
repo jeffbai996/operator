@@ -721,6 +721,17 @@
     border: 2px solid var(--accent); border-radius: 50%; pointer-events: none;
     animation: op-rip .5s ease-out forwards; }
   @keyframes op-rip{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
+  /* MANUAL-steer cursor — drawn from LOCAL tap/move coords the instant you act,
+     so perceived input latency is ~0 regardless of how far behind the video feed
+     is. The ffmpeg-drawn pointer in the frame is the ground truth; this overlay
+     is the immediate feedback while that frame is still in flight. Shown ONLY in
+     MAN mode on a desktop surface. No transition on left/top — it must SNAP. */
+  .op-steer-cursor { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 8;
+    opacity: 0; transition: opacity .25s; }
+  .op-steer-cursor.show { opacity: .92; }
+  .op-steer-cursor svg { display: block; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+  .op:not([data-mode="man"]) .op-steer-cursor { display: none; }
+  .op[data-surface="browser"] .op-steer-cursor { display: none; }
   .op-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
     flex-direction: column; gap: .6rem; color: var(--muted); font: 500 0.85rem/1 'JetBrains Mono', monospace;
     background: radial-gradient(circle at 50% 40%, var(--bg-2), var(--bg)); }
