@@ -16,6 +16,12 @@ import operator_agent as OA
 def runner(monkeypatch, tmp_path):
     # state file + kill switch land under a throwaway HOME
     monkeypatch.setenv("HOME", str(tmp_path))
+    # stub the runtime-binary lookups so the suite is hermetic — start() rejects
+    # with "<runtime> binary not found" when the real CLI isn't on PATH (true in
+    # clean CI), which is a launch precondition, not what these tests exercise.
+    monkeypatch.setattr(OA, "_resolve_claude", lambda: "/fake/claude")
+    monkeypatch.setattr(OA, "_resolve_codex", lambda: "/fake/codex")
+    monkeypatch.setattr(OA, "_resolve_agy", lambda: "/fake/agy")
     r = OA.AgentRunner()
     r._run = lambda binpath, b, task: None      # never launch a real agent
     return r
@@ -76,6 +82,8 @@ def test_desktop_launch_path_builds_without_raising(monkeypatch, tmp_path):
     braces — leaving state='running' with no process and no error surfaced.
     Drive _run for real up to a stubbed Popen and demand a clean finish."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # hermetic: don't depend on the real claude CLI being on PATH (absent in CI)
+    monkeypatch.setattr(OA, "_resolve_claude", lambda: "/fake/claude")
     r = OA.AgentRunner()
     launched = {}
 
