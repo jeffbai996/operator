@@ -93,6 +93,17 @@ def ensure(display: str = DEFAULT_DISPLAY,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    # Paint the root window a solid slate instead of X11's default black — an
+    # empty sandbox otherwise reads as a dead/black feed rather than "a working
+    # but empty desktop". Best-effort; xsetroot may not be installed.
+    xsetroot = shutil.which("xsetroot")
+    if xsetroot:
+        try:
+            subprocess.run([xsetroot, "-solid", "#1c2230"],
+                           env={**os.environ, "DISPLAY": display},
+                           timeout=4, check=False)
+        except (subprocess.SubprocessError, OSError):
+            pass
     log.info("display %s up (%s) + openbox", display, geometry)
     return display
 

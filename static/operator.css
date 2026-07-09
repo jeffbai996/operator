@@ -3,7 +3,7 @@
 
   /* ── Operator-style page: left conversation/steer rail + right live browser,
      a live action-status line, and a full-window mode that hides the host-app
-     header. Dark squad tokens for cohesion. ── */
+     header. Dark host-app tokens for cohesion. ── */
   .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
@@ -116,6 +116,11 @@
     .op-head { gap: 0.16rem; }
     .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }   /* tighten MAN/AUTO labels */
     .op-fontpill button { width: 17px; }
+    /* Space is getting tight — gracefully fade the caret out (collapse its width
+       too) BEFORE the MAN/AUTO pill would overlap it. The wordmark stays, and
+       its hover-shade becomes the "click me" affordance instead of the caret. */
+    .op-head .op-brand-caret { opacity: 0 !important; width: 0; margin: 0;
+      transition: opacity .18s ease, width .18s ease; }
   }
   @container rail (max-width: 273px) {
     /* shrink the Operator+version unit to nothing (scale, not clip — so no letter gets chopped mid-word) */
@@ -139,11 +144,13 @@
     60%  { transform: translate(0.3px,-0.5px) rotate(-5deg); }
     80%  { transform: translate(0.3px,-0.5px) rotate(3deg); }
     100% { transform: translate(0.3px,-0.5px) rotate(0deg); } }
-  .op-titlewrap { display: inline-flex; flex-direction: column; justify-content: center;
-    line-height: 1.1; margin-left: 2px; margin-right: 0.15rem; margin-top: -2px; position: relative; z-index: 0;
+  .op-titlewrap { display: inline-flex; flex-direction: row; align-items: center; gap: 5px;
+    line-height: 1.1; margin-left: 2px; margin-right: 0.3rem; margin-top: -2px; position: relative; z-index: 0;
     transform-origin: left center;
     transition: max-width .3s cubic-bezier(.2,1,.3,1), transform .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .24s ease; max-width: 240px;
     min-width: 0; overflow: hidden; }   /* tight header (low zoom): clip the wordmark instead of letting the MAN/AUTO pill paint over the version */
+  .op-brand-text { display: inline-flex; flex-direction: column; justify-content: center;
+    flex: 0 0 auto; white-space: nowrap; }   /* fixed wordmark — never let the flex row squeeze it to 0 */
   .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
   .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans',sans-serif; color: var(--fg);
@@ -441,8 +448,22 @@
   .op-md-h { font-weight: 700; color: var(--fg); margin: 0.2rem 0 0.1rem; line-height: 1.25; }
   .op-md-h1 { font-size: 1.05em; } .op-md-h2 { font-size: 1em; } .op-md-h3 { font-size: 0.95em; }
   .op-md-h4, .op-md-h5, .op-md-h6 { font-size: 0.9em; color: var(--fg-2); }
-  .op-md-img { max-width: 100%; border-radius: 6px; margin: 0.15rem 0; display: block; }
-  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.1rem 0; overflow-x: auto; white-space: pre; line-height: 1.3; position: relative; }
+  /* inline agent screenshots — framed like a card, click to zoom (lightbox) */
+  .op-md-img { max-width: 100%; max-height: 300px; object-fit: contain;
+    display: block; margin: 0.35rem 0; border-radius: 12px;
+    border: 1px solid var(--border-2); background: var(--bg-3);
+    box-shadow: 0 6px 20px -8px rgba(0,0,0,.45); cursor: zoom-in;
+    transition: transform .15s ease, box-shadow .15s ease; }
+  .op-md-img:hover { transform: scale(1.012);
+    box-shadow: 0 10px 26px -8px rgba(0,0,0,.55); }
+  .op-lightbox { position: fixed; inset: 0; z-index: 200; display: flex;
+    align-items: center; justify-content: center; background: rgba(0,0,0,.78);
+    backdrop-filter: blur(6px); cursor: zoom-out; animation: op-lb-in .15s ease; }
+  .op-lightbox img { max-width: 94vw; max-height: 92vh; border-radius: 10px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  @keyframes op-lb-in { from { opacity: 0 } to { opacity: 1 } }
+  /* wrap, never sideways-scroll — the chat column is too narrow to pan */
+  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.1rem 0; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; position: relative; }
   .op-msg.bot .bubble pre code { background: none; border: none; padding: 0; }   /* no double box */
   /* code-block copy button: top-right, hover-reveal, theme-safe */
   .op-copy { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
@@ -586,7 +607,10 @@
     border-color: var(--border-2); }
   .op-tab .lbl { overflow: hidden; text-overflow: ellipsis; }
   .op-urlbar { display: flex; align-items: center; gap: 0.42rem; padding: 0.34rem 0.55rem;
-    background: var(--bg-2); border-bottom: 1px solid var(--border); }
+    background: var(--bg-2); border-bottom: 1px solid var(--border);
+    max-height: 60px; overflow: hidden;
+    transition: max-height .28s cubic-bezier(.4,0,.2,1), padding .28s cubic-bezier(.4,0,.2,1),
+                opacity .2s ease, border-color .28s ease; }
   .op-traffic { display: flex; gap: 5px; flex: 0 0 auto; }
   .op-traffic span { width: 10px; height: 10px; border-radius: 50%; background: var(--border-2); }
   /* lock lives INSIDE the URL box now (like a real browser) — absolute at the left edge */
@@ -714,6 +738,17 @@
     -webkit-mask: var(--op-nosignal-mask) center/contain no-repeat;
             mask: var(--op-nosignal-mask) center/contain no-repeat; }
   .op { --op-nosignal-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 8.82a15 15 0 0 1 4.17-2.65'/><path d='M10.66 5c4.01-.36 8.14.9 11.34 3.76'/><path d='M16.85 11.25a10 10 0 0 1 2.22 1.68'/><path d='M5 13a10 10 0 0 1 5.24-2.76'/><path d='M8.53 16.11a6 6 0 0 1 6.95 0'/><path d='M12 20h.01'/><path d='M2 2l20 20'/></svg>"); }
+  /* idle desktop (Xvfb not started yet): not an error — neutral monitor glyph +
+     a plain "how to start it" subline, no alarming broken-signal styling. */
+  .op.op-surface-idle .op-overlay::before {
+    -webkit-mask: var(--op-desktop-mask) center/contain no-repeat;
+            mask: var(--op-desktop-mask) center/contain no-repeat; opacity: .42; }
+  .op { --op-desktop-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='12' rx='1.6'/><path d='M9 20h6M12 16.5V20'/></svg>"); }
+  .op.op-surface-idle #op-overlay-text { letter-spacing: 0; text-transform: none;
+    font-weight: 600; font-size: 0.82rem; }
+  .op-overlay-sub { font: 500 0.68rem/1.3 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); opacity: .8; margin-top: -0.2rem; }
+  .op-overlay-sub[hidden] { display: none; }
   .op-spinner { width: 30px; height: 30px; border-radius: 50%;
     background: conic-gradient(from 0deg, transparent 0deg, var(--accent) 300deg, var(--accent) 360deg);
     -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
@@ -842,6 +877,24 @@
        pointer-events: auto !important; }
     .op[data-sheet="peek"][data-status-min="1"] .op-log { padding-top: 0; }
     .op[data-sheet="peek"] .op-inputbox { order: 0; margin: 0; flex: 0 0 auto; }
+
+    /* ── MOBILE launchpad (saved-task cards): the feed area above the sheet is
+       short, so make the cards a single scrollable column that fills the width
+       and doesn't get clipped. ── */
+    .op-lp { padding: 0.7rem 0.7rem 0.9rem; gap: 0.6rem; justify-content: flex-start; }
+    .op-lp-bar { max-width: none; padding: 0 0.1rem; }
+    .op-lp-grid { grid-template-columns: 1fr; gap: 0.55rem; max-width: none;
+      width: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding-bottom: 0.5rem; align-content: start; }
+    .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; }
+    .op-lp-name { font-size: calc(0.86rem * var(--chat-scale)); padding-right: 3rem; }
+    .op-lp-prompt { font-size: calc(0.66rem * var(--chat-scale)); -webkit-line-clamp: 2; }
+    .op-lp-site { font-size: calc(0.64rem * var(--chat-scale)); padding: 0.22rem 0.55rem; }
+    .op-lp-go { top: 0.7rem; right: 0.7rem; padding: 0.4rem 0.72rem 0.4rem 0.62rem;
+      font-size: calc(0.68rem * var(--chat-scale)); }   /* bigger tap target on touch */
+    .op-lp-go svg { width: 12px; height: 12px; }
+    .op-lp-edit { width: 32px; height: 32px; opacity: 1; }   /* always visible on touch (no hover) */
+    .op-lp-new { min-height: 64px; }
   }
 
   /* ── redesign 2026-06-26: modern chatbox + browser chrome ── */
@@ -866,13 +919,18 @@
     box-shadow: 0 12px 34px -8px rgba(0,0,0,.7), 0 2px 8px rgba(0,0,0,.35);
     padding: 5px; min-width: 168px;
     display: flex; flex-direction: column; gap: 1px;
+    /* cap to the viewport so a tall menu (high zoom / small screen) scrolls
+       inside itself instead of spilling its bottom items off-screen */
+    max-height: calc(100dvh - 20px); overflow-y: auto; overscroll-behavior: contain;
+    scrollbar-width: thin;
     transform-origin: top right;
     animation: op-ham-in .16s cubic-bezier(.2,1,.3,1); }
   @keyframes op-ham-in { from{opacity:0;transform:scale(.96) translateY(-4px)} to{opacity:1;transform:none} }
   .op-ham-menu[hidden] { display: none; }
   .op-ham-item { display: flex; align-items: center; justify-content: space-between; gap: 1.4rem;
+    flex: 0 0 auto;
     background: transparent; border: none; color: var(--fg-2); cursor: pointer;
-    text-align: left; border-radius: 8px; padding: 0.44rem 0.6rem;
+    text-align: left; border-radius: 8px; padding: 0.4rem 0.6rem;
     font: 500 0.74rem/1 'Plus Jakarta Sans', sans-serif;
     transition: background .12s ease, color .12s ease; }
   .op-ham-item:hover { background: var(--bg-4); color: var(--fg); }
@@ -1027,10 +1085,16 @@
     border: 1px solid var(--border-2); border-radius: 14px; padding: 1.15rem 1.2rem;
     box-shadow: 0 24px 70px -18px rgba(0,0,0,.85), 0 4px 16px rgba(0,0,0,.4);
     display: flex; flex-direction: column; gap: 0.5rem;
+    /* never taller than the viewport — scroll inside so Save is always reachable
+       (short mobile screens with the scheduler expanded used to push it off-screen) */
+    max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain;
     animation: op-nt-in .22s cubic-bezier(.2,1,.3,1); }   /* scaled up a notch (v0.7.0, the owner: read small vs zoom) */
+  /* keep the footer (Cancel / Save / Delete) pinned + reachable while the body scrolls */
+  .op-nt-foot { position: sticky; bottom: -1.15rem; background: var(--bg-2);
+    padding-top: 0.5rem; margin-bottom: -0.2rem; }
   @keyframes op-nt-in { from{opacity:0;transform:translateY(8px) scale(.97)} to{opacity:1;transform:none} }
   .op-nt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem; }
-  .op-nt-title { font: 700 calc(0.92rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); }
+  .op-nt-title { font: 700 calc(1.15rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); letter-spacing: -.01em; }
   .op-nt-x { background: transparent; border: none; color: var(--muted); cursor: pointer;
     width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; }
   .op-nt-x:hover { background: var(--bg-4); color: var(--fg); }
@@ -1121,6 +1185,10 @@
   .op-nt-btn:hover { background: var(--bg-4); color: var(--fg); }
   .op-nt-btn.primary { background: #ededea; border-color: transparent; color: #0b0e18; }
   .op-nt-btn.primary:hover { background: #dedcd6; filter: none; }
+  /* Delete lives in the edit menu, pushed to the far left away from Cancel/Save */
+  .op-nt-btn.danger { margin-right: auto; color: #e5484d; border-color: rgba(229,72,77,.4); background: rgba(229,72,77,.08); }
+  .op-nt-btn.danger:hover { background: rgba(229,72,77,.18); color: #ff6369; border-color: rgba(229,72,77,.6); }
+  .op-nt-btn.danger[hidden] { display: none; }
   .op-demo #op-save-task, .op-demo .op-veil { display: none !important; }
   /* ── Launchpad (#1): saved tasks as cards on the idle stage — the OpenAI-
      Operator homepage pattern. Shown only on a fresh session (empty log, no
@@ -1135,44 +1203,94 @@
   .op-lp::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .045;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"); }
   .op-lp > * { position: relative; z-index: 1; }
+  /* the launchpad owns its own taps/scroll — the feed's touch-action:none must not
+     leak in (that + the stage steer handler is why iPad taps did nothing).
+     pan-y + contain: a swipe scrolls the launchpad ITSELF (or nothing) and never
+     chains out to scroll the page/feed (the iPad "scroll leaks through" bug);
+     overflow-y makes it the scroll container when the grid is taller than it. */
+  .op-lp { touch-action: pan-y; overscroll-behavior: contain; overflow-y: auto; }
+  .op-lp-card, .op-lp-go, .op-lp-edit, .op-lp-close, .op-lp-new { touch-action: manipulation; }
+  .op-lp-grid { touch-action: pan-y; }
   .op-lp[hidden] { display: none; }
   .op[data-mode="man"] .op-lp, .op-demo .op-lp { display: none !important; }
+  /* title bar: label left, a clear labeled Close on the right (the old tiny
+     corner X was unhittable) */
+  .op-lp-bar { display: flex; align-items: center; justify-content: space-between;
+    width: 100%; max-width: 760px; margin-bottom: 0.15rem; }
   .op-lp-title { font: 700 calc(0.62rem * var(--chat-scale))/1 var(--chat-font);
     color: var(--muted); letter-spacing: .14em; }
+  .op-lp-close { display: inline-flex; align-items: center; justify-content: center;
+    width: calc(28px * var(--chat-scale)); height: calc(28px * var(--chat-scale));
+    background: var(--bg-3); border: 1px solid var(--border-2);
+    color: var(--fg-2); border-radius: 8px; cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease; }
+  .op-lp-close svg { width: calc(15px * var(--chat-scale));
+    height: calc(15px * var(--chat-scale)); }
+  /* touch: a real tap target, independent of scale (the fixed-px button read
+     as microscopic on iPad) */
+  @media (pointer: coarse) {
+    .op-lp-close { width: 40px; height: 40px; border-radius: 10px; }
+    .op-lp-close svg { width: 18px; height: 18px; }
+  }
+  .op-lp-close:hover { background: var(--bg-4); color: var(--fg); border-color: var(--fg-3); }
   .op-lp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 218px));
     gap: 0.75rem; justify-content: center; max-width: 760px; width: 100%; }
-  .op-lp-card { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 12px;
-    padding: 0.75rem 0.8rem; display: flex; flex-direction: column; gap: 0.4rem;
-    position: relative; cursor: pointer; text-align: left;
-    transition: border-color .15s, transform .15s, box-shadow .15s;
+  .op-lp-card { background: color-mix(in srgb, var(--bg) 78%, #000);
+    border: 1px solid var(--border-2); border-radius: 18px;
+    padding: 0.85rem 0.9rem 0.9rem; display: flex; flex-direction: column; gap: 0.45rem;
+    position: relative; cursor: default; text-align: left;  /* only Go launches */
+    transition: border-color .15s, transform .15s, box-shadow .15s, background .15s;
     animation: op-lp-pop .3s cubic-bezier(.2,1.1,.35,1) backwards; }
   .op-lp-card:nth-child(2) { animation-delay: .04s; } .op-lp-card:nth-child(3) { animation-delay: .08s; }
   .op-lp-card:nth-child(4) { animation-delay: .12s; } .op-lp-card:nth-child(5) { animation-delay: .16s; }
   @keyframes op-lp-pop { from{opacity:0;transform:translateY(6px) scale(.96)} to{opacity:1;transform:none} }
   .op-lp-card:hover { border-color: var(--accent); transform: translateY(-2px);
     box-shadow: 0 8px 22px rgba(0,0,0,.4); }
-  .op-lp-name { font: 700 calc(0.7rem * var(--chat-scale))/1.25 var(--chat-font); color: var(--fg); }
-  .op-lp-prompt { font: 500 calc(0.58rem * var(--chat-scale))/1.45 var(--chat-font); color: var(--muted);
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .op-lp-meta { display: flex; align-items: center; gap: 0.3rem; margin-top: 0.1rem; min-height: 17px; }
-  .op-lp-site { background: var(--bg-4); border: 1px solid var(--border); border-radius: 5px;
-    font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg-2);
-    padding: 0.12rem 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%;
-    display: inline-flex; align-items: center; gap: 0.24rem; }
-  .op-lp-site img { width: 11px; height: 11px; border-radius: 2.5px; display: block; }
+  .op-lp-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Fixed vertical rhythm so every card lays out identically: the name reserves
+     exactly 2 lines and the prompt exactly 2, so the prompt's "…" terminates in
+     the same visual band on every card regardless of title length. */
+  .op-lp-name { font: 700 calc(0.82rem * var(--chat-scale))/1.28 var(--chat-font); color: var(--fg);
+    padding-right: 2.6rem;   /* clear the Go button in the corner */
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    min-height: calc(2 * 1.28em); }
+  .op-lp-prompt { font: 500 calc(0.6rem * var(--chat-scale))/1.45 var(--chat-font); color: var(--muted);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    min-height: calc(2 * 1.45em); }
+  /* site pill pinned to the bottom of the card, aligned across cards */
+  .op-lp-meta { display: flex; align-items: center; gap: 0.34rem; margin-top: auto;
+    padding-top: 0.15rem; min-height: 20px; flex-wrap: wrap; }
+  .op-lp-site { background: var(--bg-4); border: 1px solid var(--border); border-radius: 999px;
+    font: 600 calc(0.6rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg-2);
+    padding: 0.2rem 0.5rem; white-space: nowrap; max-width: none;
+    display: inline-flex; align-items: center; gap: 0.3rem; }
+  .op-lp-site img { width: 13px; height: 13px; border-radius: 3px; display: block; }
   /* scheduled-task chip on a launchpad card (v0.7.0) — soft green so it reads
      as "this one runs itself" next to the neutral site chips */
   .op-lp-site.op-lp-sched { background: rgba(63,185,80,.10); color: #56d364;
-    border-color: rgba(63,185,80,.32); max-width: 60%; }
-  .op-lp-bot { margin-left: auto; font: 600 calc(0.5rem * var(--chat-scale))/1.2 var(--chat-font);
+    border-color: rgba(63,185,80,.32); }
+  .op-lp-bot { margin-left: auto; font: 600 calc(0.52rem * var(--chat-scale))/1.2 var(--chat-font);
     color: var(--muted); white-space: nowrap; }
-  .op-lp-run { position: absolute; top: 0.55rem; right: 0.55rem; background: var(--bg-4);
-    border: 1px solid var(--border-2); color: var(--fg); border-radius: 7px;
-    font: 700 calc(0.56rem * var(--chat-scale))/1.2 var(--chat-font); padding: 0.22rem 0.45rem;
-    opacity: 0; transition: opacity .15s; pointer-events: none; }
-  .op-lp-card:hover .op-lp-run { opacity: 1; }
+  /* Go — the primary action, top-right. Revealed on card hover (desktop);
+     always visible on touch where there's no hover (see mobile block). */
+  .op-lp-go { position: absolute; top: 0.7rem; right: 0.7rem; display: inline-flex; align-items: center;
+    gap: 0.28rem; background: #e5484d; color: #fff; border: none; border-radius: 999px;
+    font: 700 calc(0.62rem * var(--chat-scale))/1 var(--chat-font); padding: 0.34rem 0.62rem 0.34rem 0.56rem;
+    cursor: pointer; box-shadow: 0 2px 8px -2px rgba(0,0,0,.4);
+    opacity: 0; transition: opacity .15s ease, filter .12s ease, transform .12s ease; }
+  .op-lp-card:hover .op-lp-go, .op-lp-go:focus-visible { opacity: 1; }
+  .op-lp-go svg { margin-top: -0.5px; }
+  .op-lp-go:hover { filter: brightness(1.08); transform: scale(1.04); }
+  .op-lp-go:active { transform: scale(.97); }
+  /* Edit — user tasks only, flat pencil, fades in on card hover */
+  .op-lp-edit { position: absolute; bottom: 0.6rem; right: 0.6rem; width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center; border-radius: 8px;
+    border: 1px solid var(--border-2); background: var(--bg-4); color: var(--muted);
+    cursor: pointer; opacity: 0; transition: opacity .15s ease, color .12s ease, background .12s ease; }
+  .op-lp-card:hover .op-lp-edit, .op-lp-edit:focus-visible { opacity: 1; }
+  .op-lp-edit:hover { color: var(--fg); background: var(--bg-2); }
   .op-lp-new { border-style: dashed; align-items: center; justify-content: center;
-    color: var(--muted); font: 600 calc(0.62rem * var(--chat-scale))/1.5 var(--chat-font);
+    color: var(--muted); font: 600 calc(0.68rem * var(--chat-scale))/1.5 var(--chat-font);
     text-align: center; display: flex; min-height: 92px; }
   .op-lp-new:hover { color: var(--fg-2); }
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
@@ -1319,10 +1437,18 @@
   .op-demo #op-full { display: none !important; }
   /* ── surface switcher (Track C): brand popover + chip + panic STOP ─────── */
   .op-titlewrap[role="button"] { cursor: pointer; overflow: visible; }
-  .op-titlewrap[role="button"]:hover .op-title { color: var(--fg); }
-  .op-titlewrap[role="button"]:hover .op-brand-caret { opacity: .85; transform: translateY(1px); }
-  .op-brand-caret { margin-left: 4px; opacity: .35; color: var(--muted);
-    vertical-align: middle; transition: opacity .15s ease, transform .18s cubic-bezier(.2,1,.3,1); }
+  /* the wordmark shades on hover (the caret's twin cue) — also the sole affordance
+     once the caret has faded out on a narrow rail */
+  .op-titlewrap[role="button"] .op-title { transition: color .15s ease; }
+  .op-titlewrap[role="button"]:hover .op-title,
+  .op-titlewrap[role="button"]:focus-visible .op-title { color: #fff; }
+  .op-titlewrap[role="button"]:hover .op-brand-caret { opacity: .9; }
+  /* caret is a centered sibling of the wordmark, aligned to the MAN/AUTO row.
+     Fixed 9px box + centered origin so the flip pivots in place (no jump). */
+  .op-brand-caret { flex: 0 0 auto; align-self: center; width: 9px; height: 6px;
+    opacity: .4; color: var(--muted); transform: rotate(0deg); transform-origin: 50% 50%;
+    transition: opacity .15s ease, transform .2s cubic-bezier(.4,0,.2,1); will-change: transform; }
+  .op-titlewrap:not([role="button"]) .op-brand-caret { display: none; }   /* nothing to switch → no caret */
   .op-titlewrap[aria-expanded="true"] .op-brand-caret { transform: rotate(180deg); opacity: .9; }
   .op-verline { display: inline-flex; align-items: center; gap: 5px; }
   .op-surface-chip { font: 700 0.46rem/1 'Plus Jakarta Sans', sans-serif;
@@ -1365,22 +1491,99 @@
   .op-surf-confirm .op-surf-yes:hover { background: rgba(248,113,113,.18); color: #fca5a5; }
   .op-surf-confirm .op-surf-no:hover { background: var(--bg-4); color: var(--fg); }
 
-  /* hard STOP over the feed — always visible while a desktop run is live */
-  .op-panic { position: absolute; top: 52px; right: 14px; z-index: 60;
-    display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(180, 30, 30, .92); color: #fff; border: 1px solid rgba(255,120,120,.55);
-    border-radius: 9px; padding: 0.5rem 0.85rem; cursor: pointer;
-    font: 800 0.72rem/1 'Plus Jakarta Sans', sans-serif; letter-spacing: .08em;
-    box-shadow: 0 6px 22px -4px rgba(220,50,50,.5), 0 2px 8px rgba(0,0,0,.4);
+  /* game strip — an expanding footer inside the surface popover. A label + a
+     horizontally-scrollable row of pills (slide L/R for ones off-edge). Animates
+     open with the popover. Tunes Operator's perception to the chosen game. */
+  .op-surf-game { border-top: 1px solid var(--border-2); margin-top: 3px;
+    padding: 0.5rem 0 0.15rem; display: flex; flex-direction: column; gap: 0.4rem;
+    animation: op-surf-game-in .26s cubic-bezier(.2,1,.3,1) both; }
+  @keyframes op-surf-game-in { 0%{opacity:0;transform:translateY(-4px)} 100%{opacity:1;transform:none} }
+  .op-surf-game-lbl { font: 700 0.54rem/1 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--muted); padding: 0 0.6rem; }
+  .op-surf-strip { display: flex; gap: 5px; overflow-x: auto; scroll-behavior: smooth;
+    padding: 1px 0.6rem 4px; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    /* fade the right edge so it reads as "scroll for more" */
+    -webkit-mask: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+            mask: linear-gradient(90deg, #000 calc(100% - 22px), transparent); }
+  .op-surf-strip::-webkit-scrollbar { display: none; }
+  .op-surf-pill { flex: 0 0 auto; scroll-snap-align: start;
+    font: 600 0.66rem/1 'Plus Jakarta Sans', sans-serif; white-space: nowrap;
+    border: 1px solid var(--border-2); background: var(--bg-3); color: var(--fg-2);
+    border-radius: 999px; padding: 0.34rem 0.66rem; cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease; }
+  .op-surf-pill:hover { background: var(--bg-4); color: var(--fg); }
+  .op-surf-pill.active { color: #062611; background: #3fb950; border-color: #3fb950; font-weight: 700; }
+
+  /* hard STOP for desktop-REAL runs — a compact pill in the top-right of the
+     feed (the urlbar is collapsed on this surface), always visible while busy */
+  .op-panic { position: absolute; top: 10px; right: 14px; z-index: 60;
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(180, 30, 30, .92); color: #fff; border: 1px solid rgba(255,120,120,.5);
+    border-radius: 7px; padding: 0.3rem 0.55rem; cursor: pointer;
+    font: 800 0.62rem/1 'Plus Jakarta Sans', sans-serif; letter-spacing: .07em;
+    box-shadow: 0 3px 12px -3px rgba(220,50,50,.45), 0 1px 5px rgba(0,0,0,.35);
     transition: background .12s ease, transform .12s ease; }
   .op-panic:hover { background: rgba(210, 35, 35, .98); transform: scale(1.03); }
   .op-panic:active { transform: scale(.97); }
   .op-panic[hidden] { display: none; }
 
-  /* desktop surfaces: browser-only chrome (tabs / urlbar / manual steer) dims out */
+  /* desktop surfaces: the browser URL bar is meaningless (no page to navigate)
+     — collapse it out smoothly rather than dim. Manual steer stays
+     visible-but-disabled (it explains why it's off). */
   .op[data-surface="desktop-sandbox"] .op-urlbar,
-  .op[data-surface="desktop-real"] .op-urlbar,
+  .op[data-surface="desktop-real"] .op-urlbar {
+    max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0;
+    border-bottom-color: transparent; pointer-events: none; }
   .op[data-surface="desktop-sandbox"] .op-tabs,
-  .op[data-surface="desktop-real"] .op-tabs { opacity: .35; pointer-events: none; }
-  .op[data-surface="desktop-sandbox"] .op-mode,
-  .op[data-surface="desktop-real"] .op-mode { opacity: .35; pointer-events: none; }
+  .op[data-surface="desktop-real"] .op-tabs { display: none; }
+
+  /* desktop taskbar — takes the URL bar's slot on the desktop surfaces, with
+     the same collapse animation in reverse (0-height until a desktop surface
+     is active). Hosts the game picker + sandbox controls. */
+  .op-taskbar { display: flex; align-items: center; gap: 0.42rem;
+    padding: 0 0.55rem; max-height: 0; opacity: 0; overflow: hidden;
+    border-bottom: 1px solid transparent; pointer-events: none;
+    transition: max-height .28s ease, opacity .22s ease, padding .28s ease; }
+  .op[data-surface="desktop-sandbox"] .op-taskbar,
+  .op[data-surface="desktop-real"] .op-taskbar {
+    max-height: 52px; opacity: 1; padding: 0.34rem 0.55rem;
+    border-bottom-color: var(--border); pointer-events: auto; overflow: visible; }
+  .op[data-surface="desktop-real"] .op-tb-sandbox { display: none; }
+  .op-tb-name { font: 700 0.64rem/1 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--fg-2);
+    opacity: .75; padding-right: 0.2rem; user-select: none; }
+  .op-tb-group { display: flex; align-items: center; gap: 0.3rem; }
+  .op-tb-spacer { flex: 1; }
+  .op-tb-btn { display: inline-flex; align-items: center; gap: 0.34rem;
+    font: 600 0.68rem/1 'Plus Jakarta Sans', sans-serif; color: var(--fg-2);
+    background: var(--bg-3); border: 1px solid var(--border-2);
+    border-radius: 8px; padding: 0.34rem 0.55rem; cursor: pointer;
+    white-space: nowrap;
+    transition: background .12s ease, color .12s ease, border-color .12s ease; }
+  .op-tb-btn:hover { background: var(--bg-4); color: var(--fg); }
+  .op-tb-btn:disabled { opacity: .5; cursor: default; }
+  .op-tb-btn.busy svg { animation: op-tb-spin 0.9s linear infinite; }
+  @keyframes op-tb-spin { to { transform: rotate(360deg); } }
+  .op-tb-btn.danger:hover { background: rgba(229,72,77,.14);
+    border-color: rgba(229,72,77,.5); color: #ff8589; }
+  .op-tb-btn.confirm, .op-tb-btn.confirm:hover {
+    background: #e5484d; border-color: #e5484d; color: #fff; }
+  .op-tb-game { position: relative; }
+  .op-tb-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 70;
+    min-width: 130px; display: flex; flex-direction: column; padding: 4px;
+    background: var(--bg-2); border: 1px solid var(--border-2);
+    border-radius: 10px; box-shadow: 0 10px 28px -8px rgba(0,0,0,.55); }
+  .op-tb-menu[hidden] { display: none; }
+  .op-tb-mi { text-align: left; font: 600 0.7rem/1 'Plus Jakarta Sans', sans-serif;
+    color: var(--fg-2); background: none; border: 0; border-radius: 7px;
+    padding: 0.42rem 0.55rem; cursor: pointer; }
+  .op-tb-mi:hover { background: var(--bg-4); color: var(--fg); }
+  .op-tb-mi.active { color: #3fb950; }
+  @media (max-width: 700px) {
+    /* phones: one scrollable row, label dropped for room */
+    .op-tb-name { display: none; }
+    .op[data-surface="desktop-sandbox"] .op-taskbar,
+    .op[data-surface="desktop-real"] .op-taskbar { overflow-x: auto; scrollbar-width: none; }
+    .op-taskbar::-webkit-scrollbar { display: none; }
+  }
