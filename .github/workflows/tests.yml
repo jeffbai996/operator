@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # tesseract is a runtime dep of pytesseract; the vision tests import it at
+      # collection even though the perception tests stub the actual OCR call.
+      - name: Install tesseract
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Install Python deps
+        # flask for the main suite; the rest cover control + vision. Playwright is
+        # NOT needed — the suites are import-isolated so they never touch a browser.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "flask>=3.0" -r vision/requirements.txt
+
+      - name: Main suite (flask surfaces, view, sandbox)
+        run: PYTHONPATH=. python -m pytest tests/ -q
+
+      - name: Control suite (game_macro planner/controller)
+        run: CONTROL_TEST_PYTHON=$(which python) bash control/run_tests.sh
+
+      - name: Vision suite (perception, maps, overlay)
+        run: VISION_TEST_PYTHON=$(which python) bash vision/run_tests.sh
