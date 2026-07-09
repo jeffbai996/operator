@@ -16,6 +16,12 @@
 
 <p align="center"><sub><i>More: <a href="docs/img/operator-geoguessr.jpeg">reasoning through a live GeoGuessr round</a>.</i></sub></p>
 
+<p>
+  <img src="docs/img/operator-launchpad.jpeg" alt="Saved-task launchpad">
+</p>
+
+<p><sub><i>The saved-task launchpad — one-tap tasks on the idle stage, each pinned to the sites it uses. Hit <b>Go</b> and the prompt dispatches straight to the agent.</i></sub></p>
+
 ---
 
 A live **browser / computer-use agent cockpit**. Watch a real Chrome in real time, steer it manually, or hand control to a subscription-backed agent — Claude, GPT, or Gemini — that drives the browser and reports back.
