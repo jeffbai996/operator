@@ -272,7 +272,11 @@ def execute(action: dict) -> None:
         button, count = _CLICK[kind]
         if coord:
             _xdotool(["mousemove", str(coord[0]), str(coord[1])])
-        _xdotool(["click", "--repeat", str(count), str(button)])
+        # --delay 0: xdotool defaults to a 100ms press→release sleep PER click
+        # (for apps that debounce). X11 registers the button instantly, so that
+        # sleep is pure latency — it made fast manual tapping stall (~106ms/tap,
+        # queued behind the input lock, starving the feed). 0 → ~3ms/click.
+        _xdotool(["click", "--repeat", str(count), "--delay", "0", str(button)])
         return
     if kind == "mouse_move":
         if not coord:
@@ -291,7 +295,9 @@ def execute(action: dict) -> None:
         amount = int(action.get("scroll_amount", 3))
         button = {"up": 4, "down": 5, "left": 6, "right": 7}.get(
             action.get("scroll_direction", "down"), 5)
-        _xdotool(["click", "--repeat", str(amount), str(button)])
+        # --delay 0: a scroll is N wheel-clicks; the default 100ms each made a
+        # 5-notch scroll a half-second stall. Wheel events don't debounce.
+        _xdotool(["click", "--repeat", str(amount), "--delay", "0", str(button)])
         return
     if kind in ("left_mouse_down", "left_mouse_up"):
         _xdotool(["mousedown" if kind == "left_mouse_down" else "mouseup", "1"])
