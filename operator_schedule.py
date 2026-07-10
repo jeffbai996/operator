@@ -33,8 +33,12 @@ log = logging.getLogger("operator.schedule")
 
 # ── 5-field cron matcher (stdlib-only; a bad expr never fires) ───────────────
 
-def _parse_field(spec: str, lo: int, hi: int) -> set | None:
-    """One cron field → the set of matching ints, or None if invalid."""
+def _parse_field(spec: str, lo: int, hi: int) -> tuple[set, bool] | None:
+    """One cron field → (matching ints, is-wildcard), or None if invalid.
+    Wildcard = the field starts with '*' (vixie-style, so */n counts too);
+    cron_matches needs this to apply the standard dom/dow OR rule."""
+    spec = spec.strip()
+    wild = spec.startswith("*")
     vals: set = set()
     for part in spec.split(","):
         part = part.strip()
@@ -58,7 +62,7 @@ def _parse_field(spec: str, lo: int, hi: int) -> set | None:
         if a < lo or b > hi or a > b:
             return None
         vals.update(range(a, b + 1, step))
-    return vals
+    return vals, wild
 
 
 def cron_valid(expr: str) -> bool:
@@ -81,16 +85,25 @@ def cron_matches(expr: str, dt: datetime) -> bool:
     if len(parts) != 5:
         return False
     ranges = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)]
-    sets = []
+    sets, wild = [], []
     for spec, (lo, hi) in zip(parts, ranges):
-        s = _parse_field(spec, lo, hi)
-        if s is None:
+        parsed = _parse_field(spec, lo, hi)
+        if parsed is None:
             return False
-        sets.append(s)
+        sets.append(parsed[0])
+        wild.append(parsed[1])
     dow = dt.isoweekday() % 7          # python Mon=1..Sun=7 → cron Sun=0
+    dom_ok = dt.day in sets[2]
     dow_ok = dow in sets[4] or (dow == 0 and 7 in sets[4])
+    # standard (vixie) cron: when BOTH dom and dow are restricted, the day
+    # matches when EITHER does — `0 9 1 * 1` fires on the 1st OR any Monday.
+    # ANDing them (the old behavior) silently missed almost every run.
+    if not wild[2] and not wild[4]:
+        day_ok = dom_ok or dow_ok
+    else:
+        day_ok = dom_ok and dow_ok
     return (dt.minute in sets[0] and dt.hour in sets[1]
-            and dt.day in sets[2] and dt.month in sets[3] and dow_ok)
+            and dt.month in sets[3] and day_ok)
 
 
 # ── schedule core (injected task loader, disk-persisted per-minute dedupe) ────
@@ -281,6 +294,9 @@ def start(run_fn, runner) -> None:
         while True:
             try:
                 watcher.poll()
+                # naive local now(): a DST spring-forward skips the 02:xx wall
+                # minutes entirely, so a schedule inside that hour misses that
+                # day once a year (a tz-aware scheduler is out of scope)
                 for slug in core.due(datetime.now()):
                     log.info("schedule fires: %s", slug)
                     try:

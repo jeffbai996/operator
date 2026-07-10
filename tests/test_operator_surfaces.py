@@ -4,7 +4,7 @@
 Same harness shape as test_operator_view.py: blueprint on a throwaway app,
 runner mocked, module reloaded per DEMO flavor.
 
-Run from the repo root:  PYTHONPATH=. pytest tests/test_operator_surfaces.py -q
+Run from modules/operator:  PYTHONPATH=. pytest tests/test_operator_surfaces.py -q
 """
 import importlib
 import os
@@ -269,16 +269,26 @@ def test_dispatch_passes_surface_and_real_ok(live):
     mod._active_surface["name"] = "browser"
 
 
-def test_dispatch_demo_never_reaches_desktop(demo):
+def test_dispatch_demo_never_reaches_real_desktop(demo):
+    # #27: a crafted desktop-real ask (even with real_ok) coerces to browser
     c, mod, rec = demo
     r = c.post("/operator/dispatch", json={
         "bot": "claude-a", "task": "x", "surface": "desktop-real",
         "real_ok": True})
     assert r.status_code == 200
-    # demo path calls start(demo=True) with NO surface kwarg — the runner
-    # forces browser internally; the view must not forward the ask.
     assert rec.calls[-1].get("demo") is True
-    assert "surface" not in rec.calls[-1]
+    assert rec.calls[-1].get("surface") == "browser"
+    assert not rec.calls[-1].get("real_ok")
+
+
+def test_dispatch_demo_may_drive_the_isolated_sandbox(demo):
+    # #27: the demo forwards desktop-sandbox (the isolated demo container)
+    c, mod, rec = demo
+    r = c.post("/operator/dispatch", json={
+        "bot": "claude-a", "task": "x", "surface": "desktop-sandbox"})
+    assert r.status_code == 200
+    assert rec.calls[-1].get("demo") is True
+    assert rec.calls[-1].get("surface") == "desktop-sandbox"
 
 
 # ── status ───────────────────────────────────────────────────────────────────

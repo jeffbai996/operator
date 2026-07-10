@@ -258,3 +258,29 @@ def test_result_carries_world_state_and_counts():
     r = controller(states=states).run([{"op": "click_target", "label": "log"}])
     assert r["world_state"]["targets"]
     assert r["counts"] == {"log": 2}
+
+
+# ── frame_change_frac (shared §3.1 helper) ───────────────────────────────────
+
+def test_frame_change_frac_identical_frames_is_zero():
+    import numpy as np
+    from macro import frame_change_frac
+    a = np.zeros((40, 40, 3), dtype=np.uint8)
+    assert frame_change_frac(a, a.copy()) == 0.0
+
+
+def test_frame_change_frac_detects_region_change():
+    import numpy as np
+    from macro import frame_change_frac
+    a = np.zeros((40, 40, 3), dtype=np.uint8)
+    b = a.copy()
+    b[10:20, 10:20] = 255
+    assert frame_change_frac(a, b, region=[10, 10, 10, 10]) == 1.0
+    assert frame_change_frac(a, b, region=[30, 30, 8, 8]) == 0.0
+
+
+def test_frame_change_frac_bad_region_returns_none():
+    import numpy as np
+    from macro import frame_change_frac
+    a = np.zeros((40, 40, 3), dtype=np.uint8)
+    assert frame_change_frac(a, a, region=[100, 100, 10, 10]) is None

@@ -1,0 +1,34 @@
+{
+ "got_answer": true,
+ "handoff_reason": "solve the captcha",
+ "messages": [
+  {
+   "role": "thinking",
+   "text": "I need to open the site first."
+  },
+  {
+   "role": "thinking",
+   "text": "Navigating now."
+  },
+  {
+   "role": "action",
+   "text": "Browsing",
+   "detail": "Browsing to example.com"
+  },
+  {
+   "role": "action",
+   "text": "Reading",
+   "detail": "notes file"
+  },
+  {
+   "role": "action",
+   "text": "Using `totally_unknown_tool`",
+   "detail": "Calling MCP tool"
+  },
+  {
+   "role": "assistant",
+   "text": "Done."
+  }
+ ],
+ "streak": 0
+}

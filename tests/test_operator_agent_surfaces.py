@@ -2,7 +2,7 @@
 UI confirm is a courtesy), demo can never leave the browser, every runtime may
 drive desktop surfaces (driver parity), stop() arms the control-layer kill switch.
 
-Run from the repo root:  PYTHONPATH=. pytest tests/test_operator_agent_surfaces.py -q
+Run from modules/operator:  PYTHONPATH=. pytest tests/test_operator_agent_surfaces.py -q
 """
 import json
 import os
@@ -53,10 +53,29 @@ def test_desktop_surface_open_to_all_runtimes(runner):
         assert runner.surface == "desktop-sandbox"
 
 
-def test_demo_forces_browser(runner):
+def test_demo_allows_isolated_sandbox(runner):
+    # #27: the demo may drive the ISOLATED sandbox container (host services
+    # are localhost-bound, so the docker bridge gateway leads nowhere).
     r = runner.start("claude-a", "t", surface="desktop-sandbox", demo=True)
     assert r["ok"]
+    assert runner.surface == "desktop-sandbox"
+
+
+def test_demo_still_coerces_desktop_real_to_browser(runner):
+    # even WITH the confirm flag a public demo can never touch the real machine
+    r = runner.start("claude-a", "t", surface="desktop-real", real_ok=True, demo=True)
+    assert r["ok"]
     assert runner.surface == "browser"
+    assert runner._real_ok is False
+
+
+def test_demo_sandbox_gets_desktop_mandate_without_squad_identity(runner):
+    import operator_agent as OA
+    runner.demo = True
+    runner.surface = "desktop-sandbox"
+    p = runner._persona_for_run(OA.AGENT_BOTS["claude-a"])
+    assert "LIVE COMPUTER DESKTOP" in p and "ISOLATED Linux desktop" in p
+    assert "claude-a" not in p and "{surface_flavor}" not in p
 
 
 def test_browser_default_and_snapshot_carries_surface(runner):
@@ -101,6 +120,47 @@ def test_desktop_launch_path_builds_without_raising(monkeypatch, tmp_path):
     joined = " ".join(str(c) for c in launched["cmd"])
     assert "ISOLATED Linux desktop" in joined
     assert "{surface_flavor}" not in joined
+
+
+def _codex_cmd_for_surface(monkeypatch, tmp_path, surface):
+    """Drive the codex launch path to a stubbed Popen and return the built cmd."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(OA, "_resolve_codex", lambda: "/fake/codex")
+    # boot context hits the host-app / network — stub it out for hermeticity
+    monkeypatch.setattr(OA, "_squad_boot_context", lambda bot="gpt": "")
+    r = OA.AgentRunner()
+    launched = {}
+
+    def fake_popen(cmd, **kw):
+        launched["cmd"] = cmd
+        return _FakeProc()
+
+    monkeypatch.setattr(OA.subprocess, "Popen", fake_popen)
+    res = r.start("gpt", "screenshot the desktop", surface=surface, real_ok=True)
+    assert res["ok"], res
+    r._thread.join(timeout=10)
+    assert launched, "Popen was never reached — codex launch died pre-spawn"
+    return launched["cmd"]
+
+
+def test_codex_desktop_disables_playwright_mcp(monkeypatch, tmp_path):
+    """The bug: on a desktop surface, codex kept the browser Playwright MCP and
+    GPT called browser_take_screenshot → "only sees the browser screen". Fix
+    passes -c mcp_servers.playwright.enabled=false so its only screenshot tool
+    is the surface-aware control MCP (mirrors the claude path's server routing)."""
+    cmd = _codex_cmd_for_surface(monkeypatch, tmp_path, "desktop-sandbox")
+    assert "mcp_servers.playwright.enabled=false" in cmd
+
+
+def test_codex_desktop_real_disables_playwright_mcp(monkeypatch, tmp_path):
+    cmd = _codex_cmd_for_surface(monkeypatch, tmp_path, "desktop-real")
+    assert "mcp_servers.playwright.enabled=false" in cmd
+
+
+def test_codex_browser_keeps_playwright_mcp(monkeypatch, tmp_path):
+    """Browser surface must NOT disable Playwright — it's the whole toolset there."""
+    cmd = _codex_cmd_for_surface(monkeypatch, tmp_path, "browser")
+    assert "mcp_servers.playwright.enabled=false" not in cmd
 
 
 def test_stop_arms_kill_switch(runner, tmp_path):

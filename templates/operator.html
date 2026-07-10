@@ -13,7 +13,7 @@
       <span class="op-titlewrap" id="op-brand" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="switch surface">
         <span class="op-brand-text">
           <span class="op-title">Operator</span>
-          <span class="op-verline"><span class="op-ver">v1.0.3</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+          <span class="op-verline"><span class="op-ver">1.0.9</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
         </span>
         <svg class="op-brand-caret" viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1.5l4 3.5 4-3.5"></path></svg>
       </span>
@@ -184,12 +184,28 @@
       <img class="op-view" id="op-view" alt="">
       <div class="op-lp" id="op-lp" hidden>
         <div class="op-lp-bar">
-          <span class="op-lp-title">SAVED TASKS</span>
+          <span class="op-lp-title">Saved tasks</span>
+          <!-- 🔍 filters the visible set (saved tasks, or examples when none saved) -->
+          <button type="button" class="op-lp-search" id="op-lp-search" aria-label="search tasks" title="Search tasks" aria-pressed="false" hidden>
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.2"></circle><path d="M10.2 10.2L14 14"></path></svg>
+          </button>
+          <!-- ↻ shuffles the example set; only shown in the empty/examples state -->
+          <button type="button" class="op-lp-refresh" id="op-lp-refresh" aria-label="show different examples" title="Show different examples" hidden>
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5V5H11"></path></svg>
+          </button>
           <button type="button" class="op-lp-close" id="op-lp-x" aria-label="close saved tasks" title="close">
             <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg>
           </button>
         </div>
+        <div class="op-lp-searchrow" id="op-lp-searchrow" hidden>
+          <svg class="op-lp-searchrow-ic" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.2"></circle><path d="M10.2 10.2L14 14"></path></svg>
+          <input type="text" class="op-lp-searchinput" id="op-lp-searchinput" placeholder="Search saved tasks…" autocomplete="off" spellcheck="false" aria-label="search saved tasks">
+          <button type="button" class="op-lp-searchclear" id="op-lp-searchclear" aria-label="clear search" title="clear" hidden>
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg>
+          </button>
+        </div>
         <div class="op-lp-grid" id="op-lp-grid"></div>
+        <div class="op-lp-empty" id="op-lp-empty" hidden>No tasks match “<span id="op-lp-empty-q"></span>”</div>
       </div>
       <span class="op-kbhint">tap to focus/steer · type to send keys</span>
       <div class="op-agent-cursor" id="op-agent-cursor" aria-hidden="true">
@@ -258,7 +274,7 @@
 </div>
 
 <script>
-(function  {
+(function () {
   const op = document.getElementById('op');
   const view = document.getElementById('op-view');
   const stage = document.getElementById('op-stage');
@@ -280,7 +296,7 @@
     const up = (log.scrollHeight - log.scrollTop - log.clientHeight) > 2080;
     if (jumpBtn) jumpBtn.classList.toggle('show', up);
   }
-  if (jumpBtn) jumpBtn.addEventListener('click', () =>{
+  if (jumpBtn) jumpBtn.addEventListener('click', ()=>{
     log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
     // hide once we've arrived
     setTimeout(()=>{ jumpBtn.classList.remove('show'); }, 360);
@@ -369,6 +385,7 @@
   const overlaySub = document.getElementById('op-overlay-sub');
 
   const STREAM = "{{ url_for('operator.operator_stream') }}";
+  const FRAME  = "{{ url_for('operator.operator_frame') }}";
   const STATUS = "{{ url_for('operator.operator_status') }}";
   const STEER  = "{{ url_for('operator.operator_steer') }}";
   // hoisted: these are referenced by early init (applyMode→setFollowUp etc.) before
@@ -419,8 +436,7 @@
     // snap targets as fractions of the viewport height
     const SNAPS = [0.22, 0.5, 0.9];   // peek (room for the Message box + spinner), half, full
     function vh(){ return window.innerHeight; }
-    // header height (mobile, non-full) — the sheet must not grow past it (the owner: maximize
-    // was colliding with the host-app header).
+    // header height (mobile, non-full) — the sheet must not grow past it .
     function hdrH(){ const v = parseFloat(getComputedStyle(opEl).getPropertyValue('--op-hdr-h')); return v||0; }
     function setH(px){
       const maxH = vh() - hdrH() - 10;     // leave the header + a small gap clear
@@ -480,9 +496,9 @@
     // on page load: show + persist 30s
     show(30000);
     // tapping/focusing the browser stage → fade after 1.5s (they're steering now)
-    stage.addEventListener('focus', () =>{ show(0); hide(1500); });
+    stage.addEventListener('focus', ()=>{ show(0); hide(1500); });
     // clicking away from the stage → re-show + persist 10s
-    stage.addEventListener('blur', () =>{ show(10000); });
+    stage.addEventListener('blur', ()=>{ show(10000); });
   })();
 
   // lock page scroll while on the operator page; restore on leave
@@ -537,7 +553,7 @@
     const LOCK = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
     const FREE = _vpPrev || 'width=device-width, initial-scale=1';
     inp.addEventListener('focus', () => _vp.setAttribute('content', LOCK));
-    inp.addEventListener('blur', () => _vp.setAttribute('content', FREE));
+    inp.addEventListener('blur',  () => _vp.setAttribute('content', FREE));
   })();
   window.addEventListener('pagehide', () => {
     document.documentElement.classList.remove('op-locked');
@@ -562,7 +578,7 @@
     const flatBtn = document.getElementById('op-flat');
     const apply = (on)=>{ if (opEl) opEl.classList.toggle('op-flat', on); };
     try { apply(localStorage.getItem(FLAT_KEY) === '1'); } catch {}
-    if (flatBtn) flatBtn.addEventListener('click', () =>{
+    if (flatBtn) flatBtn.addEventListener('click', ()=>{
       const on = !(opEl && opEl.classList.contains('op-flat'));
       apply(on);
       try { localStorage.setItem(FLAT_KEY, on ? '1' : '0'); } catch {}
@@ -603,7 +619,7 @@
     if (sub !== undefined) setCardText(actSub, sub || '');
   }
   let _failRingT = null;
-  // idle status-card label: NEVER "Manual" (the owner) — it reflects the BROWSER state.
+  // idle status-card label: NEVER "Manual"  — it reflects the BROWSER state.
   // live feed → "Ready"; otherwise (connecting / signal lost / not yet attached) →
   // "Connecting". Independent of MAN/AUTO mode.
   function idleCardText() {
@@ -643,26 +659,53 @@
       setCardText(actTxt, idleCardText()); }, 1500);
   }
 
-  // ── stream w/ graceful reconnect ──
-  let reconnectT = null, backoff = 600;
-  // keep the LAST frame visible across reconnects (no jitter); only blank after
-  // a sustained cold period. The <img> is never hidden once it has a frame.
-  let _hasFrame = false, _lastErr = 0;
-  function connectStream() { if (reconnectT){clearTimeout(reconnectT);reconnectT=null;}
-    view.src = STREAM + "?t=" + Date.now(); }
-  function scheduleReconnect() {
-    // The src errored, so the browser is now showing the broken-image (?) glyph —
-    // we MUST reconnect fast to replace it (the server always yields a placeholder
-    // frame instantly, so a retry lands a frame in <100ms). Only back off if
-    // errors are storming (repeated within 1.5s).
-    const now = Date.now();
-    const storming = (now - _lastErr) < 1500;
-    _lastErr = now;
-    const delay = storming ? Math.min(backoff*1.6, 4000) : 120;  // near-instant on a one-off
-    if (storming) backoff = delay; else backoff = 600;
-    if (reconnectT) clearTimeout(reconnectT);
-    reconnectT = setTimeout(connectStream, delay);
+  // ── feed: self-clocking frame pump (replaces the MJPEG push stream) ──
+  // The push stream had no backpressure: a client that decodes slower than the
+  // feed produces (iPad Safari) buffered the excess and drifted PROGRESSIVELY
+  // behind live — near-live after a reconnect, seconds behind a minute later
+  // (2026-07-09). The pump fetches one frame, renders it, and only then asks
+  // for the next: it can NEVER queue more than one frame, so latency is
+  // bounded at ~1 frame in flight on any device or link. Fast clients pace at
+  // PUMP_MS (~10fps); slow ones self-throttle to what they can actually drain.
+  let backoff = 600;
+  let _hasFrame = false;
+  const PUMP_MS = 90;
+  const _sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+  // F1: lean frames on small screens / metered connections — tier=lo makes the
+  // server downscale + compress harder (a full-res frame per pump tick rips
+  // through mobile data). Read per fetch so rotation/Save-Data flips adapt live.
+  const _mqNarrow = matchMedia('(max-width: 820px)');
+  function _feedTier() {
+    const c = navigator.connection || {};
+    return (_mqNarrow.matches || c.saveData ||
+            /(^|\b)(slow-)?2g|3g\b/.test(c.effectiveType || '')) ? 'lo' : 'hi';
   }
+  let _pumpOn = false, _prevBlobUrl = null, _pumpFails = 0;
+  async function _pump() {
+    if (_pumpOn) return;   // one pump per page, ever
+    _pumpOn = true;
+    while (true) {
+      if (document.visibilityState !== 'visible') { await _sleepMs(350); continue; }
+      try {
+        const r = await fetch(FRAME + "?t=" + Date.now() + "&tier=" + _feedTier(),
+                              {cache: "no-store"});
+        if (!r.ok) throw new Error("http " + r.status);
+        const b = await r.blob();
+        const u = URL.createObjectURL(b);
+        view.src = u;                    // fires 'load' → signalOk (same as before)
+        if (_prevBlobUrl) URL.revokeObjectURL(_prevBlobUrl);
+        _prevBlobUrl = u;
+        _pumpFails = 0; backoff = 600;
+        await _sleepMs(PUMP_MS);
+      } catch (_) {
+        _pumpFails++;
+        if (_pumpFails === 2) signalLost();   // one blip ≠ lost; two in a row is
+        await _sleepMs(Math.min(backoff *= 1.6, 4000));
+      }
+    }
+  }
+  function connectStream() { _pump(); }          // legacy callers just nudge the pump
+  function scheduleReconnect() { /* the pump retries itself — kept for old callers */ }
   let _lastImgLoad = 0;
   let _wasLost = false;
   let _desktopNoFrame = false;   // last poll said a desktop surface has no live frame
@@ -701,7 +744,9 @@
       try { setCardText(actTxt, idleCardText()); } catch(_){} } }
   view.addEventListener('load', () => { _hasFrame = true; _lastImgLoad = Date.now();
     signalOk(); backoff = 600; });   // signalOk owns visibility (skips it when desktop-idle)
-  view.addEventListener('error', () => { signalLost(); scheduleReconnect(); });
+  // a single bad blob isn't a lost signal — the pump's consecutive-failure
+  // rule owns SIGNAL LOST; the next pumped frame simply replaces this one.
+  view.addEventListener('error', () => {});
   connectStream();
   // tab was backgrounded (browser suspends the MJPEG + timers) → on return,
   // immediately reconnect the stream + re-poll so the feed snaps back fast.
@@ -741,8 +786,8 @@
         : '';
       // The URL-bar slot shows the live SITE FAVICON, falling back to the padlock
       // when the icon can't load. (The HTTPS lock proper lives on the page-status
-      // dot — see setLockDot — so the favicon keeps its home here;
-      // reverting claude-g's v0.7.0 lock-in-favicon-slot swap.) Cache the host so
+      // dot — see setLockDot — so the favicon keeps its home here; the owner 2026-07-02
+      // reverting bricky's v0.7.0 lock-in-favicon-slot swap.) Cache the host so
       // the img doesn't reflash every poll.
       let host = '';
       try { host = (https || http) ? new URL(url).hostname : ''; } catch {}
@@ -762,7 +807,7 @@
       lockEl.className = 'op-lock' + (https ? ' secure' : (http ? ' insecure' : ''));
       lockEl.title = '';   // suppress native tooltip; we render a styled one
       lockEl.dataset.tip = (host ? host + ' — ' : '') + (https ? 'Secured with HTTPS' : (http ? 'Not secure' : ''));
-      // The page-status dot doubles as the HTTPS lock.
+      // The page-status dot doubles as the HTTPS lock .
       setLockDot(https, http);
     }
     // urlEl is an editable input; don't clobber it while the user is typing in it
@@ -773,7 +818,7 @@
   // it (closed shackle = https, open = http). Colour rides on the .loading/.err
   // classes act() toggles, so it still shows nav status. No scheme (blank/search)
   // → clear the glyph and the dot reverts to the plain filled status dot via
-  // .op-dotstat:empty. (.)
+  // .op-dotstat:empty. 
   const dotEl = document.getElementById('op-dotstat');
   function setLockDot(https, http) {
     if (!dotEl) return;
@@ -1012,7 +1057,7 @@
     const btn = document.createElement('button'); btn.type='button'; btn.className='op-takeover-btn';
     const bl = document.createElement('span'); bl.className='tk-lab'; bl.textContent='Take control';
     btn.appendChild(bl);   // no emoji — clean text pill
-    btn.addEventListener('click', () => takeControl(card));
+    btn.addEventListener('click', ()=> takeControl(card));
     card.appendChild(btn);
     log.appendChild(card); _trimOnly(); scrollToBottom(); saveSession();
     return card;
@@ -1020,7 +1065,7 @@
 
   // ── Operator-style task group ("Worked for Nm" + indented steps) ──
   let _task = null, _taskStart = 0, _stepCount = 0;
-  const BOT_EMOJI = { 'claude-b':'🦆', 'claude-a':'💣', 'gpt':'🤖', 'gemma':'✨' };
+  const BOT_EMOJI = { 'claude-a':'🤖', 'claude-b':'🤖', 'gpt':'🤖', 'gemma':'✨' };
   function botEmoji(b){ return BOT_EMOJI[b] || '🤖'; }
   // gemma rides on the agy runtime; its picker FACE shows the real Gemini logo
   // (gradient 4-point star) instead of a flat emoji. HTML <option> text can't
@@ -1049,7 +1094,7 @@
     Resize:'📐', 'Handle dialog':'💬', 'Read console':'🖥️', 'Inspect network':'📡', 'Save PDF':'📄',
     Searching:'🔍', Fetching:'🔗', 'Running command':'⌨️', 'Reading file':'📄',
     'Searching files':'🔍', 'Finding files':'📁', 'Writing file':'✏️', 'Editing file':'✏️',
-    'Checking quote':'📈', 'Checking data':'📊',
+    'Checking data':'📈', 'Checking data':'📊',
     'Searching web':'🌐', 'Searching the web':'🌐', 'Searching memory':'🧠', 'Searching files':'🔍',
     Recalling:'🧠', 'Checking memory':'🧠', Fetching:'🔗', 'Fetching messages':'💬',
     Listing:'📋', 'Listing resources':'📋', 'Listing files':'📁', 'Reading resource':'📖',
@@ -1149,7 +1194,7 @@
     const steps = _task.querySelector('.op-task-steps');
     // COALESCE consecutive identical actions: if the last step is an act-step with
     // the SAME label+detail, bump an animated ×N badge in place instead of spitting
-    // out a new line (the owner — repeated clicks/screenshots shouldn't flood the trace).
+    // out a new line .
     const _last = steps && steps.lastElementChild;
     const _sig = (label||'') + '' + (detail||'');
     const _noCoalesce = /^(Browsing|Navigating|Going back|Going forward)$/.test(label||'');   // navigations are milestones — never merge
@@ -1192,9 +1237,9 @@
       return;
     }
     // coordinate-click detail e.g. "(420, 315)" or a drag "(120, 80) → (300, 240)":
-    // show it INLINE after the label in lighter, smaller, muted text (the owner's preferred).
+    // show it INLINE after the label in lighter, smaller, muted text .
     const _isCoord = detail && /^\(\s*-?\d/.test(detail.trim());
-    // a short duration like '2s' / '1m 3s' also goes INLINE (the owner: Waiting matches Clicking)
+    // a short duration like '2s' / '1m 3s' also goes INLINE 
     const _isDur = detail && /^\d+(\.\d+)?\s*(ms|s|m|h)(\s+\d+\s*(s|m))?$/.test(detail.trim());
     // a short element label (e.g. "Button", "Submit") also goes inline — not a URL/path/command, not long.
     const _dt = (detail||'').trim();
@@ -1300,8 +1345,8 @@
   }
   const fontDec = document.getElementById('op-font-dec');
   const fontInc = document.getElementById('op-font-inc');
-  if (fontDec) fontDec.addEventListener('click', () => scaleKeepingView(-SIZE_STEP));
-  if (fontInc) fontInc.addEventListener('click', () => scaleKeepingView(+SIZE_STEP));
+  if (fontDec) fontDec.addEventListener('click', ()=> scaleKeepingView(-SIZE_STEP));
+  if (fontInc) fontInc.addEventListener('click', ()=> scaleKeepingView(+SIZE_STEP));
 
 
 
@@ -1430,8 +1475,8 @@
       // two-step consent, inline in the row — every session, no shortcuts
       row.classList.add('confirming');
       row.innerHTML = '<span class="op-surf-ico">' + _SURF_ICON[s.key] + '</span>'
-        + '<span class="op-surf-body"><span class="op-surf-name">Take control of the computer?</span>'
-        + '<span class="op-surf-hint">Operator will use your mouse and keyboard.</span></span>'
+        + '<span class="op-surf-body"><span class="op-surf-name">Enter computer mode?</span>'
+        + '<span class="op-surf-hint">Operator will have unrestricted control of your desktop.</span></span>'
         + '<span class="op-surf-confirm"><button type="button" class="op-surf-yes">Confirm</button>'
         + '<button type="button" class="op-surf-no">Cancel</button></span>';
       row.querySelector('.op-surf-yes').addEventListener('click', (e) => {
@@ -1642,7 +1687,7 @@
     });
   }
 
-  // Code-block scroll trap fix (the owner): a horizontally-scrollable <pre> in a chat
+  // Code-block scroll trap fix : a horizontally-scrollable <pre> in a chat
   // bubble swallows vertical wheel events, so scrolling with the cursor over code
   // froze the chat. Delegate: if a wheel happens inside a <pre> that has no vertical
   // overflow of its own, forward the vertical delta to the log so the chat scrolls.
@@ -1683,7 +1728,7 @@
   // SESSION-ONLY by design — never seeded from storage, always false on load. A refresh
   // or a manual MAN flip must NOT resurrect Finish-up (it's not a real pending hand-off).
   let _handedToUser = false;
-  (async  => {
+  (async () => {
     try { const d = await (await fetch(DRIVERS_URL)).json();
       (d.drivers||[]).forEach(b => { const o=document.createElement('option');
         o.value=b.key; o.textContent=botEmoji(b.key)+' '+b.label; o.title=b.label; caretSel.appendChild(o); });
@@ -1711,53 +1756,253 @@
     'airbnb.com':'Airbnb', 'yelp.com':'Yelp', 'linkedin.com':'LinkedIn',
     'github.com':'GitHub', 'zillow.com':'Zillow', 'spotify.com':'Spotify',
     'lichess.org':'Lichess', 'alltrails.com':'AllTrails',
+    'flights.google.com':'Google Flights', 'target.com':'Target', 'costco.com':'Costco',
+    'wikipedia.org':'Wikipedia', 'imdb.com':'IMDb', 'goodreads.com':'Goodreads',
+    'redfin.com':'Redfin', 'kayak.com':'Kayak', 'seatgeek.com':'SeatGeek',
+    'craigslist.org':'Craigslist', 'etsy.com':'Etsy', 'weather.gov':'Weather.gov',
+    'espn.com':'ESPN', 'notion.so':'Notion', 'trello.com':'Trello',
+    'nytimes.com':'NYTimes', 'arxiv.org':'arXiv', 'stackoverflow.com':'Stack Overflow',
+    'reddit.com':'Reddit', 'wolframalpha.com':'WolframAlpha', 'archive.org':'Archive.org',
+    'producthunt.com':'Product Hunt', 'coursera.org':'Coursera', 'ikea.com':'IKEA',
+    'wikihow.com':'wikiHow', 'yellowpages.com':'Yellow Pages', 'nih.gov':'NIH',
+    'sfmoma.org':'SFMOMA', 'tripadvisor.com':'Tripadvisor', 'homedepot.com':'Home Depot',
+    'grubhub.com':'Grubhub', 'chewy.com':'Chewy', 'petco.com':'Petco',
+    'bestbuy.com':'Best Buy', 'ticketmaster.com':'Ticketmaster',
+    'investopedia.com':'Investopedia', 'khanacademy.org':'Khan Academy',
+    'news.ycombinator.com':'Hacker News', 'duolingo.com':'Duolingo',
+    'rottentomatoes.com':'Rotten Tomatoes', 'bandcamp.com':'Bandcamp',
+    'vivino.com':'Vivino', 'strava.com':'Strava', 'fandango.com':'Fandango',
+    'offerup.com':'OfferUp', 'bookshop.org':'Bookshop.org',
   };
+
+  // Deterministic rotating pick of N examples from the pool. The "which N"
+  // changes every 6h on its own (a time-bucket seeds the shuffle) and the ↻
+  // button advances the bucket by one — no storage, same for everyone, stable
+  // within a window. A tiny seeded PRNG (mulberry32) + Fisher–Yates gives a
+  // clean shuffle from an integer seed.
+  const _LP_ROTATE_HOURS = 6, _LP_SHOW = 8;
+  function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+  function _pickExamples(offset){
+    const bucket = Math.floor(Date.now()/(_LP_ROTATE_HOURS*3600*1000)) + (offset|0);
+    const rng = _mulberry32(bucket >>> 0);
+    const a = _LP_EXAMPLE_POOL.slice();
+    for (let i=a.length-1; i>0; i--){ const j=Math.floor(rng()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+    return a.slice(0, _LP_SHOW);
+  }
   const _siteLabel = (dom) => _SITE_LABELS[dom.replace(/^www\./,'')] || dom;
 
-  // Example tasks shown when the user has none saved. Specific, descriptive
-  // titles; clicking one loads it into the composer to tweak (and connect the
-  // site) rather than running blind. Marked isExample so the card reads "Go".
-  const _LP_EXAMPLES = [
+  // Example-task POOL — shown only when the user has none saved. 48 tasks, each
+  // on a UNIQUE site; a rotating 8 are surfaced at a time (see _pickExamples).
+  // Specific, descriptive titles; clicking one loads it into the composer to
+  // tweak (and connect the site) rather than running blind. isExample → "Go".
+  const _LP_EXAMPLE_POOL = [
     { name: 'Book a table for two at Mott 32', prompt: 'On OpenTable, find a table for two at Mott 32 this Friday around 7pm and show me what times are available.', sites: ['opentable.com'], isExample: true },
-    { name: 'Order sushi for dinner from a top-rated spot', prompt: 'Open Uber Eats, find a top-rated sushi restaurant near me that can deliver now, and build a cart for two — stop before placing the order so I can review it.', sites: ['ubereats.com'], isExample: true },
+    { name: 'Order sushi from a top-rated spot', prompt: 'Open Uber Eats, find a top-rated sushi restaurant near me that can deliver now, and build a cart for two — stop before placing the order so I can review it.', sites: ['ubereats.com'], isExample: true },
     { name: 'Restock this week’s grocery staples', prompt: 'On Instacart, fill my cart with this week’s staples: milk, eggs, bread, coffee, bananas, and chicken. Stop at checkout for me to confirm.', sites: ['instacart.com'], isExample: true },
-    { name: 'Find the cheapest flights to Hawaii', prompt: 'Search Google Flights for round-trip fares from my city to Hawaii next month, 7–10 nights, and list the three cheapest reasonable options with times.', sites: ['google.com'], isExample: true },
+    { name: 'Find the cheapest flights to Hawaii', prompt: 'Search Google Flights for round-trip fares from my city to Hawaii next month, 7–10 nights, and list the three cheapest reasonable options with times.', sites: ['flights.google.com'], isExample: true },
     { name: 'Track my in-transit Amazon orders', prompt: 'Check my recent Amazon orders and tell me which items are still in transit and when each is expected to arrive.', sites: ['amazon.com'], isExample: true },
-    { name: 'Brief me on today’s top news stories', prompt: 'Open Reuters and Bloomberg and give me a short brief of today’s top business and world stories.', sites: ['reuters.com','bloomberg.com'], isExample: true },
+    { name: 'Brief me on today’s top stories', prompt: 'Open Reuters and give me a short brief of today’s top business and world stories, grouped by theme.', sites: ['reuters.com'], isExample: true },
     { name: 'Compare well-reviewed Barcelona hotels', prompt: 'On Booking.com, find three well-reviewed hotels in central Barcelona for a weekend next month under $200/night and summarize the trade-offs.', sites: ['booking.com'], isExample: true },
-    { name: 'Plan a Saturday hike near me', prompt: 'On AllTrails, find three well-rated well-rated day hikes near me for this Saturday, and summarize distance, elevation, and difficulty for each.', sites: ['alltrails.com'], isExample: true },
+    { name: 'Plan a Saturday hike nearby', prompt: 'On AllTrails, find three well-rated day hikes near me for this Saturday, and summarize distance, elevation, and difficulty for each.', sites: ['alltrails.com'], isExample: true },
+    { name: 'Find a highly-rated dinner spot tonight', prompt: 'On Yelp, find three highly-rated restaurants near me open for dinner tonight in the $$ range, and summarize what each is known for.', sites: ['yelp.com'], isExample: true },
+    { name: 'Build a dinner-party playlist', prompt: 'On Spotify, build me a 2-hour dinner-party playlist — warm, low-key, mostly instrumental — and show the tracklist before saving it.', sites: ['spotify.com'], isExample: true },
+    { name: 'Check the weekend forecast', prompt: 'On Weather.gov, pull the detailed forecast for my area Friday through Sunday and tell me the best window for an outdoor plan.', sites: ['weather.gov'], isExample: true },
+    { name: 'Shortlist condos under $600k', prompt: 'On Redfin, find three 2-bed condos near me listed under $600k, and summarize square footage, HOA, and days on market for each.', sites: ['redfin.com'], isExample: true },
+    { name: 'Price a 5-night trip to Mexico City', prompt: 'On Kayak, price a 5-night trip to Mexico City next month — flights plus a central hotel — and give me two options at different budgets.', sites: ['kayak.com'], isExample: true },
+    { name: 'Find tickets to an upcoming game', prompt: 'On SeatGeek, find pairs of tickets to the next home game for my team, under $150 each, and list the three best value seats.', sites: ['seatgeek.com'], isExample: true },
+    { name: 'Read up on how mRNA vaccines work', prompt: 'On Wikipedia, give me a clear plain-English summary of how mRNA vaccines work, with the key milestones in their development.', sites: ['wikipedia.org'], isExample: true },
+    { name: 'Pick a sci-fi movie for tonight', prompt: 'On IMDb, find three well-reviewed sci-fi films from the last five years I could stream tonight, with a one-line hook for each.', sites: ['imdb.com'], isExample: true },
+    { name: 'Build a literary-fiction reading list', prompt: 'On Goodreads, put together a five-book summer reading list of literary fiction with high ratings, and tell me what each is about.', sites: ['goodreads.com'], isExample: true },
+    { name: 'Compare 65-inch 4K TVs under $800', prompt: 'On Best Buy, compare three 65-inch 4K TVs under $800 and summarize the trade-offs in picture, ports, and reviews.', sites: ['bestbuy.com'], isExample: true },
+    { name: 'Price a bulk grocery run', prompt: 'On Costco, build a cart for a month of household staples for two people and total it up — stop before checkout so I can review.', sites: ['costco.com'], isExample: true },
+    { name: 'Find men’s running shoes under $80', prompt: 'On Target, find well-reviewed men’s running shoes in size 10 under $80, and list the three best options with prices.', sites: ['target.com'], isExample: true },
+    { name: 'Handmade gift ideas for a home cook', prompt: 'On Etsy, find five unique handmade gift ideas under $50 for someone who loves cooking, and summarize each.', sites: ['etsy.com'], isExample: true },
+    { name: 'Plan an IKEA trip for a home office', prompt: 'On IKEA, put together a home-office setup — desk, chair, shelving, lighting — under $600 and give me the shopping list with prices.', sites: ['ikea.com'], isExample: true },
+    { name: 'Source a weekend DIY project', prompt: 'On Home Depot, price out the materials for building a raised garden bed and give me the parts list with a total.', sites: ['homedepot.com'], isExample: true },
+    { name: 'Catch up on the sports scores', prompt: 'On ESPN, give me last night’s scores for the NBA and the standings for my team’s division.', sites: ['espn.com'], isExample: true },
+    { name: 'Read the day’s deep-dive story', prompt: 'On the New York Times, find today’s most-read long-form feature and give me a tight summary plus why it matters.', sites: ['nytimes.com'], isExample: true },
+    { name: 'Survey research on retrieval-augmented generation', prompt: 'On arXiv, find three recent papers on retrieval-augmented generation and summarize each abstract in plain English.', sites: ['arxiv.org'], isExample: true },
+    { name: 'Fix a Python “list index out of range”', prompt: 'On Stack Overflow, find the top answer for a Python “list index out of range” in a loop and explain the fix simply.', sites: ['stackoverflow.com'], isExample: true },
+    { name: 'Gauge the mood on r/personalfinance', prompt: 'On Reddit, skim r/personalfinance’s top posts this week and give me the three most common questions people are asking.', sites: ['reddit.com'], isExample: true },
+    { name: 'Work out a $30k loan’s monthly payment', prompt: 'On WolframAlpha, compute the monthly payment on a $30,000 loan at 6% over 5 years and show the total interest.', sites: ['wolframalpha.com'], isExample: true },
+    { name: 'Find a free data-analysis course', prompt: 'On Coursera, find three highly-rated free courses on data analysis for beginners and summarize what each covers.', sites: ['coursera.org'], isExample: true },
+    { name: 'See what’s launching on Product Hunt today', prompt: 'On Product Hunt, tell me the top five products launching today and what problem each one solves.', sites: ['producthunt.com'], isExample: true },
+    { name: 'Look up how to descale a coffee machine', prompt: 'On wikiHow, find a clear step-by-step guide to descaling a coffee machine and summarize the steps for me.', sites: ['wikihow.com'], isExample: true },
+    { name: 'Plan an afternoon at SFMOMA', prompt: 'On the SFMOMA site, check the current exhibitions and hours, and suggest a two-hour visit plan for this weekend.', sites: ['sfmoma.org'], isExample: true },
+    { name: 'Research the top things to do in Lisbon', prompt: 'On Tripadvisor, find the top five things to do in Lisbon and group them into a rough two-day itinerary.', sites: ['tripadvisor.com'], isExample: true },
+    { name: 'Compare grain-free dog foods for a medium breed', prompt: 'On Chewy, compare three well-reviewed grain-free dog foods for a medium breed, and summarize ingredients and price per pound.', sites: ['chewy.com'], isExample: true },
+    { name: 'Look up healthy sleep habits for adults', prompt: 'On the NIH site, find plain-language guidance on healthy sleep habits for adults and give me the key takeaways.', sites: ['nih.gov'], isExample: true },
+    { name: 'Find concert tickets for this month', prompt: 'On Ticketmaster, find shows near me this month for the kind of music I like, and list three with dates and starting prices under $120.', sites: ['ticketmaster.com'], isExample: true },
+    { name: 'Understand what an ETF expense ratio is', prompt: 'On Investopedia, explain what an ETF expense ratio is in plain English, why it matters, and what counts as high vs. low.', sites: ['investopedia.com'], isExample: true },
+    { name: 'Start learning linear algebra', prompt: 'On Khan Academy, find the intro linear-algebra track and lay out the first few lessons I should do in order.', sites: ['khanacademy.org'], isExample: true },
+    { name: 'See what’s trending in tech today', prompt: 'On Hacker News, give me the five top stories on the front page right now and a one-line take on why each is interesting.', sites: ['news.ycombinator.com'], isExample: true },
+    { name: 'Plan a 10-minute daily Spanish habit', prompt: 'On Duolingo, look at the Spanish course structure and suggest a realistic 10-minute-a-day plan for a beginner.', sites: ['duolingo.com'], isExample: true },
+    { name: 'Find a well-reviewed comedy to stream', prompt: 'On Rotten Tomatoes, find three comedies from the last few years with strong critic and audience scores, with a one-line hook for each.', sites: ['rottentomatoes.com'], isExample: true },
+    { name: 'Discover new indie music', prompt: 'On Bandcamp, find three under-the-radar indie albums released recently that fit a mellow, atmospheric vibe, and tell me about each.', sites: ['bandcamp.com'], isExample: true },
+    { name: 'Pick a crowd-pleasing wine under $25', prompt: 'On Vivino, find three highly-rated red wines under $25 that pair well with steak, and summarize the tasting notes.', sites: ['vivino.com'], isExample: true },
+    { name: 'Find a beginner 5K training plan', prompt: 'On Strava, look up popular beginner 5K running routes near me and outline a simple couch-to-5K style weekly plan.', sites: ['strava.com'], isExample: true },
+    { name: 'Check movie showtimes for tonight', prompt: 'On Fandango, find what’s playing at theaters near me tonight after 7pm, and list three options with showtimes.', sites: ['fandango.com'], isExample: true },
+    { name: 'Hunt for a used desk locally', prompt: 'On OfferUp, find three well-priced used standing or writing desks near me under $150, and summarize condition and pickup location.', sites: ['offerup.com'], isExample: true },
+    { name: 'Order books from an indie shop', prompt: 'On Bookshop.org, build a cart of three acclaimed recent novels that support local bookstores — stop before checkout so I can review.', sites: ['bookshop.org'], isExample: true },
   ];
 
   function initLaunchpad(){
     const lp = document.getElementById('op-lp');
     const grid = document.getElementById('op-lp-grid');
-    if (!lp || !grid || op.classList.contains('op-demo')) return;
+    if (!lp || !grid) return;
     // Saved tasks are a browser-surface concept — they carry site connectors and
     // steer a web page. Don't show the launchpad on sandbox/computer surfaces.
     if (typeof _isGameSurface === 'function' && _isGameSurface()) { lp.hidden = true; return; }
     if (log.children.length) return;             // conversation already going
     const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
+    const refreshBtn = document.getElementById('op-lp-refresh');
+    const searchBtn  = document.getElementById('op-lp-search');
+    const searchRow  = document.getElementById('op-lp-searchrow');
+    const searchIn   = document.getElementById('op-lp-searchinput');
+    const searchClr  = document.getElementById('op-lp-searchclear');
+    const emptyEl    = document.getElementById('op-lp-empty');
+    const emptyQEl   = document.getElementById('op-lp-empty-q');
+    let exOffset = 0;   // ↻ advances the example rotation bucket
+    let searchQ  = '';  // live task filter (empty = default view)
+    let _lpEmpty = true; // current launchpad state: true = examples, false = saved tasks
+    let savedPage = 0;  // which window of 8 saved tasks is showing (auto-cycle pages through)
+    const _LP_PAGE = 8; // cards per launchpad page
+
+    // Match a task against the query across name + prompt + site connectors, so
+    // "amazon" finds a task whose only amazon signal is a site pill.
+    function _taskMatches(t, q){
+      if (!q) return true;
+      const hay = [t.name, t.prompt, (t.sites || []).join(' ')].join(' ').toLowerCase();
+      return q.split(/\s+/).every(w => hay.includes(w));   // AND across words
+    }
+
+    // (Re)render the grid. 🔍 search works in BOTH states: it filters the
+    // rotating examples when you have none saved, and your saved tasks when you
+    // do (across ALL of them, not just the first 8). With no active query, the
+    // saved-tasks view stays capped at 8 so it doesn't sprawl. ↻ shuffles and is
+    // examples-only; 🔍 is always available whenever the launchpad is open.
+    function renderGrid(isEmpty){
+      _lpEmpty = isEmpty;   // remember which set we're showing (handlers re-render this state)
+      const source = isEmpty ? _pickExamples(exOffset) : window._opTasks;
+      let items, filtering = false;
+      if (searchQ) {
+        filtering = true;
+        items = source.filter(t => _taskMatches(t, searchQ));   // all matches, uncapped
+      } else if (isEmpty) {
+        items = source;                                          // examples: _pickExamples already caps at 8
+      } else {
+        // saved tasks: show one page of 8; auto-cycle pages through the rest.
+        const pages = Math.max(1, Math.ceil(source.length / _LP_PAGE));
+        savedPage = ((savedPage % pages) + pages) % pages;       // wrap + guard against shrink
+        items = source.slice(savedPage * _LP_PAGE, savedPage * _LP_PAGE + _LP_PAGE);
+      }
+      grid.textContent = '';
+      grid.classList.toggle('op-lp-examples', isEmpty);
+      items.forEach(t => grid.appendChild(buildLpCard(t, lp)));
+      // "Save a task" tile is a create affordance, not a result — drop it while filtering
+      if (!filtering) {
+        const add = document.createElement('button'); add.type = 'button'; add.className = 'op-lp-card op-lp-new';
+        add.textContent = '＋ Save a task';
+        add.addEventListener('click', () => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
+        grid.appendChild(add);
+      }
+      if (emptyEl) {
+        const noHits = filtering && !items.length;
+        emptyEl.hidden = !noHits;
+        if (noHits && emptyQEl) emptyQEl.textContent = searchQ;
+      }
+      // ↻ shuffles examples (examples-state only); 🔍 is always shown so search is
+      // reachable whether you're looking at your saved tasks or the examples.
+      if (refreshBtn) refreshBtn.hidden = !isEmpty;
+      if (searchBtn)  searchBtn.hidden  = false;
+    }
+
     (async () => {
       let tasks = [];
       try { const d = await (await fetch(TASKS_URL)).json(); tasks = d.ok ? (d.tasks || []) : []; } catch {}
       if (log.children.length) return;           // something started while fetching
+      window._opTasks = tasks;
       const isEmpty = !tasks.length;
-      const items = isEmpty ? _LP_EXAMPLES : tasks.slice(0, 7);
-      grid.textContent = '';
-      grid.classList.toggle('op-lp-examples', isEmpty);
-      items.forEach(t => grid.appendChild(buildLpCard(t, lp)));
-      const add = document.createElement('button'); add.type = 'button'; add.className = 'op-lp-card op-lp-new';
-      add.textContent = '＋ Save a task';
-      add.addEventListener('click', () => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
-      grid.appendChild(add);
+      renderGrid(isEmpty);
+      if (refreshBtn && !refreshBtn._wired) { refreshBtn._wired = true;
+        refreshBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          exOffset++;                       // next rotation bucket
+          renderGrid(true);                 // ↻ only exists in the empty state
+          refreshBtn.classList.remove('op-spin'); void refreshBtn.offsetWidth;  // restart the spin
+          refreshBtn.classList.add('op-spin');
+        });
+      }
+      if (searchBtn && !searchBtn._wired) { searchBtn._wired = true;
+        const setSearchOpen = (open) => {
+          searchRow.hidden = !open;
+          searchBtn.setAttribute('aria-pressed', open ? 'true' : 'false');
+          searchBtn.classList.toggle('op-lp-search-on', open);
+          searchIn.placeholder = _lpEmpty ? 'Search examples…' : 'Search saved tasks…';
+          if (open) { searchIn.focus(); searchIn.select(); }
+          else { searchQ = ''; searchIn.value = ''; if (searchClr) searchClr.hidden = true; renderGrid(_lpEmpty); }
+        };
+        searchBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          setSearchOpen(searchRow.hidden);   // toggle
+        });
+        searchIn.addEventListener('input', () => {
+          searchQ = searchIn.value.trim().toLowerCase();
+          if (searchClr) searchClr.hidden = !searchIn.value;
+          renderGrid(_lpEmpty);
+        });
+        searchIn.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSearchOpen(false); searchBtn.focus(); }
+        });
+        if (searchClr) searchClr.addEventListener('click', (e) => {
+          e.stopPropagation(); searchIn.value = ''; searchQ = ''; searchClr.hidden = true;
+          renderGrid(_lpEmpty); searchIn.focus();
+        });
+      }
       const xBtn = document.getElementById('op-lp-x');
       if (xBtn && !xBtn._wired) { xBtn._wired = true;
         xBtn.addEventListener('click', (e) => { e.stopPropagation(); lp.hidden = true; }); }
       // the X is the ONLY dismiss — a stray backdrop tap must not drop the
-      // launchpad
+      // launchpad 
+
+      // ── Auto-cycle (#1): rotate the visible cards every 15s with a smooth
+      // cross-fade. Examples advance the shuffle bucket; saved tasks page through
+      // in windows of 8. Frozen while the user is searching or hovering a card, or
+      // when the tab is backgrounded — never yank a card out from under a click. ──
+      const CYCLE_MS = 15000;
+      let _hovered = false;
+      grid.addEventListener('pointerenter', () => { _hovered = true; });
+      grid.addEventListener('pointerleave', () => { _hovered = false; });
+      function _cycleTick(){
+        if (lp.hidden) return;                                   // launchpad dismissed
+        if (searchQ || !searchRow.hidden) return;                // mid-search — leave it be
+        if (_hovered) return;                                    // about to click a card
+        if (document.hidden) return;                             // backgrounded tab
+        // Only cycle when there's more than one page/bucket to show.
+        if (!_lpEmpty) {
+          const pages = Math.ceil((window._opTasks || []).length / _LP_PAGE);
+          if (pages <= 1) return;                                // ≤8 saved tasks: nothing to rotate
+          savedPage++;
+        } else {
+          exOffset++;                                            // next example bucket
+        }
+        // cross-fade: fade the grid out, swap contents, fade back in (staggered
+        // per-card pop re-fires on the fresh cards for a lively re-entry).
+        grid.classList.add('op-lp-fading');
+        setTimeout(() => {
+          renderGrid(_lpEmpty);
+          grid.classList.remove('op-lp-fading');
+        }, 240);                                                 // matches --op-lp-fade in CSS
+      }
+      if (!grid._cycle) grid._cycle = setInterval(_cycleTick, CYCLE_MS);
+
       lp.hidden = false;
       new MutationObserver((m, obs) => {
-        if (log.children.length) { lp.hidden = true; obs.disconnect(); }
+        if (log.children.length) {
+          lp.hidden = true;
+          if (grid._cycle) { clearInterval(grid._cycle); grid._cycle = null; }   // no leaked timer
+          obs.disconnect();
+        }
       }).observe(log, { childList: true });
     })();
   }
@@ -1814,8 +2059,17 @@
       ed.addEventListener('click', (e) => { e.stopPropagation(); lp.hidden = true; window._opEditSavedTask(t); });
       c.appendChild(ed);
     }
-    // ONLY the Go button launches — a tap anywhere else on the
-    // card is inert, so browsing the grid can't accidentally fire a task.
+    // Go launches; a tap anywhere else on the card loads the prompt into the
+    // composer to edit before sending  — never auto-fires, so
+    // browsing the grid can't accidentally run a task. Go/Edit stopPropagation,
+    // so they don't also trigger this.
+    c.addEventListener('click', () => {
+      lp.hidden = true;
+      input.value = t.prompt || '';
+      if (typeof autoGrow === 'function') autoGrow();
+      if (typeof refreshSendButton === 'function') refreshSendButton();
+      input.focus();
+    });
     return c;
   }
   // cron → short human label (v0.7.0): reverses the shapes the scheduler UI
@@ -1845,7 +2099,7 @@
   function initNewTaskModal(){
     const veil = document.getElementById('op-nt-veil');
     const btn  = document.getElementById('op-save-task');
-    if (!veil || !btn || op.classList.contains('op-demo')) return;
+    if (!veil || !btn) return;
     const name = document.getElementById('op-nt-name');
     const prompt = document.getElementById('op-nt-prompt');
     const sitesIn = document.getElementById('op-nt-sites');
@@ -1863,11 +2117,11 @@
     // Enter pills anything; Backspace on empty pops the last.
     const COMMON = [
       // MCPs / tools first
-      {v:'playwright', tool:true}, {v:'the data service-mcp', tool:true}, {v:'host-app', tool:true},
-      {v:'search', tool:true}, {v:'discord', tool:true},
+      {v:'playwright', tool:true}, {v:'github-mcp', tool:true}, {v:'notion-mcp', tool:true},
+      {v:'memory-search', tool:true}, {v:'discord', tool:true},
       // finance / work
       {v:'bloomberg.com'}, {v:'reuters.com'}, {v:'finviz.com'},
-      {v:'the data service.com', ico:'interactivebrokers.com'}, {v:'github.com'},
+      {v:'wsj.com'}, {v:'github.com'},
       {v:'gmail.com', ico:'mail.google.com'}, {v:'docs.google.com'},
       // shopping / food
       {v:'amazon.ca'}, {v:'ebay.com'}, {v:'walmart.ca'}, {v:'bestbuy.ca'},
@@ -1878,6 +2132,14 @@
       // media / reference / play
       {v:'youtube.com'}, {v:'x.com'}, {v:'reddit.com'}, {v:'netflix.com'},
       {v:'spotify.com'}, {v:'wikipedia.org'}, {v:'weather.com'}, {v:'lichess.org'},
+      // learning / reference
+      {v:'khanacademy.org'}, {v:'duolingo.com'}, {v:'investopedia.com'},
+      {v:'news.ycombinator.com', ico:'ycombinator.com'},
+      // events / tickets / local
+      {v:'ticketmaster.com'}, {v:'fandango.com'}, {v:'offerup.com'},
+      // media / taste / fitness
+      {v:'rottentomatoes.com'}, {v:'bandcamp.com'}, {v:'vivino.com'},
+      {v:'strava.com'}, {v:'bookshop.org'},
     ];
     let _pills = [];
     let _editSlug = null;   // set while editing an existing task → save() updates in place
@@ -2109,10 +2371,25 @@
     const saveName  = document.getElementById('op-pal-save-name');
     const saveSites = document.getElementById('op-pal-save-sites');
     const title = document.getElementById('op-pal-title');
-    if (!pal || !list || op.classList.contains('op-demo')) return;   // demo: routes 404 anyway
+    if (!pal || !list) return;
     const TASKS_URL = "{{ url_for('operator.operator_tasks') }}";
     const RUN_URL   = "{{ url_for('operator.operator_task_run', slug='__S__') }}";
     const DEL_URL   = "{{ url_for('operator.operator_task_delete', slug='__S__') }}";
+    // shared saved-task runner — the palette (↵) and the launchpad cards both
+    // dispatch through here; the server applies the task's stored bundle.
+    // Defined BEFORE the demo gate: the demo keeps the launchpad + save modal
+    // (which need this); only the slash palette below stays cockpit-only.
+    window._opRunSavedTask = async function(t){
+      if (_inFlight) { logRes('agent is busy — stop it or steer first, then re-run the saved task', false); return; }
+      logUser('▶ ' + t.name);
+      op.dataset.busy = '1'; setCardText(actTxt, 'Starting up'); setCardSub(t.bot || selectedBot(), '');
+      try { const d = await (await fetch(RUN_URL.replace('__S__', encodeURIComponent(t.slug)), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+        if (d.ok) { _lastAssistant = ''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
+        else { logRes(d.error || 'failed to run task', false); settleAction(false); } }
+      catch { logRes('failed to run task', false); settleAction(false); }
+    };
+    if (op.classList.contains('op-demo')) return;   // demo: no slash palette (CSS hides it too)
     let _tasks = [];        // fetched list (public shape)
     let _sel = 0;           // selected index into the FILTERED view
     let _view = [];         // current filtered slugs
@@ -2167,18 +2444,6 @@
       render();
     }
 
-    // shared saved-task runner — the palette (↵) and the launchpad cards both
-    // dispatch through here; the server applies the task's stored bundle.
-    window._opRunSavedTask = async function(t){
-      if (_inFlight) { logRes('agent is busy — stop it or steer first, then re-run the saved task', false); return; }
-      logUser('▶ ' + t.name);
-      op.dataset.busy = '1'; setCardText(actTxt, 'Starting up'); setCardSub(t.bot || selectedBot(), '');
-      try { const d = await (await fetch(RUN_URL.replace('__S__', encodeURIComponent(t.slug)), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
-        if (d.ok) { _lastAssistant = ''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
-        else { logRes(d.error || 'failed to run task', false); settleAction(false); } }
-      catch { logRes('failed to run task', false); settleAction(false); }
-    };
     async function runSelected(){
       const t = _view[_sel]; if (!t) return;
       input.value = ''; autoGrow(); refreshSendButton(); close();
@@ -2188,7 +2453,7 @@
     function loadSelected(){
       const t = _view[_sel]; if (!t) return;
       input.value = t.prompt || ''; autoGrow(); refreshSendButton();
-      (async  => {
+      (async () => {
         if (t.bot && [].some.call(caretSel.options, o => o.value === t.bot)) {
           caretSel.value = t.bot; await loadModels(t.bot);
         }
@@ -2236,7 +2501,7 @@
     }));
 
     // Composer input drives open/filter/close. Runs alongside autoGrow's listener.
-    input.addEventListener('input', async  => {
+    input.addEventListener('input', async () => {
       const v = input.value;
       if (!v.startsWith('/')) { if (_mode) close(); return; }
       if (/^\/save(\s|$)/i.test(v)) { if (_mode !== 'save') enterSaveMode(); return; }
@@ -2263,7 +2528,7 @@
     });
   }
   // (re)load the model list for a driver — Claude models for claude-a/claude-b, GPT
-  // models for gpt. Defaults: Sonnet for Claude bots, GPT-5.5 for gpt.
+  // models for gpt. Defaults: Sonnet for Claude bots, GPT-5.6 Sol (low) for gpt.
   async function loadModels(driver){
     try {
       const m = await (await fetch("{{ url_for('operator.operator_models') }}?driver=" + encodeURIComponent(driver||''))).json();
@@ -2273,8 +2538,7 @@
         o.value=x.value; o.textContent=x.label; sel.appendChild(o); });
       let savedModel = (typeof _sess!=='undefined' && _sess) ? _sess.model : '';
       if (!savedModel) { try { const _sv = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (_sv) savedModel = _sv.model || ''; } catch {} }
-      const _demo = document.body.classList.contains('op-demo');
-      const want = (driver === 'gpt') ? (_demo ? 'gpt-5.4' : 'gpt-5.5') : (driver === 'gemma') ? 'Gemini 3.5 Flash' : 'claude-sonnet-5';
+      const want = (driver === 'gpt') ? 'gpt-5.6-sol' : (driver === 'gemma') ? 'Gemini 3.5 Flash' : 'claude-sonnet-5';
       if (savedModel && [].some.call(sel.options, o=>o.value===savedModel)) sel.value = savedModel;
       else if ([].some.call(sel.options, o=>o.value===want)) sel.value = want;
       if (typeof syncEffort === 'function') syncEffort();
@@ -2294,8 +2558,13 @@
     opus:   ["low", "medium", "high", "xhigh", "max"],
     "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
     haiku:  [],   // Haiku 4.5 has no effort support
+    // GPT-5.6 family: per-tier ladders (OpenAI, 2026-06). Sol flagship adds max+ultra
+    // above the base low/medium/high; Terra is the standard ladder; Luna (fast/cheap)
+    // caps at minimal/low. No xhigh on the 5.6 line — that ladder is Claude-side only.
+    "gpt-5.6-sol":   ["low", "medium", "high", "max", "ultra"],
+    "gpt-5.6-terra": ["low", "medium", "high"],
+    "gpt-5.6-luna":  ["minimal", "low"],
     "gpt-5.5": ["low", "medium", "high", "xhigh"],
-    "gpt-5.4": ["low", "medium", "high", "xhigh"],
     // gemma/agy: pick the Gemini family in the model picker, the tier in the effort picker;
     // start() combines them into agy's "Gemini X (Tier)" --model string.
     "Gemini 3.5 Flash": ["low", "medium", "high"],
@@ -2337,8 +2606,11 @@
     _effortSel.hidden = false;
     opts.forEach(v => { const o=document.createElement('option');
       o.value=v; o.textContent = v; _effortSel.appendChild(o); });
-    // default to 'high' when nothing meaningful was chosen (prev blank/unavailable)
+    // default when nothing meaningful was chosen (prev blank/unavailable): GPT
+    // models default to 'low' , everything
+    // else to 'medium'.
     if (prev && opts.includes(prev)) _effortSel.value = prev;
+    else if (m.startsWith('gpt-') && opts.includes('low')) _effortSel.value = 'low';
     else if (opts.includes('medium')) _effortSel.value = 'medium';
   }
   function _flashMini(el){ if(!el || el.disabled) return; el.classList.remove('op-mini-swap'); void el.offsetWidth; el.classList.add('op-mini-swap'); }
@@ -2384,7 +2656,7 @@
   }
   function applyMode() {
     // keep the chat fixed across AUTO⇄MAN: toggling the "Manual mode" banner changes
-    // the rail height and reflows the log, shoving it up (the owner). Capture the log's
+    // the rail height and reflows the log, shoving it up . Capture the log's
     // position before the change, restore it after the synchronous reflow.
     const _atBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 24;
     const _fromBottom = log.scrollHeight - log.scrollTop;
@@ -2435,7 +2707,7 @@
     const finExp=document.getElementById('op-finish-expand');
     const finGo=document.getElementById('op-finish-go');
     const finInput=document.getElementById('op-finish-input');
-    if (finBtn) finBtn.addEventListener('click', () =>{
+    if (finBtn) finBtn.addEventListener('click', ()=>{
       if (finExp) finExp.hidden = false;          // expand the optional-message box
       finBtn.hidden = true;                       // hide the trigger so "Finish up" isn't duplicated
       if (finInput) setTimeout(()=>finInput.focus(), 30);
@@ -2481,7 +2753,7 @@
   // ^ guards re-emitting a turn that COMPLETED before the page loaded: on refresh the
   // server still reports the last turn's terminal state, which would otherwise re-append
   // its reply (the "last 2 messages duplicate on every refresh" bug, the owner).
-  let _errShown = false;     // one error card per turn — suppress the stacking (the owner)
+  let _errShown = false;     // one error card per turn — suppress the stacking 
   // show at most ONE error card per turn. A failing turn otherwise stacks 3-4:
   // the stderr 'error' message + the 120s watchdog + the 'error' state handler.
   // Prefer a specific reason; ignore generic follow-ups once one is shown.
@@ -2516,7 +2788,7 @@
           // the trace same as 'assistant', but NEVER let it become the reply bubble: a
           // turn that ends (or is cut off mid-loop) without a real answer should fall
           // through to the "no summary" card below, not leak a raw work-summary/checklist
-          // (/#40).
+          // .
           taskStep(m.text);
           taskVerb('Thinking\u2026');
         } else if (m.role === 'error') {
@@ -2563,15 +2835,19 @@
       if (_interrupting && d.state !== 'running') { _handledState = d.state; return; }  // user hit Stop → swallow the killed run's stale done/error (no spurious "Worked for 0s")
       if (d.state !== 'running') _handledState = d.state;
       if (d.state === 'running') { op.dataset.busy='1'; setCardText(actTxt, 'Working');
-        setCardSub(d.bot||'', _lastActionVerb.toLowerCase(), _lastActionEmoji); op.dataset.agent='running'; setInFlight(true);
+        // soft stall (server signal, v1.1): the run's process is alive but the server
+        // saw no progress heartbeat past the soft budget — surface it, don't kill it.
+        // The HARD stall is handled server-side (auto-stop → state flips to error).
+        if (d.stalled) { setCardSub(d.bot||'', 'quiet ' + Math.round(d.stalled_for||0) + 's — stalled? ■ stops it', '⏱'); }
+        else { setCardSub(d.bot||'', _lastActionVerb.toLowerCase(), _lastActionEmoji); }
+        op.dataset.agent='running'; setInFlight(true);
         if (!_runProgressTs) { _runProgressTs = Date.now(); _runSawProgress = false; }
         // watchdog: only declare a turn STALLED when the agent subprocess is actually
         // DEAD/wedged — never just because it's been silent. The old version tripped
         // on 120s of no new *message*, but a healthy agent legitimately goes quiet for
         // >2min: a long reasoning step, a slow page load, a cold start spinning up the
         // subprocess+MCP, or a natural pause mid-conversation. Those were all getting
-        // false-killed with "the agent stalled" (the owner: happens mid-flight, not just at
-        // start). The server now reports `alive` (subprocess poll()==None); we gate the
+        // false-killed with "the agent stalled" . The server now reports `alive` (subprocess poll()==None); we gate the
         // watchdog on it. A long timeout (8min) stays as a backstop for a process that's
         // alive but truly hung, so we never spin forever — but a working agent is never
         // killed for being quiet.
@@ -2853,7 +3129,7 @@
         x.innerHTML = '<svg viewBox="0 0 14 14" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7"></path></svg>';
         x.addEventListener('click', async (e) => { e.stopPropagation();
           el.classList.add('op-tab-closing');   // play the close-out animation first
-          setTimeout(async  => {
+          setTimeout(async () => {
             try { await fetch("{{ url_for('operator.operator_tab_close', idx=0) }}".replace('/0','/'+t.i), {method:'POST'}); pollTabs(); } catch {}
           }, 190);
         });
@@ -2863,7 +3139,7 @@
       const add = document.createElement('button'); add.className='op-tab-add';
       add.innerHTML='<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"></path></svg>';
       add.title='new tab';
-      add.addEventListener('click', async  => {
+      add.addEventListener('click', async () => {
         try { await fetch("{{ url_for('operator.operator_tab_new') }}", {method:'POST'}); pollTabs(); } catch {}
       });
       tabsEl.appendChild(add);
@@ -2910,6 +3186,7 @@
     const r = stage.getBoundingClientRect();
     const nW = view.naturalWidth, nH = view.naturalHeight;
     if (!nW || !nH) return;
+    // invert object-fit:contain — same mapping as the agent cursor
     const sc = Math.min(r.width / nW, r.height / nH);
     const dW = nW * sc, dH = nH * sc;
     const ox = (r.width - dW) / 2, oy = (r.height - dH) / 2;
@@ -2917,6 +3194,8 @@
     _steerCursor.style.top  = (oy + ny * dH) + 'px';
     _steerCursor.classList.add('show');
     clearTimeout(_steerCursor._fade);
+    // hold it while you're interacting; fade after a short idle so it doesn't
+    // linger as a false pointer once the feed has caught up
     _steerCursor._fade = setTimeout(() => _steerCursor.classList.remove('show'), 2500);
   }
   let _coldSince = 0;
@@ -2954,7 +3233,7 @@
         if (coldMs >= 6000) {
           signalLost();
           setState('connecting', 'reconnecting…');
-          if (!reconnectT) connectStream();
+          connectStream();   // idempotent nudge — the pump self-retries
         }
       }
     } catch { if (!_coldSince) _coldSince = Date.now();
@@ -2969,7 +3248,7 @@
     if (modeBox) { modeBox.classList.add('op-mode-noanim'); modeBox.setAttribute('data-mode', MODE); }
     requestAnimationFrame(() => { if (modeBox) modeBox.classList.remove('op-mode-noanim'); });
   }
-  setTimeout(async  => { try {
+  setTimeout(async () => { try {
     // Restore the bot FIRST, then reload the model list for THAT bot — otherwise the
     // picker keeps the default (Claude) models even after the bot is set to gpt, so
     // it goes blank (the saved gpt model isn't in the Claude option list). Reloading
@@ -2992,7 +3271,8 @@
     if (userLabel) logUser(userLabel);
     if (!silent) setAction(action.kind, action.value || '', true);
     // draw the local steer cursor at this action's target the moment it fires —
-    // instant feedback that doesn't wait on the video feed's round-trip.
+    // instant feedback that doesn't wait on the video feed's round-trip. Prefer
+    // the endpoint of a drag (x1,y1), else the point (x,y).
     if (action && (action.kind === 'click_at' || action.kind === 'rclick_at'
         || action.kind === 'dblclick_at' || action.kind === 'move'
         || action.kind === 'mousedown_at' || action.kind === 'mouseup_at'

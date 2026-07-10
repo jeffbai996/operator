@@ -2,7 +2,7 @@
 
 A saved task is a stored dispatch: a prompt + preferred sites + default
 bot/model/effort (+ optional start_url), re-runnable later without re-typing.
-This is the "OpenAI-Operator-style reusable task" ask, v1:
+This is the "OpenAI-Operator-style reusable task" ask , v1:
 the prompt+sites+model bundle, no scheduling and no hard tool sandbox (both
 deferred to v2 — see the handoff spec).
 
@@ -21,7 +21,9 @@ import re
 import time
 
 # Sibling of operator-state.json, same cache dir + atomic-write discipline.
-TASKS_PATH = os.path.join(
+# OPERATOR_TASKS_PATH overrides the location — the public demo points this at
+# a demo-scoped store so visitors never see (or touch) the owner's tasks.
+TASKS_PATH = os.environ.get("OPERATOR_TASKS_PATH") or os.path.join(
     os.path.expanduser("~/.cache/computer-use"), "operator-tasks.json")
 
 

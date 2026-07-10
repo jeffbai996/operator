@@ -1,10 +1,9 @@
 """Browser operator — live view + full remote control of the logged-in Chrome.
 
 One self-contained surface (full-screen on an iPad over Tailscale) that shows the
-real Chrome the host's computer-use drives and lets you take the wheel live —
+real Chrome the app computer-use drives and lets you take the wheel live —
 click, type, navigate — interleaving freely with whatever a bot is doing in the
-same browser (shared mouse; last action wins). "See it, steer it." (the owner
-2026-06-25; refined for click/keyboard control + more controls 2026-06-26.)
+same browser (shared mouse; last action wins). "See it, steer it." 
 
 Zero new deps — playwright + aiohttp are already in the host-app venv:
   - VIEW: a background thread holds a Playwright connect_over_cdp() attach to the
@@ -27,21 +26,30 @@ import operator_agent  # the headless-claude agent runner (option 1)
 import operator_tasks as operator_tasks_store  # saved-task store (#30)
 
 import os as _os_cfg
-# DEMO isolation (the public demo): a second instance runs with OPERATOR_DEMO=1 and
+# DEMO isolation the public demo: a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
-# unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
+# unset for the owner live cockpit (-> no behavior change); set only by demo_server.py.
 DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
 # both the live _Streamer and the agent MCP attach here in demo mode (isolated
 # Chrome), never :9222 (the logged-in browser). The unguessable path gate is the
 # WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
 CDP_URL = _os_cfg.environ.get("OPERATOR_DEMO_CDP") or "http://127.0.0.1:9222"
 if DEMO:
-    # the demo may view/drive the SANDBOX surface, but never the owner's container —
+    # the demo may view/drive the SANDBOX surface, but never the owner container —
     # scope it to its own (sandbox_container.py reads this at load).
     _os_cfg.environ.setdefault("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox-demo")
-FRAME_INTERVAL = 0.066     # ~15fps (the owner's pick)
+FRAME_INTERVAL = 0.066     # ~15fps 
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
+# F1 adaptive frame tier — ?tier=lo (narrow viewport / Save-Data clients) gets
+# lean frames. Browser lo frames are downscaled PER-CAPTURE via CDP clip+scale
+# (never Emulation.setDeviceMetricsOverride, which would resize the SHARED page
+# under the agent) and compressed harder; a Retina tablet otherwise pulls the
+# full device-resolution JPEG every frame. Sandbox lo lowers the ffmpeg rate
+# and raises -q:v (2-31, higher = smaller frames; hi keeps the 10fps/q8 default).
+TIER_LO_QUALITY = 35
+TIER_LO_MAX_W = 900
+TIER_LO_SANDBOX_FPS, TIER_LO_SANDBOX_Q = 6, 12
 
 bp = Blueprint("operator", __name__,
                 template_folder="templates", static_folder="static",
@@ -94,8 +102,12 @@ class _Streamer:
     _browser = None
     _cdp = None
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
-    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch (the owner)
+    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch 
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
+    # F1: frame tier, set by the feed routes (last-viewer-wins on the shared
+    # frame buffer — single-user cockpit; per-viewer buffers are a 1.0.10 idea)
+    tier: str = "hi"
+    _eager_evt = None    # asyncio.Event — an input action wakes the grab loop (F2)
 
     # ---- lifecycle -------------------------------------------------------
     def ensure_running(self) -> None:
@@ -133,10 +145,10 @@ class _Streamer:
     @staticmethod
     def _chrome_attach_script() -> str:
         """Path to the (re)launcher for the active mode — the demo's isolated
-        headless Chrome under DEMO, the owner's logged-in GUI Chrome otherwise."""
+        headless Chrome under DEMO, the owner logged-in GUI Chrome otherwise."""
         import os
         if DEMO:
-            return os.path.expanduser("~/operator-demo/op-demo-chrome.sh")
+            return os.path.expanduser(os.environ.get("OPERATOR_DEMO_CHROME_SCRIPT", "~/.operator-sandbox/op-demo-chrome.sh"))
         return os.path.expanduser("~/agents/browse/chrome-attach.sh")
 
     def _ensure_chrome_alive(self) -> None:
@@ -259,7 +271,7 @@ class _Streamer:
                         # chrome-attach.sh, which could race a concurrent dispatch's
                         # own relaunch attempt. Manual relaunch via the bot-chrome
                         # script is the expected recovery now; this is rare enough
-                        #  that it doesn't need to self-heal.
+                        # (per the owner) that it doesn't need to self-heal.
                         _misses = 0
                         self.status, self.detail = "error", "Chrome wedged — relaunch it via the bot-chrome script"
                         break
@@ -314,12 +326,13 @@ class _Streamer:
                     except Exception as e2:  # noqa: BLE001
                         self.status, self.detail = "error", str(e2)
                         await asyncio.sleep(1.0)
-            # ease off while an agent drives (shares CDP with the agent's MCP)
+            # ease off while an agent drives (shares CDP with the agent's MCP);
+            # _pace (not sleep) so a cockpit action wakes the loop instantly (F2)
             try:
                 busy = operator_agent.runner.is_running()
             except Exception:
                 busy = False
-            await asyncio.sleep(0.45 if busy else FRAME_INTERVAL)
+            await self._pace(0.45 if busy else FRAME_INTERVAL)
         self.frame = None          # stopping → no stale 'live' with no frames
         await self._teardown()
 
@@ -333,8 +346,19 @@ class _Streamer:
             if sess is None:
                 sess = await page.context.new_cdp_session(page)
                 self._cdp = sess
+            lo = self.tier == "lo"
+            args = {"format": "jpeg",
+                    "quality": TIER_LO_QUALITY if lo else JPEG_QUALITY}
+            if lo and self.vw > TIER_LO_MAX_W and self.vh:
+                # F1: downscale per-capture (clip covers the viewport, scale caps
+                # the output width) — a page-level emulation override would resize
+                # the SHARED page under the agent. No clip when the viewport is
+                # unknown (nothing sane to scale against) or already narrow.
+                args["clip"] = {"x": 0, "y": 0,
+                                "width": float(self.vw), "height": float(self.vh),
+                                "scale": TIER_LO_MAX_W / float(self.vw)}
             res = await asyncio.wait_for(
-                sess.send("Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_QUALITY}),
+                sess.send("Page.captureScreenshot", args),
                 timeout=2.5)
             try:
                 cr = await asyncio.wait_for(sess.send("Runtime.evaluate", {
@@ -353,10 +377,26 @@ class _Streamer:
             self._cdp = None  # session may be stale (page nav) — rebuild next time
             try:
                 return await asyncio.wait_for(
-                    page.screenshot(type="jpeg", quality=JPEG_QUALITY, animations="disabled"),
+                    page.screenshot(
+                        type="jpeg",
+                        quality=TIER_LO_QUALITY if self.tier == "lo" else JPEG_QUALITY,
+                        animations="disabled"),
                     timeout=2.5)
             except Exception:
                 return None
+
+    async def _pace(self, interval: float) -> None:
+        """Sleep the capture interval, but wake IMMEDIATELY when an input action
+        lands (F2): the interesting pixels appear in the first ~100ms after a
+        click/keypress, and a fixed cadence could sit out a full interval before
+        showing them. Idle cadence is untouched — the event only fires on actions."""
+        if self._eager_evt is None:
+            self._eager_evt = asyncio.Event()
+        try:
+            await asyncio.wait_for(self._eager_evt.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            return
+        self._eager_evt.clear()
 
     def _refresh_active_page(self) -> None:
         try:
@@ -388,7 +428,7 @@ class _Streamer:
         not just the newest one. _refresh_active_page only switches when the tab COUNT
         changes (and always to the last tab), so an agent that flips between already-
         open tabs (clicks a link that activates an existing tab, or switches back to
-        tab 1) left the view frozen on the stale tab. Here we poll
+        tab 1) left the view frozen on the stale tab . Here we poll
         each open page's document.visibilityState — only the foreground tab reports
         'visible' — and follow it. Throttled (every ~0.8s) + bounded per check so it
         never stalls the grab loop, and only does work when there's >1 tab."""
@@ -401,8 +441,7 @@ class _Streamer:
             live = [p for p in ctx.pages if not p.is_closed()]
             if len(live) < 2:
                 return  # single tab → nothing to follow
-            # ACTIVITY BEATS VISIBILITY (owner report: "the view doesn't track
-            # the tab the bot is using — some bots, not others"): agents drive
+            # ACTIVITY BEATS VISIBILITY : agents drive
             # pages over CDP, which never foregrounds them — the MCP picks its
             # current tab at connect independent of Chrome's focus, and navigate/
             # click never activate a target (only the explicit tab tools do). So
@@ -412,7 +451,7 @@ class _Streamer:
             # ONLY while an agent run is live: outside a run, "URL activity" is
             # SPA churn in idle tabs (Google Travel pushStates on its own), and
             # yanking focus then kills in-page popups the USER is working with
-            # (1Password's inline menu dies on blur) — and in manual mode a view
+            # (a password manager's inline menu dies on blur) — and in manual mode a view
             # switch would re-aim the user's steer clicks at the wrong page.
             urls = {pg: pg.url for pg in live}
             prev = getattr(self, "_tab_urls", {})
@@ -809,7 +848,7 @@ class _Streamer:
                 # wait_until="commit" returns as soon as the navigation COMMITS (not
                 # full load), so we don't hold the io-lock for up to 15s while the page
                 # loads — that lock starves the grab loop and froze/broke the feed on
-                # back/forward (the owner). The feed then streams the new page as it loads.
+                # back/forward . The feed then streams the new page as it loads.
                 await p.go_back(wait_until="commit", timeout=8000)
             elif kind == "forward":
                 await p.go_forward(wait_until="commit", timeout=8000)
@@ -880,6 +919,11 @@ class _Streamer:
         finally:
             try: _lk.release()
             except Exception: pass
+            # F2: whatever the action did, paint its result on the next grab —
+            # running on the streamer loop, so touching the Event here is safe.
+            if self._eager_evt is None:
+                self._eager_evt = asyncio.Event()
+            self._eager_evt.set()
 
     async def _repeat_key(self, key: str) -> None:
         """Simulate OS key auto-repeat for a held key: re-press every ~45ms until
@@ -920,12 +964,7 @@ _streamer = _Streamer()
 import shutil as _shutil
 import subprocess as _fsp
 
-# computer-use/ sits one level up in the standalone layout (this file at repo
-# root) but two levels up if nested inside a monorepo module dir — try both,
-# preferring whichever actually exists on disk.
-_CU_DIR_1UP = Path(__file__).resolve().parent / "computer-use"
-_CU_DIR_2UP = Path(__file__).resolve().parent.parent / "computer-use"
-_CU_DIR = str(_CU_DIR_1UP if _CU_DIR_1UP.is_dir() else _CU_DIR_2UP)
+_CU_DIR = str(Path(__file__).resolve().parent.parent / "computer-use")
 
 _SURFACE_DEFS = [
     {"key": "browser", "label": "Browser",
@@ -996,6 +1035,14 @@ class _DesktopFeed:
         self._lock = threading.Lock()
         self._mods: dict = {}
         self._stream_dead_until = 0.0   # cooldown after an ffmpeg-stream failure
+        self.tier: str = "hi"           # F1: set by the feed routes (last-viewer-wins)
+        self._wake = threading.Event()  # F2: a steer poke wakes the capture loop
+
+    def _pace(self, interval: float) -> None:
+        """Sleep between captures, but wake immediately on a steer poke (F2).
+        Consume-once so the idle cadence stays untouched afterward."""
+        if self._wake.wait(timeout=interval):
+            self._wake.clear()
 
     def ensure_running(self, surface: str) -> None:
         with self._lock:
@@ -1032,42 +1079,82 @@ class _DesktopFeed:
                     self.detail = ""
             except Exception as e:  # noqa: BLE001 — feed must idle, not die
                 self.detail = str(e)
-            time.sleep(1.2 if self.surface == "desktop-real" else 0.6)
+            self._pace(1.2 if self.surface == "desktop-real" else 0.6)
         self.frame = None
         self._running = False
 
+    # §feed-decay (2026-07-09): a long-lived x11grab stream DECAYS on this Xvfb —
+    # young streams deliver 10fps with a 20-80ms action→visible latency; by ~8min
+    # of age the same pipeline was measured ~2s stale (the "works great after a
+    # surface flip, shits the bed a minute later" cockpit lag). Rather than chase
+    # ffmpeg's internals, the reader self-heals: count frames actually received
+    # per window and CYCLE the stream (kill + immediate respawn, last frame kept,
+    # ~0.5s blip) whenever the rate sags below the floor. MJPEG emits ~10 frames/s
+    # even on a static screen (identical bytes are still frames), so a sagging
+    # receive rate means pipeline decay, not a quiet desktop.
+    _HEALTH_WINDOW_S = 5.0    # measure received-fps over this window
+    _HEALTH_MIN_FPS = 4.0     # below this → cycle (configured rate is 10)
+    _HEALTH_GRACE_S = 15.0    # never judge a freshly-spawned stream
+
+    @classmethod
+    def _stream_decayed(cls, n_frames: int, window_s: float, age_s: float) -> bool:
+        """Pure decision: has the stream's delivery rate sagged enough to cycle?"""
+        if age_s < cls._HEALTH_GRACE_S or window_s < cls._HEALTH_WINDOW_S:
+            return False
+        return (n_frames / window_s) < cls._HEALTH_MIN_FPS
+
     def _stream(self) -> bool:
         """Read the sandbox's long-lived ffmpeg MJPEG pipe until the surface
-        changes, the viewer idles out, or the pipe dies. Returns True if the
-        stream ran; False → fall back to scrot polling (with a cooldown, so an
-        image without ffmpeg doesn't pay the spawn cost on every frame)."""
+        changes, the viewer idles out, the pipe dies, or delivery decays (see
+        _stream_decayed above). Returns True if the stream ran; False → fall
+        back to scrot polling (with a cooldown, so an image without ffmpeg
+        doesn't pay the spawn cost on every frame)."""
         if "sandbox" not in self._mods:
             self._mods["sandbox"] = _load_cu("sandbox_container.py")
         sb = self._mods["sandbox"]
+        # F1: the tier picks the ffmpeg rate/quality at spawn; a mid-stream tier
+        # change breaks the read loop below so the outer loop respawns with the
+        # new params (~0.5s blip, same path as the decay cycle).
+        spawn_tier = self.tier
+        fps, q = ((TIER_LO_SANDBOX_FPS, TIER_LO_SANDBOX_Q)
+                  if spawn_tier == "lo" else (10, 8))
         try:
-            proc = sb.open_stream()
+            proc = sb.open_stream(fps=fps, quality=q)
         except Exception as e:  # noqa: BLE001 — ffmpeg missing / container down
             self.detail = f"starting sandbox desktop… ({e})"
             self._stream_dead_until = time.monotonic() + 45
             return False
         tail = b""
+        born = win_t = time.monotonic()
+        win_n = 0
         try:
             while (self._running and self.surface == "desktop-sandbox"
+                   and self.tier == spawn_tier
                    and time.monotonic() - self.last_view <= IDLE_STOP_AFTER):
-                chunk = proc.stdout.read(65536)
+                # read1: return as soon as ANY bytes arrive. A plain read(64KB)
+                # blocks until the full 64KB accumulates (~2 frames at q8), so
+                # it surfaced only every other frame and added ~400ms of
+                # chunk-accumulation latency (halved the configured 10fps).
+                chunk = proc.stdout.read1(65536)
                 if not chunk:
                     break                    # container gone — outer loop re-decides
                 frames, tail = sb.split_jpegs(tail + chunk)
                 if frames:
+                    win_n += len(frames)
                     self.mime = "image/jpeg"
                     self.frame = frames[-1]
                     self.frame_ts = time.monotonic()
                     self.detail = ""
+                now = time.monotonic()
+                if now - win_t >= self._HEALTH_WINDOW_S:
+                    if self._stream_decayed(win_n, now - win_t, now - born):
+                        break   # cycle: finally reaps, outer loop respawns fresh
+                    win_t, win_n = now, 0
         finally:
             # stop_stream kills BOTH the host exec client AND the container-side
             # ffmpeg — a bare proc.kill() leaves the in-container ffmpeg orphaned,
             # still grabbing X11; those stacked up and made the feed lag worse the
-            # longer a session ran.
+            # longer a session ran (2026-07-09).
             try:
                 sb.stop_stream(proc)
             except Exception:  # noqa: BLE001
@@ -1121,7 +1208,7 @@ threading.Thread(target=_launch_chrome_on_boot, daemon=True, name="operator-chro
 @bp.route("/operator")
 def operator_page():
     from flask import make_response
-    # demo: serve the standalone, de-PII'd template (no host-app chrome/nav, no owner
+    # demo: serve the standalone, de-PII'd template (no the app chrome/nav, no owner
     # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
     _tmpl = "operator_demo.html" if DEMO else "operator.html"
     resp = make_response(render_template(_tmpl))
@@ -1143,12 +1230,22 @@ def _cockpit_redirect():  # legacy path → operator
     return redirect(url_for("operator.operator_page"))
 
 
+def _apply_feed_tier() -> None:
+    """F1: read ?tier=lo|hi off the request and stamp BOTH feed sources.
+    Anything but 'lo' is 'hi'. Last-viewer-wins on the shared frame buffer —
+    fine for a single-user cockpit (per-viewer buffers are a 1.0.10 idea)."""
+    tier = "lo" if request.args.get("tier") == "lo" else "hi"
+    _streamer.tier = tier
+    _desktop_feed.tier = tier
+
+
 @bp.route("/operator/stream")
 def operator_stream():
     """MJPEG multipart stream — renders into an <img>. Survives frame gaps.
     Source-switched per frame by the active surface: browser → the CDP
     _Streamer; desktop surfaces → the _DesktopFeed. Switching surfaces mid-
     stream just swaps the source, no reconnect needed."""
+    _apply_feed_tier()
     if _active_surface["name"] == "browser":
         _streamer.ensure_running()
     else:
@@ -1201,6 +1298,31 @@ def operator_stream():
     return resp
 
 
+@bp.route("/operator/frame")
+def operator_frame():
+    """Single newest frame — the pull half of the feed. The MJPEG push stream
+    has no backpressure: a client that decodes slower than the feed produces
+    (iPad Safari) buffers the excess and drifts PROGRESSIVELY behind live —
+    the 'works great after a reconnect, shits the bed a minute later' lag
+    (2026-07-09). The cockpit now self-clocks instead: fetch a frame, render
+    it, only then fetch the next — latency is bounded at ~1 frame in flight
+    by construction, on any device or link. Fast clients still get ~10fps."""
+    _apply_feed_tier()
+    if _active_surface["name"] == "browser":
+        _streamer.ensure_running()
+        src, mime = _streamer, "image/jpeg"
+    else:
+        _desktop_feed.ensure_running(_active_surface["name"])
+        src, mime = _desktop_feed, _desktop_feed.mime
+    src.last_view = time.monotonic()
+    f = src.frame
+    resp = Response(f or _PLACEHOLDER_JPEG,
+                    mimetype=mime if f else "image/jpeg")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Operator-Frame"] = "live" if f else "placeholder"
+    return resp
+
+
 @bp.route("/operator/tabs")
 def operator_tabs():
     return jsonify(tabs=_streamer.list_tabs())
@@ -1221,18 +1343,14 @@ def operator_tab_new():
     return jsonify(_streamer.new_tab())
 
 
-# screenshot dir the computer-use MCP writes into (same knob as playwright-mcp.sh).
-# Served read-only so a screenshot the agent references inline (![](file://.../x.png))
-# can render in the chat instead of being stripped to a text note.
-_SHOT_DIR = _os_cfg.path.realpath(_os_cfg.path.expanduser(
-    _os_cfg.environ.get("COMPUTER_USE_OUTPUT_DIR")
-    or _os_cfg.environ.get("PLAYWRIGHT_OUTPUT_DIR")
-    or "~/.cache/computer-use"))
-# agents also drop screenshots into their per-bot session cwd (gpt/codex saves
-# there rather than the MCP output dir) — serve those too, same guarantees.
-_SHOT_DIRS = [_SHOT_DIR] + [
-    _os_cfg.path.realpath(_os_cfg.path.expanduser("~/.operator-sessions/" + _b))
-    for _b in ("claude-a", "claude-b", "gpt", "gemma")]
+# Dirs whose screenshots are served read-only by basename, so a screenshot the
+# agent references inline (![](file://.../x.png)) renders in the chat instead
+# of being stripped to a text note. The list is owned by operator_trace (1.0.8
+# R3) so this route and the trace rewriter can never disagree (a mismatch 404s
+# the rewritten links). [0] is the MCP output dir; the rest are per-bot cwds.
+from operator_trace import shot_dirs as _shot_dirs
+_SHOT_DIRS = _shot_dirs()
+_SHOT_DIR = _SHOT_DIRS[0]
 
 
 def _find_shot(base: str) -> str | None:
@@ -1403,6 +1521,10 @@ def _desktop_steer(action: dict) -> dict:
             _run({"action": k, "text": str(action.get("value", ""))})
         else:
             return {"ok": False, "error": f"{kind!r} not supported on this surface"}
+        # F2: the action landed — wake the capture loop so its result paints
+        # now instead of up to a full poll interval later (scrot path; the
+        # ffmpeg stream is already continuous).
+        _desktop_feed._wake.set()
         return {"ok": True}
     except Exception as e:  # noqa: BLE001 — surface the reason to the cockpit
         return {"ok": False, "error": str(e)}
@@ -1421,7 +1543,7 @@ def operator_steer():
               # _do_action always fell through to the keyword branch with val=="" (the
               # wheel handler never sends `value`) → amt defaulted to 600 (down) no
               # matter which way the wheel actually moved. That's why wheel-up did
-              # nothing while wheel-down "worked".
+              # nothing while wheel-down "worked" .
               "dx": data.get("dx"), "dy": data.get("dy"),
               # drag endpoints (kind=="drag") — were silently dropped by this
               # whitelist (same class as the dx/dy bug above), so a user drag
@@ -1440,7 +1562,7 @@ def operator_steer():
     return jsonify(_streamer.run_action(action))
 
 
-# ── Live-session driving ──────────────────────────────────
+# ── Live-session driving  ──────────────────────────────────
 # Dispatch a task to one of the the host bots' real Discord sessions; the bot
 # runs it on the SAME shared Chrome the operator views. The browser actions are
 # surfaced via the MCP action-tap (operator-events.ndjson) which every bot's
@@ -1488,7 +1610,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
         return None
     last = evs[-1]
     if time.time() - last.get("ts", 0) <= window_s:
-        # demo: never leak host bot names to a public visitor -> generic label.
+        # demo: never leak the app bot names to a public visitor -> generic label.
         _b = "assistant" if DEMO else last.get("bot")
         return {"bot": _b, "action": last.get("action"),
                 "detail": last.get("detail", "")}
@@ -1498,7 +1620,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
 @bp.route("/operator/drivers")
 def operator_drivers():
     """The pickable drivers — the operator runs them headless. In demo mode this is
-    a single generic 'gpt' driver (never leak host bot names to a public visitor)."""
+    a single generic 'gpt' driver (never leak the app bot names to a public visitor)."""
     if DEMO:
         return jsonify(drivers=[{"key": "bot", "label": "bot"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
@@ -1678,10 +1800,11 @@ def operator_dispatch():
     surface = (data.get("surface") or _active_surface["name"] or "browser").strip()
     real_ok = bool(data.get("real_ok"))
     if DEMO:
-        # the demo agent only drives the browser (desktop drive is claude-runtime
-        # only) — snap the feed back too so a user parked on the sandbox surface
-        # watches the screen the agent is actually on.
-        surface, real_ok = "browser", False
+        # #27: the demo agent may drive the browser or the ISOLATED demo sandbox
+        # container — never the real desktop (coerced, no confirm honored).
+        if surface not in ("browser", "desktop-sandbox"):
+            surface = "browser"
+        real_ok = False
     if surface != _active_surface["name"] \
             and surface in [s["key"] for s in _SURFACE_DEFS]:
         _active_surface["name"] = surface     # feed follows the dispatch
@@ -1694,12 +1817,20 @@ def operator_dispatch():
     except Exception:
         pass
     if DEMO:
-        # public demo: Sonnet 4.6 via gemma/agy runtime, effort locked to medium.
-        # ignore any client-sent bot/model. demo=True strips host context/identity/tools.
+        # public demo: gemma/agy runtime, model locked to the 2-entry demo list
+        # (off-list → Flash 3.5 Low default). The tier lives in the model string
+        # ("(Thinking)"/"(Low)"), so client-sent effort is discarded — the lock
+        # owns effort. demo=True strips the app context/identity/tools.
         bot = "gemma"
-        model = "Claude Sonnet 4.6 (Thinking)"
-        effort = "medium"
-        r = operator_agent.runner.start(bot, task, model=model, effort=effort, demo=True)
+        if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
+            model = OPERATOR_MODELS_DEMO[0]["value"]
+        if surface == "desktop-sandbox":
+            # Flash has no computer-use tools  — a sandbox run
+            # would just shell around. Desktop runs force Sonnet.
+            model = "Claude Sonnet 4.6 (Thinking)"
+        effort = ""
+        r = operator_agent.runner.start(bot, task, model=model, effort=effort,
+                                        demo=True, surface=surface)
     else:
         r = operator_agent.runner.start(bot, task, model=model, effort=effort,
                                         surface=surface, real_ok=real_ok)
@@ -1712,8 +1843,21 @@ def operator_dispatch():
 # preferred-sites is a prompt HINT not a hard sandbox (both deferred — see the
 # handoff spec). Persistence + slug logic live in operator_tasks.py; these routes
 # are thin wrappers that, on /run, do exactly what /operator/dispatch does.
-# LIVE COCKPIT ONLY — never exposed in the public demo (would leak/enumerate the
-# owner's saved tasks + let a visitor run arbitrary stored prompts).
+# DEMO : available, but against a demo-scoped store — the demo
+# instance MUST set OPERATOR_TASKS_PATH so visitors never see the app tasks.
+# Demo saves strip bot/schedule (forced at run / scheduler never runs in demo),
+# the store is capped, and /run applies the same lock as /operator/dispatch.
+
+DEMO_TASKS_MAX = 24     # demo store cap — visitors can't grow the file unboundedly
+
+
+def _demo_tasks_guard():
+    """Fail closed: demo saved tasks REQUIRE the demo-scoped store. If the demo
+    launch didn't set OPERATOR_TASKS_PATH, serving these routes would expose the
+    owner's real task store — keep the old 404 gate instead."""
+    if DEMO and not _os.environ.get("OPERATOR_TASKS_PATH"):
+        return jsonify(ok=False, error="not available"), 404
+    return None
 
 
 def _task_public(slug: str, t: dict) -> dict:
@@ -1738,24 +1882,32 @@ def _task_public(slug: str, t: dict) -> dict:
 def operator_tasks():
     """GET → list saved tasks. POST → create/update (body = data-model fields);
     validates non-empty name+prompt; returns the slug."""
-    if DEMO:
-        return jsonify(ok=False, error="not available"), 404
+    guard = _demo_tasks_guard()
+    if guard:
+        return guard
     if request.method == "GET":
         tasks = operator_tasks_store.load_tasks()
         items = [_task_public(s, t) for s, t in sorted(tasks.items())]
         return jsonify(ok=True, tasks=items)
     # POST create/update
     data = request.get_json(silent=True) or request.form
+    if DEMO:
+        tasks_now = operator_tasks_store.load_tasks()
+        if (data.get("slug") or "").strip() not in tasks_now \
+                and len(tasks_now) >= DEMO_TASKS_MAX:
+            return jsonify(ok=False, error="demo task limit reached"), 400
     slug, err = operator_tasks_store.save_task({
         "slug": (data.get("slug") or "").strip(),
         "name": data.get("name"),
         "prompt": data.get("task") or data.get("prompt"),
         "sites": data.get("sites"),
-        "bot": data.get("bot"),
+        # bot/schedule are dead fields in demo: bot is forced at run and the
+        # scheduler never starts on a public instance — don't store them.
+        "bot": "" if DEMO else data.get("bot"),
         "model": data.get("model"),
         "effort": data.get("effort"),
         "start_url": data.get("start_url"),
-        "schedule": data.get("schedule"),
+        "schedule": "" if DEMO else data.get("schedule"),
     })
     if err:
         return jsonify(ok=False, error=err), 400
@@ -1768,8 +1920,9 @@ def operator_task_run(slug):
     plus: optional nav to start_url first, and a preferred-sites prompt preamble.
     Stamps last_run. Body may override bot/model/effort (the UI's editable path);
     absent overrides fall back to the task's stored defaults."""
-    if DEMO:
-        return jsonify(ok=False, error="not available"), 404
+    guard = _demo_tasks_guard()
+    if guard:
+        return guard
     data = request.get_json(silent=True) or request.form or {}
     r, status = _dispatch_saved_task(slug, data)
     return jsonify(r), status
@@ -1809,7 +1962,17 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict
     preamble = operator_tasks_store.sites_preamble(t.get("sites", []))
     task_prompt = f"{preamble}{prompt}" if preamble else prompt
 
-    r = operator_agent.runner.start(bot, task_prompt, model=model, effort=effort)
+    if DEMO:
+        # same lock as /operator/dispatch: forced runtime, model allowlist,
+        # no client effort. Saved-task runs are browser-surface, so no
+        # sandbox model force needed here. demo=True strips the app identity.
+        bot = "gemma"
+        if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
+            model = OPERATOR_MODELS_DEMO[0]["value"]
+        r = operator_agent.runner.start(bot, task_prompt, model=model,
+                                        effort="", demo=True)
+    else:
+        r = operator_agent.runner.start(bot, task_prompt, model=model, effort=effort)
     if r.get("ok"):
         operator_tasks_store.mark_run(slug)
         return r, 200
@@ -1819,8 +1982,9 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict
 @bp.route("/operator/tasks/<slug>", methods=["DELETE"])
 def operator_task_delete(slug):
     """Remove a saved task."""
-    if DEMO:
-        return jsonify(ok=False, error="not available"), 404
+    guard = _demo_tasks_guard()
+    if guard:
+        return guard
     return jsonify(ok=operator_tasks_store.delete_task(slug))
 
 
@@ -1858,14 +2022,14 @@ def operator_driver_status():
         since = 0.0
     reasoning = []
     bot = (request.args.get("bot") or (drv or {}).get("bot") or "").strip()
-    # in demo mode the agent has no host transcript to tail (and we must not read
-    # any host bot's transcript) -> the live trace comes from the agent runner only.
+    # in demo mode the agent has no the app transcript to tail (and we must not read
+    # any the app bot's transcript) -> the live trace comes from the agent runner only.
     if bot and not DEMO:
         reasoning = _tail_reasoning(bot, since)
     return jsonify(driver=drv, events=_recent_events(30), reasoning=reasoning)
 
 
-# ── Stage 2: reasoning relay ──────────────────────────────
+# ── Stage 2: reasoning relay  ──────────────────────────────
 # Tail the driving bot's live session transcript JSONL → surface its assistant
 # text (its reasoning/replies) so the operator chat shows thinking, not just
 # clicks. Per-bot transcript dir = <config_dir>/projects/<cwd-slug>/; we take the
@@ -1875,8 +2039,8 @@ import glob as _glob
 # bot → (config_dir, cwd) used to locate its transcript project dir.
 _BOT_PROJECT = {
     "claude-a":     ("~/.claude",            "~/agents/claude-a"),
-    "claude-d":  ("~/.claude",            "~/agents/claude-d"),
-    "claude-e": ("~/.claude",            "~/agents/claude-e"),
+    "claude-a":  ("~/.claude",            "~/agents/claude-a"),
+    "claude-a": ("~/.claude",            "~/agents/claude-a"),
     "claude-b":      ("~/.config/claude-b",        "~"),
     "gpt":        (None, None),  # different arch; no claude transcript
 }
@@ -1966,11 +2130,11 @@ import subprocess as _sp
 # bot → marker to find its running session. cwd match for the agent-dir bots;
 # claude-b runs from ~ so match its CLAUDE_CONFIG_DIR in the environ instead.
 _BOT_LIVE_CWD = {
-    "claude-a": "/agents/claude-a",
-    "claude-d": "/agents/claude-d",
-    "claude-e": "/agents/claude-e",
+    "claude-a": "/claude-agents/claude-a",
+    "claude-a": "/claude-agents/claude-a",
+    "claude-a": "/claude-agents/claude-a",
 }
-_BOT_LIVE_ENV = {"claude-b": ".claude-alt"}
+_BOT_LIVE_ENV = {"claude-b": ".config/claude-b"}
 
 
 def _live_bots() -> set:
@@ -2001,7 +2165,7 @@ def _live_bots() -> set:
     except Exception:
         pass
     # gpt is a service bot (always-on if its unit is active) — but it can't drive
-    # reliably (one MCP slot, the data service), so we don't mark it live for driving.
+    # reliably (one MCP slot, a broker), so we don't mark it live for driving.
     return live
 
 
@@ -2014,12 +2178,17 @@ OPERATOR_MODELS = [
     {"value": "claude-sonnet-5", "label": "Sonnet 5"},
     {"value": "haiku", "label": "Haiku 4.5"},
 ]
-# codex/gpt models (default gpt-5.5 medium).
+# codex/gpt models (default gpt-5.6-sol low per the owner). The 5.6 family ships three
+# capability tiers (Sol flagship / Terra balanced / Luna fast) — each a distinct
+# -m id with its OWN effort ladder (see EFFORT_BY_MODEL in operator.html):
+# Sol adds max+ultra, Luna caps at minimal/low. Effort is the separate picker.
 OPERATOR_MODELS_GPT = [
+    {"value": "gpt-5.6-sol", "label": "GPT-5.6 Sol"},
+    {"value": "gpt-5.6-terra", "label": "GPT-5.6 Terra"},
+    {"value": "gpt-5.6-luna", "label": "GPT-5.6 Luna"},
     {"value": "gpt-5.5", "label": "GPT-5.5"},
-    {"value": "gpt-5.4", "label": "GPT-5.4"},
 ]
-# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner's
+# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner
 # flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
 # ones have a fixed tier baked in (no effort). start() folds family+effort into the
 # agy --model display string, e.g. "Gemini 3.5 Flash (High)".
@@ -2031,8 +2200,12 @@ OPERATOR_MODELS_GEMMA = [
 ]
 
 
-# public demo: single model preset (Sonnet via gemma/agy runtime).
+# public demo: LOCKED 2-model choice on the gemma/agy runtime :
+# Flash 3.5 Low default (first = picker default + server fallback), Sonnet 4.6
+# as the heavier alt. Tier is baked into each value — the effort control is
+# hidden in the demo UI, the lock owns effort.
 OPERATOR_MODELS_DEMO = [
+    {"value": "Gemini 3.5 Flash (Low)", "label": "3.5 Flash"},
     {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
 ]
 

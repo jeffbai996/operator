@@ -1,0 +1,5 @@
+{"source": "SYSTEM", "type": "USER_INPUT", "step_index": 0, "content": "user asked something"}
+{"source": "MODEL", "type": "PLANNER_RESPONSE", "step_index": 1, "thinking": "I need to open the site first."}
+{"source": "MODEL", "type": "PLANNER_RESPONSE", "step_index": 2, "thinking": "Navigating now.", "tool_calls": [{"name": "call_mcp_tool", "args": {"ToolName": "browser_navigate", "Arguments": "{\"url\": \"https://example.com\"}", "toolAction": "Browsing to example.com"}}, {"name": "view_file", "args": {"AbsolutePath": "/home/user/notes.txt", "toolAction": "Reading the notes file"}}, {"name": "totally_unknown_tool", "args": {"toolAction": "Calling MCP tool", "target": "div"}}]}
+{"source": "MODEL", "type": "RUN_COMMAND", "step_index": 3, "content": "ls -la output here\nsecond line"}
+{"source": "MODEL", "type": "PLANNER_RESPONSE", "step_index": 4, "content": "Done. [[TAKE_CONTROL: solve the captcha]]"}
