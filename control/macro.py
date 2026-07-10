@@ -135,6 +135,26 @@ def validate_macro(ops, _path: str = "ops") -> list:
     return errs
 
 
+def frame_change_frac(before, after, region=None, threshold: int = 12):
+    """Fraction of pixels whose max-channel delta exceeds `threshold`, over
+    `region` [x,y,w,h] (default: full frame). Returns None when the frames
+    can't be compared (empty/ mismatched region). Pure — shared by the macro
+    pixel_change condition and the computer tool's step-level verify (§3.1)."""
+    a = np.asarray(before)
+    b = np.asarray(after)
+    if region is not None:
+        x, y, w, h = (int(v) for v in region)
+        x, y = max(0, x), max(0, y)
+        a = a[y:y + h, x:x + w]
+        b = b[y:y + h, x:x + w]
+    if a.size == 0 or a.shape != b.shape:
+        return None
+    delta = np.abs(a.astype(np.int16) - b.astype(np.int16))
+    if delta.ndim == 3:
+        delta = delta.max(axis=-1)
+    return float((delta > threshold).mean())
+
+
 # ── controller ───────────────────────────────────────────────────────────────
 class _Bail(Exception):
     def __init__(self, reason: str):
@@ -198,13 +218,8 @@ class MacroController:
             base_frame = (baseline or {}).get("frame")
             if base_frame is None or self._frame is None:
                 return False
-            x, y, w, h = (int(v) for v in pc["region"])
-            a = np.asarray(base_frame)[y:y + h, x:x + w].astype(np.int16)
-            b = np.asarray(self._frame)[y:y + h, x:x + w].astype(np.int16)
-            if a.size == 0 or a.shape != b.shape:
-                return False
-            changed = (np.abs(a - b).max(axis=-1) > 12).mean()
-            return changed >= float(pc.get("min_frac", 0.05))
+            changed = frame_change_frac(base_frame, self._frame, pc["region"])
+            return changed is not None and changed >= float(pc.get("min_frac", 0.05))
         return False
 
     # -- execution -------------------------------------------------------------

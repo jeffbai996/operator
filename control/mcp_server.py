@@ -39,7 +39,8 @@ import events
 import maps as maps_mod
 import overlay
 import perceive as perceive_mod
-from macro import MacroController, validate_macro  # noqa: F401 (validate re-exported)
+from macro import (MacroController, frame_change_frac,  # noqa: F401 (validate re-exported)
+                   validate_macro)
 from surfaces import SurfaceError, SurfaceStopped, get_surface
 
 PROTOCOL_FALLBACK = "2024-11-05"
@@ -125,7 +126,11 @@ _COMPUTER_TOOL = {
         "Direct desktop action on the active desktop surface (Xvfb sandbox or "
         "gated real desktop): screenshot / left_click / right_click / "
         "middle_click / double_click / triple_click / mouse_move / "
-        "left_click_drag / type / key / scroll / wait."),
+        "left_click_drag / type / key / scroll / wait. Consequential actions "
+        "return a `verified` verdict (local before/after pixel check): "
+        "verified.changed=false means the screen did NOT react — treat that as "
+        "a miss; re-ground (screenshot/perceive) before acting again, never "
+        "retry the same coords blind."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -272,6 +277,85 @@ class OperatorMCP:
                              "text": json.dumps(result, ensure_ascii=False)}],
                 "isError": False}
 
+    # v1.1 §3.1 — step-level verify: after a consequential action, compare a
+    # before/after frame LOCALLY (no model call) and put the verdict in the
+    # tool result. The old verify-after-action was an advisory directive the
+    # model could skip; this is structural — every click/type/key/scroll
+    # answer carries ground truth ("did anything actually change?"), so
+    # "clicked empty space and ploughed on" is visible the moment it happens.
+    _VERIFY_ACTIONS = frozenset((
+        "left_click", "right_click", "middle_click", "double_click",
+        "triple_click", "left_click_drag", "type", "key", "scroll"))
+    _VERIFY_BOX = 90          # half-size of the click-verify region (px)
+    _LOOK_BOX = 180           # half-size of the failed-click zoom crop (px)
+
+    @staticmethod
+    def _verify_params(action: str, coord) -> tuple:
+        """(region, min_frac) for the change check. Clicks look at a tight box
+        around the click point; type/key/scroll look at the whole frame with a
+        near-zero floor (a typed char is a tiny fraction of the screen)."""
+        if action.endswith("_click") or action == "left_click_drag":
+            half = OperatorMCP._VERIFY_BOX
+            return ([int(coord[0]) - half, int(coord[1]) - half,
+                     2 * half, 2 * half], 0.02)
+        return (None, 0.0005)
+
+    def _verify_action(self, surface, action: str, coord, pre_frame) -> dict | None:
+        """Best-effort — a verify failure must never break the action result."""
+        try:
+            settle = float(os.environ.get("OPERATOR_VERIFY_SETTLE_S", "0.4"))
+            time.sleep(max(0.0, min(settle, 3.0)))
+            post = surface.frame()
+            region, min_frac = self._verify_params(action, coord)
+            frac = frame_change_frac(pre_frame, post, region)
+            if frac is None and region is not None:   # box fell off-frame
+                frac = frame_change_frac(pre_frame, post)
+            if frac is None:
+                return None
+            out = {"changed": frac >= min_frac, "change_frac": round(frac, 4),
+                   "scope": "region" if region is not None else "frame"}
+            if not out["changed"]:
+                out["hint"] = (
+                    "no visible change after this action — it may have missed "
+                    "(wrong coords, a covered target, an unfocused window). Do "
+                    "NOT retry the same action blind: screenshot or perceive "
+                    "first, diagnose, then act differently.")
+            return out
+        except Exception:  # noqa: BLE001
+            return None
+
+    # v1.1 §3.2a — auto-perceive on a failed click verify: the model's next
+    # move after "no visible change" used to be a blind re-click of the same
+    # coords. Give it ground truth IN THE SAME tool result instead: a zoomed
+    # crop around the click point (2× upscaled for legibility) plus, when
+    # tesseract is present, the OCR'd text near the click with full-frame
+    # coordinates — so the retry is corrected, not guessed. Best-effort;
+    # kill-switch OPERATOR_AUTO_LOOK=0.
+    def _look_closer(self, surface, coord) -> tuple:
+        """(crop_ndarray | None, info dict | None) for a failed click."""
+        try:
+            frame = surface.frame()
+            h, w = frame.shape[:2]
+            half = self._LOOK_BOX
+            x0, y0 = max(0, int(coord[0]) - half), max(0, int(coord[1]) - half)
+            x1, y1 = min(w, int(coord[0]) + half), min(h, int(coord[1]) + half)
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                return None, None
+            crop = frame[y0:y1, x0:x1]
+            img = Image.fromarray(crop).convert("RGB")
+            img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
+            info: dict = {"crop_region": [x0, y0, x1 - x0, y1 - y0]}
+            try:
+                hits = perceive_mod.read_text(
+                    frame, region=(x0, y0, x1 - x0, y1 - y0))
+                info["text"] = [{"text": t.text, "x": int(t.x), "y": int(t.y)}
+                                for t in hits[:12]]
+            except RuntimeError:
+                pass   # no tesseract on the host — the crop alone still helps
+            return np.asarray(img), info
+        except Exception:  # noqa: BLE001 — a failed look must not break the action
+            return None, None
+
     def _tool_computer(self, args: dict) -> dict:
         if self.surface_name == "browser":
             raise SurfaceError(
@@ -281,6 +365,13 @@ class OperatorMCP:
         action = args.get("action", "")
         coord = args.get("coordinate") or [0, 0]
         label, detail = "Acting", action
+        pre_frame = None
+        if (action in self._VERIFY_ACTIONS
+                and os.environ.get("OPERATOR_STEP_VERIFY", "1") != "0"):
+            try:
+                pre_frame = surface.frame()
+            except Exception:  # noqa: BLE001 — verify is best-effort
+                pre_frame = None
         if action == "screenshot":
             frame = surface.frame()
             events.record(self.bot, "computer", "Capturing",
@@ -323,9 +414,41 @@ class OperatorMCP:
             label = "Waiting"
         else:
             raise SurfaceError(f"unsupported computer action: {action!r}")
+        out: dict = {"ok": True}
+        look_img = None
+        if pre_frame is not None:
+            verdict = self._verify_action(surface, action, coord, pre_frame)
+            if verdict is not None:
+                out["verified"] = verdict
+                if not verdict["changed"]:
+                    events.record(self.bot, "computer", "No change",
+                                  f"{action} at ({coord[0]}, {coord[1]})")
+                    # §3.2a: failed CLICKS get an automatic close look — the
+                    # actions where "re-aim" (vs "re-think") is the likely fix.
+                    if ((action.endswith("_click") or action == "left_click_drag")
+                            and os.environ.get("OPERATOR_AUTO_LOOK", "1") != "0"):
+                        look_img, look = self._look_closer(surface, coord)
+                        if look is not None:
+                            verdict["look"] = look
+                            verdict["hint"] = (
+                                "no visible change after this click — it likely "
+                                "missed (wrong coords, covered target, unfocused "
+                                "window). A 2×-zoomed screenshot of the click "
+                                "area is attached; verified.look.crop_region is "
+                                "its full-frame position"
+                                + (" and verified.look.text lists on-screen text "
+                                   "near your click with FULL-FRAME coordinates"
+                                   if look.get("text") else "")
+                                + ". Find the real target and correct your "
+                                  "coordinates — do NOT re-click the same spot.")
+                            events.record(self.bot, "computer", "Looking closer",
+                                          f"crop at ({coord[0]}, {coord[1]})")
         events.record(self.bot, "computer", label, detail)
-        return {"content": [{"type": "text", "text": json.dumps({"ok": True})}],
-                "isError": False}
+        content = [{"type": "text", "text": json.dumps(out)}]
+        if look_img is not None:
+            content.append({"type": "image", "data": _b64_jpeg(look_img),
+                            "mimeType": "image/jpeg"})
+        return {"content": content, "isError": False}
 
     # -- protocol ---------------------------------------------------------------
     def _tools(self) -> list:

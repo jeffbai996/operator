@@ -64,20 +64,21 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.3** — the sandbox desktop is a real Docker container you can
-> watch, steer by hand, and hand to **any** runtime (Claude, GPT, Gemini — driver
-> parity shipped early); plus one-command onboarding via `./start.sh`.
+> **Status:** **v1.0.9** — a self-clocking feed with an adaptive mobile tier, a
+> hardened run state machine (stop/stall/token-cap races are gone), and the
+> runner decomposed into focused modules (prompts / trace / runtimes / agy) with
+> 385+ tests across the suites.
 
 ## What it does
 
 | | |
 |---|---|
-| **Live view** | MJPEG stream of an attached Chrome via CDP `Page.captureScreenshot`. |
+| **Live view** | Self-clocking frame pump of an attached Chrome via CDP `Page.captureScreenshot` — latency bounded at ~1 frame in flight on any device, with an adaptive `lo` tier (downscale + harder JPEG) for small screens and Save-Data connections. |
 | **Manual steer** | Click / type / scroll / press-hold / drag flow straight through to the page. |
 | **Agent drive** | `claude-a` + `claude-b` (Claude) and `gpt` (Codex), all on subscription auth — no metered API keys. Conversation is shared across bot switches and persisted across restarts. |
 | **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. |
 | **UX** | MAN/AUTO modes, drag-to-resize chat, live font controls, mobile layout, launchpad of saved tasks, a `/` slash palette, and a real scheduler (repeat/time/day → cron). |
-| **Reliability** | Chrome launched once at server boot (no racy on-demand relaunch), scheduler fired-keys persisted across restarts, vision module loads without OCR present, and an env-tunable token-cap governor that stops a runaway vision run. |
+| **Reliability** | A serialized run state machine (a Stop can't be swallowed by a follow-up turn, a stall-kill can't mislabel a token-cap stop, a clean exit racing a stop is never \"done\"), a stall watchdog that ignores legitimate inter-turn gaps, a hardened stream parser that survives malformed runtime output, Chrome launched once at server boot, persisted scheduler dedupe, and an env-tunable token-cap governor. |
 | **Surfaces** | Browser (default), an isolated sandbox desktop (Xvfb), or the real desktop (gated — explicit per-session confirm, panic-STOP always on screen). Switch from a popover on the brand mark; the live feed follows. |
 | **Perception** | Zero-token local vision (`vision/`): template/colour-blob target finding + OCR, per-game region maps, and grid/crop grounding overlays — the agent reads labeled targets instead of squinting at raw pixels. |
 | **game_macro** | A planner/controller split (`control/`): the model emits a multi-step macro once, a local controller executes + verifies it at machine speed with zero mid-macro model calls, and only reports back on completion or surprise. |
@@ -89,7 +90,11 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 ```text
 __init__.py               exports bp (Flask blueprint) + runner (AgentRunner)
 operator_view.py          blueprint: streamer (CDP screenshots) + /operator routes
-operator_agent.py         AgentRunner: claude -p / codex exec, transcript, action labels
+operator_agent.py         AgentRunner: the run state machine (dispatch/stop/gate)
+operator_runtimes.py      per-runtime launch adapters (argv + MCP-config ownership)
+operator_prompts.py       personas, surface mandates, the task SYSTEM DIRECTIVEs
+operator_trace.py         pure tool-event -> trace-label functions + text cleaning
+operator_agy.py           Gemini/Antigravity trajectory parser (no event stream)
 operator_tasks.py         saved-task store (name / prompt / bot / model / tools)
 operator_schedule.py      cron matcher + background dispatcher, disk-persisted dedupe
 templates/operator.html   the UI markup + JS (styles live in static/operator.css)
@@ -125,6 +130,16 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.9** — **the runner decomposed**. `operator_agent.py` (2,450 lines) is now a 1,250-line state machine plus focused modules: per-runtime **launch adapters** (`operator_runtimes.py` — each owns its argv + MCP-config write, pinned by exact-argv tests and byte-parity prompt fixtures), the **Gemini trajectory subsystem** quarantined into `operator_agy.py` (agy emits no event stream — the live trace is reverse-engineered from its on-disk trajectory; the extraction is proven by fixture replay), and a **hardened stream parser**: truncated JSON, non-dict events, `content: null`, string-typed usage blocks — none of it can kill the reader thread and wedge a run anymore.
+
+**v1.0.8** — **adaptive frame tier + a snappier feed**. The feed takes `?tier=lo|hi`: small screens and Save-Data connections get downscaled, harder-compressed frames (~35% of the bytes on a busy page — measured, not vibes) while desktop keeps full quality; the sandbox stream drops to a leaner ffmpeg rate on `lo`. A cockpit input action now **wakes the capture loop immediately**, so the click's result paints within a frame instead of up to a full interval later (idle cadence unchanged). Under the hood: the prompt prose (~28KB of personas + directives) moved to `operator_prompts.py` with **byte-identical** output proven by pre-refactor fixtures, trace labeling moved to `operator_trace.py`, and a real bug died: the cron matcher ANDed day-of-month with day-of-week, so `0 9 1 * 1` (\"the 1st, or any Monday\") almost never fired — standard cron ORs them; now it does too.
+
+**v1.0.7** — **the run state machine goes correctness-first**. Four confirmed races fixed: the status poll iterating `messages` while the run thread appends (intermittent 500s under any active run — reads now copy under the lock); the stall watchdog SIGTERMing a healthy run in the inter-turn completion-gate gap; a user Stop during that gap being silently swallowed by the follow-up turn's state reset (a separate cancel flag that only a new dispatch clears); and terminal-reason races (token-cap vs stall vs stop vs clean-exit) resolved by one deterministic priority, so a run can never end mislabeled \"done\" when it was actually stopped.
+
+**v1.0.6** — **the launchpad grows up**. **Search** across saved tasks and examples (always-on magnifier next to refresh, AND-across-words over name/prompt/sites, Escape to clear); the card grid **auto-cycles every 15s** with a smooth cross-fade (pauses on hover, while searching, and when the tab is backgrounded; honors reduced-motion); **12 new example tasks** on fresh services, wired into the Save-task suggestions too.
+
+**v1.0.4–1.0.5** — **reliability stretch + model refresh**. A **server-side stall watchdog** (soft \"stalled\" signal → hard auto-stop with the reason in the trace) plus a runtime-agnostic **repeat-action loop-breaker** (N identical actions → a one-shot warning + a next-turn corrective nudge); a **completion gate** — a clean exit without recent visual evidence, or one that reads like a bail, gets exactly one verify/replan follow-up turn; **auto-look on failed clicks** (a zoomed crop + OCR text with coordinates lands in the same tool result, so the model re-aims instead of re-guessing); the **self-clocking frame pump** (fetch → render → fetch: a slow client can never queue behind the feed, killing the progressive iPad lag); launchpad example cards with tap-to-load; GPT **5.6 Sol/Terra/Luna** in the picker with per-tier effort ladders.
 
 **v1.0.3** — **the sandbox becomes a usable computer**. **File transfer**: a Transfer control on the desktop taskbar sends files into the container's `~/Downloads` and downloads anything the agent saves to `Downloads` / `Desktop` / `Documents` (whitelisted dirs only, traversal-proof path gate, 200MB cap, disabled on shared demo instances). **Persistent home**: `/home/opuser` now lives on a named Docker volume, so an image upgrade keeps your files — only the two-tap Delete factory-resets (it removes the volume too). **A real app set**: LibreOffice Writer/Calc, PDF viewer (Atril), archive manager, image viewer, calculator, nano, plus `curl`/`wget`/`git`/`unzip`/`python3` in the terminal. The agent is told where the exchange dirs are, so "save the report where I can grab it" just works.
 

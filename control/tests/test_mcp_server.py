@@ -209,3 +209,127 @@ def test_surface_factory_failure_is_tool_error(tmp_path):
     r = call(srv, "tools/call", {"name": "perceive", "arguments": {}})
     data, is_err = tool_result(r)
     assert is_err and "confirmation" in data["error"]
+
+
+# ── §3.1 step-level verify ───────────────────────────────────────────────────
+
+class ChangingSurface(FakeSurface):
+    """Every frame() call flips a patch — any action visibly changes the screen."""
+    def __init__(self):
+        super().__init__()
+        self._n = 0
+
+    def frame(self):
+        a = np.zeros((60, 80, 3), dtype=np.uint8)
+        self._n += 1
+        if self._n % 2 == 0:
+            a[0:60, 0:80] = (200, 200, 200)
+        return a
+
+
+def test_click_on_reactive_screen_verifies_changed(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    srv = server("desktop-sandbox", surface=ChangingSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click",
+                                               "coordinate": [40, 30]}})
+    data, is_err = tool_result(r)
+    assert not is_err
+    assert data["verified"]["changed"] is True
+
+
+def test_click_on_dead_screen_flags_no_change_with_hint(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    srv = server("desktop-sandbox", surface=FakeSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click",
+                                               "coordinate": [40, 30]}})
+    data, is_err = tool_result(r)
+    assert not is_err
+    assert data["verified"]["changed"] is False
+    # §3.2a upgraded the failed-click hint: it now points at the attached
+    # zoom crop instead of just advising a blind-retry ban.
+    assert "do NOT re-click" in data["verified"]["hint"]
+
+
+def test_type_verifies_against_full_frame(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    srv = server("desktop-sandbox", surface=ChangingSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "type", "text": "hey"}})
+    data, _ = tool_result(r)
+    assert data["verified"]["scope"] == "frame"
+    assert data["verified"]["changed"] is True
+
+
+def test_click_verify_box_off_frame_falls_back_to_full_frame(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    srv = server("desktop-sandbox", surface=ChangingSurface(), tmp_path=tmp_path)
+    # coordinate way outside the 80×60 fake frame → region compare is empty
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click",
+                                               "coordinate": [500, 400]}})
+    data, _ = tool_result(r)
+    assert "verified" in data and data["verified"]["changed"] is True
+
+
+def test_step_verify_env_kill_switch(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_STEP_VERIFY", "0")
+    srv = server("desktop-sandbox", surface=FakeSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click",
+                                               "coordinate": [3, 4]}})
+    data, _ = tool_result(r)
+    assert data == {"ok": True}
+
+
+def test_mouse_move_and_wait_are_not_verified(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    srv = server("desktop-sandbox", surface=ChangingSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "mouse_move",
+                                               "coordinate": [3, 4]}})
+    data, _ = tool_result(r)
+    assert "verified" not in data
+
+
+# ── §3.2a auto-look on failed click verify ───────────────────────────────────
+def test_failed_click_attaches_zoom_crop_and_look_info(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    srv = server("desktop-sandbox", surface=FakeSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click",
+                                               "coordinate": [40, 30]}})
+    data, is_err = tool_result(r)
+    assert not is_err
+    assert data["verified"]["changed"] is False
+    # ground truth in the SAME result: crop geometry + corrected-aim hint
+    assert data["verified"]["look"]["crop_region"] == [0, 0, 80, 60]
+    assert "do NOT re-click" in data["verified"]["hint"]
+    # and the zoomed crop rides along as an image content block
+    kinds = [c["type"] for c in r["result"]["content"]]
+    assert "image" in kinds
+
+
+def test_auto_look_env_kill_switch(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    monkeypatch.setenv("OPERATOR_AUTO_LOOK", "0")
+    srv = server("desktop-sandbox", surface=FakeSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click",
+                                               "coordinate": [40, 30]}})
+    data, _ = tool_result(r)
+    assert data["verified"]["changed"] is False
+    assert "look" not in data["verified"]
+    assert all(c["type"] == "text" for c in r["result"]["content"])
+
+
+def test_failed_type_gets_no_auto_look(tmp_path, monkeypatch):
+    """Re-aim only helps clicks; a failed type needs re-thinking, not a crop."""
+    monkeypatch.setenv("OPERATOR_VERIFY_SETTLE_S", "0")
+    srv = server("desktop-sandbox", surface=FakeSurface(), tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "type", "text": "hi"}})
+    data, _ = tool_result(r)
+    assert data["verified"]["changed"] is False
+    assert "look" not in data["verified"]
