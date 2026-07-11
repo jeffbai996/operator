@@ -108,6 +108,14 @@ class _Streamer:
     # frame buffer — single-user cockpit; per-viewer buffers are a 1.0.10 idea)
     tier: str = "hi"
     _eager_evt = None    # asyncio.Event — an input action wakes the grab loop (F2)
+    # relaunch pacing (2026-07-11): with CDP unreachable, every /frame poll used
+    # to relaunch the thread — a fresh driver process per second, and any driver
+    # not stopped on the failure path leaked (15 orphans in one night). Error
+    # exits now arm a growing backoff that ensure_running honors; a good frame
+    # resets it so recovery after Chrome comes back is fast again.
+    _fail_streak: int = 0
+    _backoff_until: float = 0.0
+    _was_busy: bool = False   # agent-run edge detector (sweep emulation on end)
 
     # ---- lifecycle -------------------------------------------------------
     def ensure_running(self) -> None:
@@ -117,6 +125,8 @@ class _Streamer:
             alive = self._thread is not None and self._thread.is_alive()
             if self._running and alive:
                 return
+            if time.monotonic() < self._backoff_until:
+                return   # recent abnormal death — don't thrash the relaunch
             self._running = False  # reset a stale flag so we cleanly relaunch
             self._running = True
             self.status = "connecting"
@@ -139,8 +149,14 @@ class _Streamer:
             self.status, self.detail = "error", str(e)
         finally:
             self._running = False
-            if self.status == "live":
-                self.status = "idle"
+            with self._lock:
+                if self.status == "error":
+                    # abnormal death (attach failure / wedge) → pace the relaunch
+                    self._fail_streak = min(self._fail_streak + 1, 8)
+                    self._backoff_until = time.monotonic() + min(
+                        10.0, 2.0 ** self._fail_streak)
+                elif self.status == "live":
+                    self.status = "idle"
 
     @staticmethod
     def _chrome_attach_script() -> str:
@@ -186,7 +202,17 @@ class _Streamer:
         ctx = self._browser.contexts[0] if self._browser.contexts else \
             await self._browser.new_context()
         pages = [p for p in ctx.pages if not p.is_closed()]
-        self._page = pages[0] if pages else await ctx.new_page()
+        if pages:
+            self._page = pages[0]
+        else:
+            # fallback page: navigate it to the landing URL — a bare new_page()
+            # sits on about:blank forever ("new tab doesn't load the home page")
+            self._page = await ctx.new_page()
+            self._cdp = None
+            try:
+                await self._cdp_navigate(self._page, _NEWTAB_DATA_URL)
+            except Exception:  # noqa: BLE001 — landing nav is best-effort
+                pass
         try:
             await ctx.add_init_script("""
                 (function(){
@@ -246,7 +272,18 @@ class _Streamer:
         return self._io_lock
 
     async def _grab_loop(self) -> None:
-        await self._attach()
+        # try/finally so the driver is stopped on EVERY exit path — including an
+        # _attach() that raises (2026-07-11: a failed connect_over_cdp left the
+        # freshly-started driver orphaned; combined with per-poll relaunch this
+        # leaked one node process per second all night).
+        try:
+            await self._attach()
+            await self._grab_loop_inner()
+        finally:
+            self.frame = None      # stopping → no stale 'live' with no frames
+            await self._teardown()
+
+    async def _grab_loop_inner(self) -> None:
         _misses = 0
         while self._running:
             if time.monotonic() - self.last_view > IDLE_STOP_AFTER:
@@ -262,6 +299,12 @@ class _Streamer:
                     try: self.cur_url = self._page.url or ""
                     except Exception: pass
                     _misses = 0
+                    if self._fail_streak:
+                        # frames flowing again → recovery is proven; relaunches
+                        # go back to instant for the next incident
+                        with self._lock:
+                            self._fail_streak = 0
+                            self._backoff_until = 0.0
                 else:
                     _misses += 1
                     if _misses >= 4:
@@ -319,22 +362,31 @@ class _Streamer:
                 # page-level hiccup → soft swap; whole-browser drop → hard re-attach
                 ok = await self._reattach_soft()
                 if not ok:
-                    self.status = "connecting"
                     try:
                         await self._teardown()
+                        self.status = "connecting"   # after teardown (which idles)
                         await self._attach()
                     except Exception as e2:  # noqa: BLE001
+                        # browser connection is GONE — exit and let ensure_running
+                        # relaunch under the backoff, instead of starting a fresh
+                        # driver process inside the loop every ~1.3s (2026-07-11)
                         self.status, self.detail = "error", str(e2)
-                        await asyncio.sleep(1.0)
+                        break
             # ease off while an agent drives (shares CDP with the agent's MCP);
             # _pace (not sleep) so a cockpit action wakes the loop instantly (F2)
             try:
                 busy = operator_agent.runner.is_running()
             except Exception:
                 busy = False
+            if self._was_busy and not busy:
+                # run just ended → sweep the emulation it may have left on the
+                # shared browser (never mid-run: a run may emulate deliberately)
+                try:
+                    await self._clear_emulation()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._was_busy = busy
             await self._pace(0.45 if busy else FRAME_INTERVAL)
-        self.frame = None          # stopping → no stale 'live' with no frames
-        await self._teardown()
 
     async def _grab(self, page):
         """Raw JPEG frame via CDP Page.captureScreenshot — no font-loading wait
@@ -530,7 +582,40 @@ class _Streamer:
             except Exception:  # noqa: BLE001
                 pass
         self._page = self._browser = self._pw = None
-        self.status = "idle"
+        # an error status (wedge, attach failure) must SURVIVE teardown — it
+        # carries the user-facing message and keys the relaunch backoff
+        if self.status != "error":
+            self.status = "idle"
+
+    async def _clear_emulation(self) -> dict:
+        """Strip device-metrics + touch emulation overrides from EVERY page of
+        the attached browser. Agent MCP sessions (and one-off browser_resize
+        calls) leave CDP emulation on the real Chrome, and it OUTLIVES the
+        client that set it: pages stay reflowed to the emulated size (the
+        2026-07-10 "zoom spaz") and touch emulation kills wheel scrolling.
+        Per-page best-effort; a page with no override is a harmless no-op."""
+        cleared, failed = 0, 0
+        try:
+            ctx = self._browser.contexts[0]
+            pages = [p for p in ctx.pages if not p.is_closed()]
+        except Exception as e:  # noqa: BLE001 — browser gone/never attached
+            return {"ok": False, "error": str(e), "cleared": 0, "failed": 0}
+        for pg in pages:
+            try:
+                sess = await ctx.new_cdp_session(pg)
+                await asyncio.wait_for(
+                    sess.send("Emulation.clearDeviceMetricsOverride"), timeout=1.5)
+                await asyncio.wait_for(
+                    sess.send("Emulation.setTouchEmulationEnabled",
+                              {"enabled": False}), timeout=1.5)
+                try:
+                    await sess.detach()
+                except Exception:  # noqa: BLE001
+                    pass
+                cleared += 1
+            except Exception:  # noqa: BLE001 — dead/privileged page, keep sweeping
+                failed += 1
+        return {"ok": True, "cleared": cleared, "failed": failed}
 
     # ---- tabs ------------------------------------------------------------
     def list_tabs(self) -> list:
@@ -897,6 +982,12 @@ class _Streamer:
                     await p.evaluate(f"document.documentElement.style.zoom = '{self.zoom}'")
                 except Exception:
                     pass
+            elif kind == "reset_view":
+                # strip emulation overrides an agent run (or a stray
+                # browser_resize) left on the shared browser — the "stuck
+                # phone-zoom + dead scrolling" recovery, one tap from the menu
+                res = await self._clear_emulation()
+                return res
             elif kind == "hard_reload":
                 await p.reload(timeout=20000)
                 await p.keyboard.press("Control+Shift+r")
@@ -1413,6 +1504,53 @@ def operator_status():
                    click=click, surface=surface)
 
 
+@bp.route("/operator/history")
+def operator_history_list():
+    """Flight-recorder rows, newest first (lean — no trace payloads)."""
+    if DEMO:
+        return jsonify(ok=False, error="history is live-cockpit only"), 403
+    import operator_history as _hist
+    try:
+        limit = min(max(int(request.args.get("limit", 30)), 1), 200)
+    except (TypeError, ValueError):
+        limit = 30
+    return jsonify(ok=True, runs=_hist.recent(limit))
+
+
+@bp.route("/operator/history/<int:run_id>")
+def operator_history_get(run_id: int):
+    """One recorded run, full trace included."""
+    if DEMO:
+        return jsonify(ok=False, error="history is live-cockpit only"), 403
+    import operator_history as _hist
+    row = _hist.get(run_id)
+    if row is None:
+        return jsonify(ok=False, error="no such run"), 404
+    return jsonify(ok=True, run=row)
+
+
+@bp.route("/operator/session", methods=["GET", "POST"])
+def operator_session():
+    """The ONE shared cockpit session (chat log / mode / picker state), synced
+    across devices. GET → {ok, rev, data}; POST {data} → {ok, rev}. The public
+    demo is per-visitor by design (localStorage) — hard-gated here."""
+    if DEMO:
+        return jsonify(ok=False, error="demo sessions are per-visitor"), 403
+    import operator_session as _sess_store
+    if request.method == "GET":
+        got = _sess_store.load()
+        return jsonify(ok=True, rev=got["rev"], data=got["data"])
+    body = request.get_json(silent=True) or {}
+    data = body.get("data")
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error="body must be {data: {...}}"), 400
+    try:
+        rev = _sess_store.save(data)
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 413
+    return jsonify(ok=True, rev=rev)
+
+
 @bp.route("/operator/unseen")
 def operator_unseen():
     """Finished-runs-you-haven't-looked-at count — feeds the red badge on the
@@ -1784,6 +1922,24 @@ def operator_sandbox_file(rel: str):
                      download_name=_os.path.basename(out))
 
 
+def _desktop_real_preflight() -> str | None:
+    """Probe the real-desktop capture before a desktop-real run. Returns an
+    error string when the console can't actually be seen. A locked or
+    non-interactive Windows session reports the disconnected-console default
+    geometry (exactly 1024×768) and captures a blank frame — on this panel
+    (2816×1940) that geometry is unambiguous. The probe costs one capture
+    (~1-2s), paid only on desktop-real dispatches."""
+    try:
+        wb = _load_cu("win_backend.py")
+        w, h = wb.screen_size()
+    except Exception as e:  # noqa: BLE001 — no powershell / capture broke
+        return f"desktop-real capture unavailable: {e}"
+    if (w, h) == (1024, 768):
+        return ("the Windows console looks locked or headless (phantom "
+                "1024×768 screen) — unlock the desktop, then dispatch again")
+    return None
+
+
 @bp.route("/operator/dispatch", methods=["POST"])
 def operator_dispatch():
     """Start a headless Claude Code agent (as the chosen persona) to do the task
@@ -1805,6 +1961,14 @@ def operator_dispatch():
         if surface not in ("browser", "desktop-sandbox"):
             surface = "browser"
         real_ok = False
+    if surface == "desktop-real":
+        # pre-flight the capture BEFORE any side effect (surface flip, run
+        # start): with the Windows console locked, win_capture returns a
+        # phantom blank 1024×768 screen (verified 2026-07-11) and the run
+        # would burn itself clicking into a white void.
+        err = _desktop_real_preflight()
+        if err:
+            return jsonify(ok=False, error=err), 409
     if surface != _active_surface["name"] \
             and surface in [s["key"] for s in _SURFACE_DEFS]:
         _active_surface["name"] = surface     # feed follows the dispatch
@@ -1867,6 +2031,7 @@ def _task_public(slug: str, t: dict) -> dict:
         "slug": slug,
         "name": t.get("name", ""),
         "prompt": t.get("prompt", ""),
+        "vars": operator_tasks_store.extract_vars(t.get("prompt", "")),
         "sites": t.get("sites", []),
         "bot": t.get("bot", ""),
         "model": t.get("model", ""),
@@ -1941,6 +2106,17 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict
     prompt = (t.get("prompt") or "").strip()
     if not prompt:
         return {"ok": False, "error": "task has empty prompt"}, 400
+    # {{variables}} (1.0.13): fill from overrides.vars; anything left unfilled
+    # bounces with the missing names so the client can collect values (and the
+    # scheduler's bare dispatch of a var task fails loudly instead of running
+    # a prompt full of literal braces — save_task also refuses that combo).
+    if operator_tasks_store.extract_vars(prompt):
+        prompt, missing = operator_tasks_store.fill_vars(
+            prompt, overrides.get("vars") or {})
+        if missing:
+            return {"ok": False, "vars": missing,
+                    "error": "task needs variable values: "
+                             + ", ".join(missing)}, 400
 
     # Same Chrome-ensure as /dispatch: no longer relaunches, just re-checks status.
     try:
@@ -2002,6 +2178,26 @@ def operator_agent_state():
 @bp.route("/operator/agent/stop", methods=["POST"])
 def operator_agent_stop():
     return jsonify(operator_agent.runner.stop())
+
+
+@bp.route("/operator/agent/say", methods=["POST"])
+def operator_agent_say():
+    """Mid-run steering (1.0.12): queue a user message for the LIVE run —
+    delivered mid-loop by the steer hook (claude runtime) or as one more
+    resumed turn at the exit seam. 409 when nothing is running (the client
+    falls back to a normal dispatch). Allowed in demo: the demo runner is a
+    separate process AND its steer queue is a separate file (demo-scoped
+    OPERATOR_STEER_PATH + the .demo default backstop — a shared queue would
+    let a visitor steer a live production run; found in review 2026-07-11),
+    and a visitor already controls the task text — no new surface."""
+    data = request.get_json(silent=True) or request.form
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify(ok=False, error="empty message"), 400
+    if len(text) > 4000:
+        return jsonify(ok=False, error="message too long (max 4000 chars)"), 413
+    r = operator_agent.runner.steer(text)
+    return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
 @bp.route("/operator/agent/reset", methods=["POST"])

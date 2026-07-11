@@ -780,3 +780,54 @@ def test_stream_decay_decision():
     assert F._stream_decayed(50, 5.0, age_s=600.0) is False
     # boundary: exactly the floor is NOT decayed (strict less-than)
     assert F._stream_decayed(20, 5.0, age_s=60.0) is False
+
+
+def test_task_run_with_vars_requires_values(live, fake_runner, monkeypatch):
+    """1.0.13: a {{variable}} task can't run unfilled — 400 names the vars so
+    the client can prefill the composer instead."""
+    client, mod = live
+    _patch_streamer(monkeypatch, mod, FakeStreamer())
+    import operator_tasks as OT
+    monkeypatch.setattr(mod, "operator_tasks_store", OT)
+    monkeypatch.setattr(OT, "get_task", lambda slug: {
+        "prompt": "check {{ticker}} price on {{site}}", "bot": "claude-a",
+        "model": "", "effort": "", "sites": [], "start_url": ""})
+    monkeypatch.setattr(OT, "sites_preamble", lambda sites: "")
+    resp = client.post("/operator/tasks/tpl/run", json={})
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["vars"] == ["ticker", "site"]
+    assert "variable" in body["error"]
+    assert fake_runner.calls == []
+    # partial fill → still 400, only the missing one named
+    resp = client.post("/operator/tasks/tpl/run",
+                       json={"vars": {"ticker": "AAPL"}})
+    assert resp.status_code == 400
+    assert resp.get_json()["vars"] == ["site"]
+
+
+def test_task_run_fills_vars_into_prompt(live, fake_runner, monkeypatch):
+    client, mod = live
+    _patch_streamer(monkeypatch, mod, FakeStreamer())
+    import operator_tasks as OT
+    monkeypatch.setattr(mod, "operator_tasks_store", OT)
+    monkeypatch.setattr(OT, "get_task", lambda slug: {
+        "prompt": "check {{ticker}} price", "bot": "claude-a",
+        "model": "", "effort": "", "sites": [], "start_url": ""})
+    monkeypatch.setattr(OT, "sites_preamble", lambda sites: "")
+    monkeypatch.setattr(OT, "mark_run", lambda slug: None)
+    resp = client.post("/operator/tasks/tpl/run",
+                       json={"vars": {"ticker": "AAPL"}})
+    assert resp.status_code == 200
+    task = fake_runner.calls[0]["task"]
+    assert "AAPL" in task and "{{" not in task
+
+
+def test_tasks_list_exposes_vars(live, fake_runner, monkeypatch):
+    client, mod = live
+    import operator_tasks as OT
+    monkeypatch.setattr(mod, "operator_tasks_store", OT)
+    monkeypatch.setattr(OT, "load_tasks", lambda: {
+        "tpl": {"name": "tpl", "prompt": "check {{ticker}}"}})
+    rows = client.get("/operator/tasks").get_json()["tasks"]
+    assert rows[0]["vars"] == ["ticker"]

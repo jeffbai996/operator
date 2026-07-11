@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.9-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-1.0.15-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -64,10 +64,11 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.9** — a self-clocking feed with an adaptive mobile tier, a
-> hardened run state machine (stop/stall/token-cap races are gone), and the
-> runner decomposed into focused modules (prompts / trace / runtimes / agy) with
-> 385+ tests across the suites.
+> **Status:** **v1.0.15** — mid-run steering (talk to a live run without
+> killing it), a client-JS regression harness in headless Chromium, one shared
+> session across devices, a flight-recorder run ledger with trace replay,
+> saved-task `{{variables}}`, install-to-home-screen PWA, and 400+ tests
+> across the suites.
 
 ## What it does
 
@@ -97,7 +98,12 @@ operator_trace.py         pure tool-event -> trace-label functions + text cleani
 operator_agy.py           Gemini/Antigravity trajectory parser (no event stream)
 operator_tasks.py         saved-task store (name / prompt / bot / model / tools)
 operator_schedule.py      cron matcher + background dispatcher, disk-persisted dedupe
-templates/operator.html   the UI markup + JS (styles live in static/operator.css)
+operator_session.py       one shared cockpit session (rev-counted, cross-device)
+operator_history.py       flight recorder: SQLite run ledger, one row per finished run
+operator_steer.py         mid-run steer queue (cross-process, hook + exit-seam delivery)
+steer_hook.py             PostToolUse hook: injects queued steers into the live agent
+templates/operator.html   the UI markup + a small endpoint-config script
+static/js/operator.js     the entire cockpit client (extracted from the template)
 static/operator.css       the UI stylesheet (extracted from the template)
 align_audit.py            dev tool: measures header / urlbar alignment
 vision/                   local perception: template/colour targets, OCR, per-game maps
@@ -130,6 +136,18 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.15** — **run economics + trace replay**. A live token meter on the working card (the ledger's burn numbers while the run burns), and History rows expand on click into the full role-tagged trace. A run queue was deliberately *not* built: the single-flight runner is a safety property, and mid-run steering already answers "message while busy".
+
+**v1.0.14** — **the JS extraction + PWA**. The ~3,600-line inline cockpit script became `static/js/operator.js` — extracted mechanically (scripted cut with abort-on-surprise guards), endpoints injected via a tiny inline config so the client file is plain JS: cacheable, lintable, `node --check`-able. Plus install-to-home-screen: a web manifest with relative scope (works under any mount path), generated icons, standalone meta — the cockpit installs as an app on a tablet.
+
+**v1.0.13** — **task templates + re-run**. Saved-task prompts take `{{variables}}`, filled at dispatch — an unfilled run bounces with the missing names, and Go loads the prompt into the composer with the first placeholder selected. Scheduled tasks refuse variables at save (nobody is there to fill them when cron fires). History rows get ↻ run-again carrying the row's own agent/model/surface, and the real desktop still demands its consent flow.
+
+**v1.0.12** — **mid-run steering**. A message sent during a live run now *reaches the agent* instead of killing it. Two delivery seams: a PostToolUse hook injects the message right after the agent's next tool call (mid-loop, via resume-safe project settings), and anything unconsumed becomes one more resumed turn when the process exits — so delivery is guaranteed on every runtime. The composer soft-steers with queued→delivered feedback; Stop stays the hard redirect.
+
+**v1.0.11** — **one shared session + the flight recorder**. The cockpit chat/mode/pickers live server-side now — open the cockpit on another device and the conversation is just there. And every finished run writes one row to a SQLite ledger (who ran what, where, how it ended, token spend, the full trace) surfaced in a History popover. The real-desktop dispatch pre-flights the screen and refuses a locked console instead of clicking into a void.
+
+**v1.0.10** — **the client harness + feed truth**. A headless-Chromium page harness now loads the REAL cockpit page and fails on any `pageerror` — the class of client-side init crash that server tests can't see (and it has caught real bugs every release since). Placeholder frames no longer count as live signal (kills a reconnect word-flap), the streamer's browser driver is stopped on every exit path with relaunch backoff (an orphaned-driver leak), and finished runs sweep any leftover viewport emulation off the browser.
 
 **v1.0.9** — **the runner decomposed**. `operator_agent.py` (2,450 lines) is now a 1,250-line state machine plus focused modules: per-runtime **launch adapters** (`operator_runtimes.py` — each owns its argv + MCP-config write, pinned by exact-argv tests and byte-parity prompt fixtures), the **Gemini trajectory subsystem** quarantined into `operator_agy.py` (agy emits no event stream — the live trace is reverse-engineered from its on-disk trajectory; the extraction is proven by fixture replay), and a **hardened stream parser**: truncated JSON, non-dict events, `content: null`, string-typed usage blocks — none of it can kill the reader thread and wedge a run anymore.
 
