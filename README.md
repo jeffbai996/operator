@@ -2,7 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.15-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-1.0.16-blue" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
@@ -64,7 +64,7 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.15** — mid-run steering (talk to a live run without
+> **Status:** **v1.0.16** — mid-run steering (talk to a live run without
 > killing it), a client-JS regression harness in headless Chromium, one shared
 > session across devices, a flight-recorder run ledger with trace replay,
 > saved-task `{{variables}}`, install-to-home-screen PWA, and 400+ tests
@@ -136,6 +136,8 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.16** — **the fix release closing the 1.0.x line**. Demo/prod store isolation (a demo visitor's mid-run steer could reach a live production run — found in review, fixed at the launch layer with code backstops), Win-key hotkeys via `keybd_event` (SendKeys silently dropped the Win modifier — "switch virtual desktop" sent Ctrl+Right into the void), sandbox latency back to browser-level (a stale X lock silently wedged container restarts; the boot script self-heals now), the trash button pushes the cleared session (the server used to resurrect the chat), a smooth Finish-up hand-back flow, the surface chip sheds size on narrow rails instead of colliding with the mode toggle, red-✕/green-✓ consent pills, and the desktop taskbar auto-minimizes to icons when idle.
 
 **v1.0.15** — **run economics + trace replay**. A live token meter on the working card (the ledger's burn numbers while the run burns), and History rows expand on click into the full role-tagged trace. A run queue was deliberately *not* built: the single-flight runner is a safety property, and mid-run steering already answers "message while busy".
 

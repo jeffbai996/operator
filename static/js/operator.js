@@ -1274,7 +1274,9 @@
         + '<span class="op-surf-hint">Operator will have unrestricted control of your desktop.</span></span>'
         + '<span class="op-surf-confirm"><button type="button" class="op-surf-yes" aria-label="confirm" title="Confirm">'
         + '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3L13 4.5"></path></svg>'
-        + '</button><button type="button" class="op-surf-no">Cancel</button></span>';
+        + '</button><button type="button" class="op-surf-no" aria-label="cancel" title="Cancel">'
+        + '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"></path></svg>'
+        + '</button></span>';
       row.querySelector('.op-surf-yes').addEventListener('click', (e) => {
         e.stopPropagation(); setSurface('desktop-real', true); });
       row.querySelector('.op-surf-no').addEventListener('click', (e) => {
@@ -1873,16 +1875,13 @@
       ed.addEventListener('click', (e) => { e.stopPropagation(); lp.hidden = true; window._opEditSavedTask(t); });
       c.appendChild(ed);
     }
-    // Go launches; a tap anywhere else on the card loads the prompt into the
-    // composer to edit before sending  — never auto-fires, so
-    // browsing the grid can't accidentally run a task. Go/Edit stopPropagation,
-    // so they don't also trigger this.
+    // Go launches; a tap anywhere else on the card ONLY pastes the prompt into
+    // the composer — the launchpad stays open and keeps browsing, tapping
+    // another card just swaps the draft . Never auto-fires. Go/Edit stopPropagation.
     c.addEventListener('click', () => {
-      lp.hidden = true;
       input.value = t.prompt || '';
       if (typeof autoGrow === 'function') autoGrow();
       if (typeof refreshSendButton === 'function') refreshSendButton();
-      input.focus();
     });
     return c;
   }

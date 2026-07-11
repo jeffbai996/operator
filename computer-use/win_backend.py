@@ -3,17 +3,16 @@
 The screen-agnostic agentic loop in loop.py speaks one small interface to
 whatever backend it's pointed at: ensure() / screen_size() / screenshot() /
 execute(). The Linux backend (display.py + actions.py) drives an isolated Xvfb
-display via scrot+xdotool; THIS backend drives the owner's real Windows desktop
-via PowerShell — `win_capture.ps1` (System.Drawing screen grab) for screenshots
-and `win_input.ps1` (Win32 SetCursorPos + mouse_event + SendKeys) for input,
-both exec'd through powershell.exe across the WSL→Windows boundary.
+display via scrot+xdotool; THIS backend drives the owner's real Windows desktop via
+PowerShell — `win_capture.ps1` (System.Drawing screen grab) for screenshots and
+`win_input.ps1` (Win32 SetCursorPos + mouse_event + SendKeys) for input, both
+exec'd through powershell.exe across the WSL→Windows boundary.
 
-INVASIVE BY NATURE: this moves the owner's actual cursor and types into their
-live session — they can't use the machine while a loop runs, and a misclick
-acts on their real desktop. That's the option-A tradeoff (vs the
-safe-but-isolated Linux sandbox). The vision loop itself is identical to
-option B — only capture+inject differ, which is the whole reason B was built
-first.
+INVASIVE BY NATURE: this moves the owner's actual cursor and types into their live
+session — they can't use the machine while a loop runs, and a misclick acts on their
+real desktop. That's the option-A tradeoff (vs the safe-but-isolated Linux
+sandbox). The vision loop itself is identical to option B — only capture+inject
+differ, which is the whole reason B was built first.
 
 Feasibility verified 2026-06-25: screenshot (1609x1109 real desktop) and cursor
 injection (cursor physically moved) both confirmed from WSL.
@@ -55,6 +54,11 @@ _KEY_TO_SENDKEYS = {
     "Left": "{LEFT}", "Right": "{RIGHT}", "Home": "{HOME}", "End": "{END}",
 }
 _MODIFIER_TO_SENDKEYS = {"ctrl": "^", "control": "^", "alt": "%", "shift": "+"}
+# SendKeys cannot express the Windows key — combos carrying one of these route
+# through win_input.ps1's `hotkey` action (raw keybd_event VKs) instead. The
+# old path silently DROPPED the Win modifier: "switch virtual desktop"
+# (win+ctrl+right) actually sent ctrl+right into the void (found 2026-07-11).
+_VK_ROUTED_MODS = {"win", "windows", "super", "meta", "cmd"}
 
 
 class WinBackendError(RuntimeError):
@@ -118,8 +122,8 @@ def _win_temp_win() -> str:
 
 
 # Downscale captures to this long-edge width (preserve aspect). 1280 is the
-# measured sweet spot on a 2816x1940 high-DPI panel: ~1482 input tokens/frame
-# (−32% vs 1568) while keeping dense UI text (tickers, terminals) legible to the model.
+# measured sweet spot on the owner's 2816x1940 panel: ~1482 input tokens/frame (−32%
+# vs 1568) while keeping dense UI text (tickers, terminals) legible to the model.
 # Below ~1024 small text starts to blur → misclicks → retries that cost more than
 # they save. Bump up via COMPUTER_USE_WIN_MAXWIDTH for read-heavy tasks. The
 # physical resolution far exceeds this on a high-DPI panel, so the model's click
@@ -205,7 +209,12 @@ def execute(action: dict, _target: str) -> None:
         _pwsh(["-Action", "type", "-Text", action.get("text", "")], _INPUT_PS1)
         return
     if kind == "key":
-        _pwsh(["-Action", "key", "-Key", _sendkeys(action.get("text", ""))], _INPUT_PS1)
+        combo = action.get("text", "")
+        parts = [p.strip().lower() for p in combo.split("+")]
+        if any(p in _VK_ROUTED_MODS for p in parts):
+            _pwsh(["-Action", "hotkey", "-Key", combo], _INPUT_PS1)
+        else:
+            _pwsh(["-Action", "key", "-Key", _sendkeys(combo)], _INPUT_PS1)
         return
     if kind == "scroll":
         direction = action.get("scroll_direction", "down")

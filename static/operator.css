@@ -112,6 +112,11 @@
   .op-head { display: flex; align-items: center; gap: 0.22rem; margin-top: -1.5px; }   /* tight so all controls fit one row */
   /* As the chat rail narrows (user drags it small to maximize the browser), shed
      header chrome so all controls stay on one row instead of clipping. */
+  /* Surface chip sheds size as the rail narrows . Shrinking the chip also narrows the verline,
+     which pulls the brand caret left with it — no Operator↔caret gap. */
+  @container rail (max-width: 340px) {
+    .op-surface-chip { font-size: 0.38rem; padding: 1px 3px; letter-spacing: .02em; }
+  }
   @container rail (max-width: 304px) {
     .op-head { gap: 0.16rem; }
     .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }   /* tighten MAN/AUTO labels */
@@ -121,6 +126,10 @@
        its hover-shade becomes the "click me" affordance instead of the caret. */
     .op-head .op-brand-caret { opacity: 0 !important; width: 0; margin: 0;
       transition: opacity .18s ease, width .18s ease; }
+    /* the chip is a hint, not a control — below this width it would ride
+       under MAN/AUTO, so it bows out (the surface popover still shows where
+       you are) */
+    .op-surface-chip { opacity: 0; width: 0; padding: 0; border: 0; margin: 0; }
   }
   @container rail (max-width: 273px) {
     /* shrink the Operator+version unit to nothing (scale, not clip — so no letter gets chopped mid-word) */
@@ -538,7 +547,7 @@
      between states so it flashes rather than breathes. */
   .op-handoff-head .hi { flex: 0 0 auto; width: 0.6em; height: 0.6em;
     background: #f5c542; border-radius: 50%; display: inline-block;
-    position: relative; top: 0.25px;   /* optical centering vs the head text */
+    position: relative; top: 0.45px;   /* optical centering vs the head text */
     animation: op-handoff-blink 1.25s steps(1, end) infinite; }
   @keyframes op-handoff-blink {
     0%   { opacity: 1; }
@@ -1644,10 +1653,12 @@
   .op-titlewrap:not([role="button"]) .op-brand-caret { display: none; }   /* nothing to switch → no caret */
   .op-titlewrap[aria-expanded="true"] .op-brand-caret { transform: rotate(180deg); opacity: .9; }
   .op-verline { display: inline-flex; align-items: center; gap: 5px; }
-  .op-surface-chip { font: 700 0.46rem/1 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: .05em; text-transform: uppercase; white-space: nowrap;
+  .op-surface-chip { font: 700 0.42rem/1 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: .04em; text-transform: uppercase; white-space: nowrap;
     color: #eab308; background: rgba(234,179,8,.12); border: 1px solid rgba(234,179,8,.35);
-    border-radius: 4px; padding: 1.5px 4px; margin-top: 2px; }
+    border-radius: 4px; padding: 1.5px 3.5px; margin-top: 2px;
+    overflow: hidden;   /* width:0 at the narrow tier actually hides it */
+    transition: font-size .18s ease, padding .18s ease, opacity .18s ease, width .18s ease; }
   .op-surface-chip.real { color: #f87171; background: rgba(248,113,113,.12);
     border-color: rgba(248,113,113,.4); }
 
@@ -1687,7 +1698,8 @@
     display: inline-flex; align-items: center; justify-content: center; }
   .op-surf-confirm .op-surf-yes:hover { background: rgba(86,211,100,.20); color: #7ee787; }
   .op-surf-confirm .op-surf-no { color: #f47067; border-color: rgba(229,83,75,.4);
-    background: rgba(229,83,75,.08); }
+    background: rgba(229,83,75,.08); padding: 0; width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center; }
   .op-surf-confirm .op-surf-no:hover { background: rgba(229,83,75,.18); color: #ff8b81; }
 
   /* game strip — an expanding footer inside the surface popover. A label + a
