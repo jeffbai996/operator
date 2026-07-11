@@ -23,7 +23,9 @@ _log = logging.getLogger("operator.agent")
 # Prompt prose (personas, mandates, SYSTEM DIRECTIVEs, gate prompts) lives
 # in operator_prompts (1.0.8 R2); aliased for AGENT_BOTS and the agy path.
 import operator_agy
+import operator_history
 import operator_runtimes
+import operator_steer
 import operator_prompts as _prompts
 from operator_prompts import (
     AGY_STEPWISE_DIRECTIVE as _AGY_STEPWISE_DIRECTIVE,
@@ -135,6 +137,49 @@ AGENT_BOTS = {
 for _b in AGENT_BOTS.values():
     try: os.makedirs(_b["cwd"], exist_ok=True)
     except Exception: pass
+
+
+_STEER_HOOK_CMD = ("python3 " + os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "steer_hook.py"))
+
+
+def _ensure_steer_hook_settings(cwd: str) -> None:
+    """Idempotently wire the steer hook (1.0.12) into a bot cwd's PROJECT
+    settings (.claude/settings.json). The project FILE is resume-safe — the
+    --settings FLAG is what breaks --resume (verified 2026-07-11). Merge-
+    preserving: existing keys/hooks survive; re-running with the hook already
+    present writes nothing. Best-effort — a failed write only costs mid-loop
+    steering (the exit-seam still delivers)."""
+    try:
+        sp = os.path.join(cwd, ".claude", "settings.json")
+        cfg: dict = {}
+        try:
+            with open(sp, encoding="utf-8") as f:
+                cfg = json.load(f)
+            if not isinstance(cfg, dict):
+                cfg = {}
+        except (OSError, ValueError):
+            pass
+        hooks = cfg.setdefault("hooks", {})
+        groups = hooks.setdefault("PostToolUse", [])
+        if any(_STEER_HOOK_CMD == h.get("command")
+               for g in groups if isinstance(g, dict)
+               for h in (g.get("hooks") or []) if isinstance(h, dict)):
+            return   # already wired — no churn
+        groups.append({"matcher": "",
+                       "hooks": [{"type": "command", "command": _STEER_HOOK_CMD}]})
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        tmp = sp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(tmp, sp)
+    except Exception:  # noqa: BLE001 — never let hook wiring block module import
+        pass
+
+
+for _b in AGENT_BOTS.values():
+    if _b.get("runtime") == "claude":   # only claude reads .claude/settings.json
+        _ensure_steer_hook_settings(_b["cwd"])
 
 
 
@@ -264,8 +309,13 @@ class AgentRunner:
         # convo survives switching claude-a↔claude-b↔gpt. [{role:'user'|'assistant', text}]
         # Persisted to disk so it ALSO survives a server restart (the store/Flask
         # process bounces on every deploy — without this the convo evaporated).
-        self._state_path = os.path.join(
-            os.path.expanduser("~/.cache/computer-use"), "operator-state.json")
+        # DEMO ISOLATION: same-user demo server must never share the real
+        # cockpit's transcript/session-id state (launch scripts set the env;
+        # the .demo suffix is the backstop — mirrors operator_steer.path()).
+        self._state_path = os.environ.get("OPERATOR_STATE_PATH") or (
+            os.path.join(os.path.expanduser("~/.cache/computer-use"),
+                         "operator-state.json")
+            + (".demo" if os.environ.get("OPERATOR_DEMO") else ""))
         self._session_ids: dict = {}      # bot -> last claude session id (resume)
         self._transcript: list = []
         self._last_bot: str | None = None
@@ -316,6 +366,14 @@ class AgentRunner:
         if old != new:
             _log.info("operator state %s -> %s%s", old, new,
                       f" ({reason})" if reason else "")
+        if old == "running" and new in ("done", "error", "interrupted"):
+            # flight recorder (1.0.11): exactly one ledger row per finished
+            # run, hooked at the sole state writer so the gate gap's proc-less
+            # turns can't double-record. record() never raises by contract.
+            try:
+                operator_history.record(self, reason=reason)
+            except Exception:  # noqa: BLE001 — history must never break a run
+                pass
 
     def _touch(self) -> None:
         """Progress heartbeat: any output line / trace step counts as progress."""
@@ -404,6 +462,7 @@ class AgentRunner:
             # state='running' with no thread (the class of bug behind the
             # v0.9.0 persona-swap .format() KeyError wedge).
             self._set_state("running", f"start {bot}")
+            operator_steer.clear()   # a fresh run must not inherit stale steers
             try:
                 return self._start_locked(bot, task, model, effort, demo, binpath, b)
             except Exception as e:  # noqa: BLE001 — a dead launch must surface
@@ -468,19 +527,21 @@ class AgentRunner:
         # message (the desktop-sandbox .format() KeyError found it, 2026-07-08).
         try:
             followup = self._run_inner(binpath, b, task)
+            # Follow-up loop (1.0.12): _run_inner returns a prompt instead of
+            # landing a terminal state when the run needs one more resumed
+            # turn — the §3.3 gate (bounded to one by _gate_fired) or the
+            # steer exit-seam (user-driven, repeats until the queue is dry).
             # B3: gate on _cancel_requested, NOT _stopped — the second
             # _run_inner's per-run reset wipes _stopped, so a Stop landing in
             # the gap raced the reset and lost.
-            if followup and not self._cancel_requested:
-                # §3.3 completion gate: exactly one more resumed turn. The gate
-                # sets _gate_fired, so the second pass can't return another
-                # prompt — bounded by construction, not by a counter.
+            while followup:
+                if self._cancel_requested:
+                    # user hit Stop in the gap between the turns — honor it
+                    self._gate_pending = False
+                    self._set_state("interrupted", "user stop")
+                    break
                 self.ended_ts = 0.0
-                self._run_inner(binpath, b, followup)
-            elif followup:
-                # user hit Stop in the gap between the turns — honor it
-                self._gate_pending = False
-                self._set_state("interrupted", "user stop")
+                followup = self._run_inner(binpath, b, followup)
         except Exception as e:  # noqa: BLE001 — a dead launch must surface
             self._set_state("error", f"run crashed: {e}")
             self.ended_ts = time.time()
@@ -626,6 +687,9 @@ class AgentRunner:
                     self._gate_pending = True
                     self._touch()
                     return gate    # _run runs one more resumed turn, then done
+                steer_fu = self._steer_followup_check()   # 1.0.12 exit seam
+                if steer_fu:
+                    return steer_fu   # one more resumed turn carrying the steers
             # B4: one deterministic priority decides the terminal label. A stop
             # SIGTERMs the group (non-zero exit — an interrupt, NOT a failure,
             # so no raw kill-signal stderr card), and a stop racing a clean
@@ -935,6 +999,49 @@ class AgentRunner:
             return self._GATE_VERIFY_PROMPT
         return ""
 
+    def steer(self, text: str) -> dict:
+        """Queue a mid-run message for the LIVE run (1.0.12). Delivery is
+        layered: the PostToolUse steer hook injects it right after the agent's
+        next tool call (claude runtime, mid-loop), and whatever the hook didn't
+        consume becomes one more resumed turn at the exit seam
+        (_steer_followup_check — the only seam codex/agy have). Not running →
+        not ok, and the client falls back to a normal dispatch."""
+        if not self.is_running():
+            return {"ok": False, "error": "nothing running"}
+        try:
+            n = operator_steer.push(text)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        text = text.strip()
+        # visible in the run trace (and thus the history ledger), and part of
+        # the shared transcript so a future cold-start inject carries it too
+        self.messages.append({"ts": time.time(), "role": "user", "text": text})
+        self._transcript.append({"role": "user", "text": text})
+        self._transcript = self._transcript[-40:]
+        self._save_state()
+        self._touch()
+        return {"ok": True, "queued": n,
+                "live": (getattr(self, "_runtime", "") == "claude"
+                         and not getattr(self, "demo", False))}
+
+    def _steer_followup_check(self) -> str:
+        """Exit-seam steer delivery (1.0.12): a clean exit with steers still
+        queued returns a follow-up prompt instead of landing `done` — the
+        §3.3 gate's mechanics (prompt return + _gate_pending across the
+        proc-less gap), but user-driven, so _run's loop repeats it until the
+        queue is dry rather than firing once. Never after a stop/cancel/token
+        cap, never in demo."""
+        if getattr(self, "demo", False) or getattr(self, "_stopped", False):
+            return ""
+        if self._tok_stop_fired or self._cancel_requested:
+            return ""
+        steers = operator_steer.take_all()
+        if not steers:
+            return ""
+        self._gate_pending = True
+        self._touch()
+        return operator_steer.followup_prompt(steers)
+
     def _consume_codex(self, evt: dict) -> None:
         """Parse one codex `exec --json` JSONL event into messages."""
         # T1: same contract as _consume — codex owns these field types, we
@@ -1119,6 +1226,10 @@ class AgentRunner:
     def stop(self) -> dict:
         p = self._proc
         self.handoff = None   # a takeover/stop clears any pending handoff request
+        try:
+            operator_steer.clear()   # a stop abandons queued steers with the run
+        except Exception:  # noqa: BLE001
+            pass
         self._stopped = True  # so _flush_agy drops agy's interrupt-noise stdout
         # B3: survives the follow-up turn's per-run reset of _stopped; the §3.3
         # dispatch in _run gates on this, and only start() clears it.
@@ -1260,6 +1371,16 @@ class AgentRunner:
             "stalled_for": round(stalled_for, 1),
             "handoff": self.handoff,   # #4: {reason, ts} when the agent asks for a takeover
             "surface": getattr(self, "surface", "browser"),
+            # 1.0.12: steers queued but not yet consumed by a delivery seam —
+            # the client renders "queued" until this drops back to 0.
+            "steer_pending": len(operator_steer.pending()),
+            # 1.0.15 live run economics: the ledger's token numbers, visible
+            # WHILE the run burns (same _note_token_usage basis — cache reads
+            # excluded, so these read small vs the raw API meter). NB both
+            # reset per TURN (_run_inner), so on a gate/steer follow-up the
+            # meter shows the current turn's burn, not the whole run's.
+            "cum_in_tokens": self._cum_in_tokens,
+            "peak_in_tokens": self._peak_in_tokens,
         }
 
 

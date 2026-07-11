@@ -86,6 +86,45 @@ def _clean_sites(sites) -> list[str]:
     return [p.strip() for p in parts if isinstance(p, str) and p.strip()]
 
 
+# ── {{variables}} (1.0.13) ───────────────────────────────────────────────────
+# A saved prompt may carry {{name}} placeholders, filled at dispatch time.
+# Names are word-ish ({{city}}, {{max price}}, {{ok_name-1}}); malformed or
+# empty braces are left alone and never count as variables.
+_VAR_RE = re.compile(r"\{\{([A-Za-z0-9_][A-Za-z0-9_ -]*)\}\}")
+
+
+def extract_vars(prompt: str) -> list[str]:
+    """Ordered unique {{variable}} names in a prompt ([] when none)."""
+    seen: set = set()
+    out: list[str] = []
+    for m in _VAR_RE.finditer(prompt or ""):
+        name = m.group(1).strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def fill_vars(prompt: str, values: dict) -> tuple[str, list[str]]:
+    """Substitute {{vars}} from `values` → (filled_text, missing_names).
+    A blank/whitespace value counts as missing — a silent empty fill is never
+    what the user meant. Unfilled placeholders are left intact so the caller
+    can bounce the prompt back for completion."""
+    values = values if isinstance(values, dict) else {}
+    missing: list[str] = []
+
+    def _sub(m):
+        name = m.group(1).strip()
+        v = str(values.get(name, "") or "").strip()
+        if not v:
+            if name not in missing:
+                missing.append(name)
+            return m.group(0)
+        return v
+
+    return _VAR_RE.sub(_sub, prompt or ""), missing
+
+
 def save_task(fields: dict) -> tuple[str | None, str | None]:
     """Create or update a saved task from a dict of the data-model fields.
 
@@ -107,6 +146,11 @@ def save_task(fields: dict) -> tuple[str | None, str | None]:
         from operator_schedule import cron_valid
         if not cron_valid(schedule):
             return None, "schedule must be a 5-field cron (min hour dom mon dow)"
+        if extract_vars(prompt):
+            # nobody is there to fill values when cron fires — the combo can
+            # only ever produce a 400 at dispatch time, so refuse it at save
+            return None, ("scheduled tasks can't use {{variables}} — "
+                          "there's nobody to fill them when the cron fires")
 
     tasks = load_tasks()
     # If an explicit slug was passed and exists, update it in place; else derive

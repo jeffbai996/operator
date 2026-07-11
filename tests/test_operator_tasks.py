@@ -102,3 +102,37 @@ def test_load_corrupt_store_returns_empty(tmp_path, monkeypatch):
 def test_missing_store_returns_empty(tmp_path, monkeypatch):
     m = _load(tmp_path, monkeypatch)
     assert m.load_tasks() == {}   # file doesn't exist yet
+
+
+# ── {{variables}} (1.0.13) ───────────────────────────────────────────────────
+
+def test_extract_vars_ordered_unique(tmp_path, monkeypatch):
+    m = _load(tmp_path, monkeypatch)
+    assert m.extract_vars("price {{item}} in {{city}}, then {{item}} again") \
+        == ["item", "city"]
+    assert m.extract_vars("no vars here") == []
+    # names are word-ish; malformed braces don't match
+    assert m.extract_vars("{{ok_name-1}} {not a var} {{}}") == ["ok_name-1"]
+
+
+def test_fill_vars_substitutes_and_reports_missing(tmp_path, monkeypatch):
+    m = _load(tmp_path, monkeypatch)
+    txt, missing = m.fill_vars("go to {{city}} and buy {{item}}",
+                               {"city": "Tokyo"})
+    assert "Tokyo" in txt and "{{city}}" not in txt
+    assert missing == ["item"]
+    txt2, missing2 = m.fill_vars("go to {{city}}", {"city": "Tokyo"})
+    assert txt2 == "go to Tokyo" and missing2 == []
+    # empty-string value counts as missing (a blank fill is never intended)
+    _, missing3 = m.fill_vars("check {{a}}", {"a": "  "})
+    assert missing3 == ["a"]
+
+
+def test_save_rejects_schedule_with_vars(tmp_path, monkeypatch):
+    m = _load(tmp_path, monkeypatch)
+    slug, err = m.save_task({"name": "tpl", "prompt": "check {{ticker}}",
+                             "schedule": "0 9 * * *"})
+    assert slug is None and "variable" in (err or "")
+    # vars WITHOUT a schedule save fine
+    slug2, err2 = m.save_task({"name": "tpl", "prompt": "check {{ticker}}"})
+    assert err2 is None and slug2
