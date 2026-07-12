@@ -77,12 +77,34 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     else:
         env["CODEX_HOME"] = spec.config_dir
         _ensure_codex_control_mcp(spec.config_dir)   # driver parity
+    # codex >= 0.144 surfaces MCP tools through its exec-JS bridge
+    # (`tools.mcp__<server>__<tool>`), NOT as first-class function tools.
+    # The model's visible function list genuinely lacks `perceive`/`computer`,
+    # so on desktop surfaces gpt (esp. at low effort) answered "I don't have
+    # those tools" without attempting a call (2026-07-11, verified: 0/5 tool
+    # attempts with the persona prompt, 5/6 once told to call the MCP tool).
+    # Name the bridge explicitly so the persona's tool list stays true.
+    _bridge = ""
+    if spec.surface != "browser" and not spec.demo:
+        _bridge = (
+            "\n\nTOOL ACCESS (codex): `computer`, `perceive` and `game_macro` "
+            "are MCP tools from the `operator-control` server. If they are not "
+            "in your top-level function list, they are STILL available through "
+            "your exec tool's JS bridge — call e.g. "
+            "`await tools.mcp__operator_control__perceive({})`, "
+            "`await tools.mcp__operator_control__computer({action:'screenshot'})`, "
+            "`await tools.mcp__operator_control__game_macro({...})`. "
+            "Never reply that these tools are missing without actually "
+            "attempting one of those calls first.")
     # PARITY: boot context only on the first turn of a thread (resumes already
     # carry it). Kept full, not compressed: ~92% cached after turn 1, and the
     # shared-memory awareness is worth the one-time cold cost.
+    # the bridge note goes right before the task (recency: 20k+ chars of boot
+    # context otherwise sit between the note and the ask the model acts on)
     prompt = (spec.persona
               + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n"
                   + spec.boot_context) if spec.boot_context else "")
+              + _bridge
               + "\n\nTask: " + spec.task)
     # DEMO: run codex INSIDE a bwrap FS sandbox (sandbox.sh) — tmpfs over
     # $HOME hides ~/repos, ~/.claude, ~/.codex, the app data; only the empty
@@ -110,6 +132,20 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     # playwright-only CODEX_HOME.)
     if not spec.demo and spec.surface != "browser":
         cmd += ["-c", "mcp_servers.playwright.enabled=false"]
+    # codex >= 0.144 spawns MCP servers with a SCRUBBED env — the parent's
+    # OPERATOR_SURFACE / OPERATOR_REAL_OK / OPERATOR_BOT never reached the
+    # control server (verified 2026-07-12 with an env-dump stub server), so it
+    # silently defaulted to the browser surface: perceive watched the WRONG
+    # SCREEN on sandbox runs and _tools() withheld the `computer` tool — gpt
+    # had eyes on the browser and no hands at all. Pass the run context
+    # explicitly via the per-server env config (dotted -c override).
+    if not spec.demo:
+        _ctl = "mcp_servers.operator-control.env."
+        cmd += ["-c", _ctl + 'OPERATOR_SURFACE="' + spec.surface + '"']
+        if spec.bot:
+            cmd += ["-c", _ctl + 'OPERATOR_BOT="' + spec.bot + '"']
+        if spec.real_ok:
+            cmd += ["-c", _ctl + 'OPERATOR_REAL_OK="1"']
     if spec.resume_id:
         cmd += ["resume", spec.resume_id, prompt]
     else:

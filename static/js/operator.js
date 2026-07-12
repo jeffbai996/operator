@@ -5,6 +5,18 @@
 // (Jinja mangles it — see the 1.0.13 post-mortem in the module docs).
 (function () {
   const op = document.getElementById('op');
+  // Double-tap/click on the chat rail was selecting the last word of the nearest
+  // message bubble (the owner: "double-tap highlights the last word in the chat box").
+  // Swallow the native word-select EXCEPT inside a real input/textarea, where
+  // double-click-to-select-word is expected. Drag-select (mousedown+drag) for
+  // copying an agent reply is unaffected — this only cancels the dblclick gesture.
+  if (op) op.addEventListener('dblclick', e => {
+    if (e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    // #op-stage has its own dblclick handler (remote page owns the gesture) — don't double-handle
+    if (e.target.closest('#op-stage')) return;
+    e.preventDefault();
+    try { window.getSelection().removeAllRanges(); } catch (_) {}
+  });
   const view = document.getElementById('op-view');
   const stage = document.getElementById('op-stage');
   const urlEl = document.getElementById('op-url');
@@ -99,14 +111,23 @@
       effort: (document.getElementById('op-effort')||{}).value || '',
     };
   }
-  function saveSession() {
+  // saveSession used to serialize the ENTIRE chat log's innerHTML + write
+  // localStorage synchronously on every call — and it's called per trace step
+  // while a run streams, so on a long session that was tens of KB of sync
+  // main-thread work several times a second (a big slice of the iPhone typing
+  // lag, 2026-07-12). Now the whole serialize+store is debounced; pagehide /
+  // tab-hide flush immediately so nothing is lost on close or app-switch.
+  let _sessDirty = false;
+  function _sessionFlush() {
+    if (!_sessDirty) return;
+    _sessDirty = false;
+    if (_sessPushT) { clearTimeout(_sessPushT); _sessPushT = null; }
     try {
       const d = _sessionPayload();
       localStorage.setItem(LS_KEY, JSON.stringify(Object.assign({_srev: _srev}, d)));
-      // debounce-push to the server; fire-and-forget (a failed push just
-      // means this device's copy wins on its NEXT successful save)
-      if (_sessPushT) clearTimeout(_sessPushT);
-      _sessPushT = setTimeout(async () => { try {
+      // push to the server; fire-and-forget (a failed push just means this
+      // device's copy wins on its NEXT successful save)
+      (async () => { try {
         const r = await fetch(SESSION, {method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({data: d})});
@@ -116,9 +137,18 @@
           try { const c = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
             if (c) { c._srev = _srev; localStorage.setItem(LS_KEY, JSON.stringify(c)); } } catch {}
         }
-      } catch(_){} }, 600);
+      } catch(_){} })();
     } catch {}
   }
+  function saveSession() {
+    _sessDirty = true;
+    if (_sessPushT) clearTimeout(_sessPushT);
+    _sessPushT = setTimeout(_sessionFlush, 600);
+  }
+  window.addEventListener('pagehide', _sessionFlush);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') _sessionFlush();
+  });
   function restoreSession() {
     try { const d = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (d && typeof d._srev === 'number') _srev = d._srev;
@@ -190,9 +220,21 @@
     const opEl = document.getElementById('op');
     if (!handle || !opEl) return;
     const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
-    // snap targets as fractions of the viewport height
-    const SNAPS = [0.22, 0.5, 0.9];   // peek (room for the Message box + spinner), half, full
     function vh(){ return window.innerHeight; }
+    // Snap targets: peek / the FIT notch / full. The middle stop is computed,
+    // not fixed (2026-07-12): it's the height where the sheet's top edge
+    // sits exactly at the bottom of the full-width feed — .op-browser is
+    // (100dvh - sheet - header) tall and the contain-fit frame fills the phone's
+    // width when that equals vw × frame aspect. Release there = whole page
+    // visible edge-to-edge with a message or two of chat below.
+    function fitFrac(){
+      const v = document.getElementById('op-view');
+      const nW = v && v.naturalWidth, nH = v && v.naturalHeight;
+      const aspect = (nW && nH) ? nH / nW : 0.5625;   // no frame yet → assume 16:9
+      const f = (vh() - hdrH() - window.innerWidth * aspect) / vh();
+      return Math.min(0.78, Math.max(0.3, f));        // clamp: odd frames stay usable
+    }
+    function SNAPSNOW(){ return [0.22, fitFrac(), 0.9]; }
     // header height (mobile, non-full) — the sheet must not grow past it .
     function hdrH(){ const v = parseFloat(getComputedStyle(opEl).getPropertyValue('--op-hdr-h')); return v||0; }
     function setH(px){
@@ -216,8 +258,9 @@
       opEl.classList.remove('op-sheet-dragging');
       // snap to nearest target
       const cur = document.querySelector('.op-rail').getBoundingClientRect().height / vh();
-      let best = SNAPS[0], bd = 9;
-      SNAPS.forEach(f => { const d = Math.abs(f - cur); if (d < bd){ bd = d; best = f; } });
+      const S = SNAPSNOW();
+      let best = S[0], bd = 9;
+      S.forEach(f => { const d = Math.abs(f - cur); if (d < bd){ bd = d; best = f; } });
       // a quick flick (small move) toward a direction nudges one step
       snapTo(best); }
     handle.addEventListener('pointerdown', e => { e.preventDefault();
@@ -231,12 +274,13 @@
     handle.addEventListener('pointerup', () => {
       if (Date.now() - _tapStart < 200 && isMobile()) {
         const cur = document.querySelector('.op-rail').getBoundingClientRect().height / vh();
-        let idx = 0; SNAPS.forEach((f,i)=>{ if (Math.abs(f-cur) < Math.abs(SNAPS[idx]-cur)) idx = i; });
-        snapTo(SNAPS[(idx + 1) % SNAPS.length]);
+        const S = SNAPSNOW();
+        let idx = 0; S.forEach((f,i)=>{ if (Math.abs(f-cur) < Math.abs(S[idx]-cur)) idx = i; });
+        snapTo(S[(idx + 1) % S.length]);
       }
     });
-    // start at half on mobile
-    if (isMobile()) snapTo(0.5);
+    // start at the fit notch on mobile (frame not loaded yet → 16:9 estimate)
+    if (isMobile()) snapTo(fitFrac());
     window.addEventListener('resize', () => { if (isMobile()) {
       const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--sheet-h')); if (cur) setH(cur);
     }});
@@ -470,7 +514,13 @@
         if (_prevBlobUrl) URL.revokeObjectURL(_prevBlobUrl);
         _prevBlobUrl = u;
         _pumpFails = 0; backoff = 600;
-        await _sleepMs(PUMP_MS);
+        // typing on a phone: a ~10fps JPEG decode cycle on the main thread
+        // competes with every keystroke's layout work — the biggest slice of
+        // the iPhone input lag (2026-07-12). While the composer is focused on
+        // a narrow screen, idle the feed to ~2.5fps; it snaps back on blur.
+        const _typing = _mqNarrow.matches &&
+          document.activeElement === document.getElementById('op-input');
+        await _sleepMs(_typing ? 400 : PUMP_MS);
       } catch (_) {
         _pumpFails++;
         if (_pumpFails === 2) signalLost();   // one blip ≠ lost; two in a row is
@@ -483,7 +533,20 @@
   let _lastImgLoad = 0;
   let _wasLost = false;
   let _desktopNoFrame = false;   // last poll said a desktop surface has no live frame
+  // poll-authority cold flag: true while the status poll says the feed is cold
+  // (has_frame:false past the grace window, or status:error). While set, a
+  // pumped frame's 'load' must NOT clear the lost/stale state: /frame re-serves
+  // the LAST frame marked "live" however old it is, so during a stall the pump
+  // "healed" the overlay every 90ms and the next poll re-asserted it — the
+  // dim↔undim strobe at poll cadence (the residual flicker, 2026-07-11). The
+  // poll owns the exit; recovery costs at most one poll tick.
+  let _pollCold = false;
   function signalLost(){
+    // the desktop "Not started" rest state is poll-owned — a pump fetch blip
+    // must not yank the calm idle card into SIGNAL LOST (it flapped
+    // "Not started" ↔ "SIGNAL LOST" at retry cadence on flaky links). There
+    // is no signal to lose while the desktop isn't started and nothing runs.
+    if (op.classList.contains('op-surface-idle') && op.dataset.busy !== '1') return;
     _wasLost = true;
     op.classList.remove('op-surface-idle');
     if (_hasFrame && _lastImgLoad > 0) {
@@ -531,9 +594,11 @@
     // feed came back while idle → settle the card to its proper idle label.
     if (wasLost && op.dataset.busy !== '1') {
       try { setCardText(actTxt, idleCardText()); } catch(_){} } }
+  view.decoding = 'async';   // keep JPEG decode off the main thread — a 10fps sync decode stole time from every keystroke (iPhone lag)
   view.addEventListener('load', () => {
     if (_phFrame) return;   // placeholder ≠ signal — never claims a frame or clears SIGNAL LOST
     _hasFrame = true; _lastImgLoad = Date.now();
+    if (_pollCold) return;  // stale re-served frame during a poll-declared cold spell — poll owns the exit
     signalOk(); backoff = 600; });   // signalOk owns visibility (skips it when desktop-idle)
   // a single bad blob isn't a lost signal — the pump's consecutive-failure
   // rule owns SIGNAL LOST; the next pumped frame simply replaces this one.
@@ -946,7 +1011,7 @@
     _taskStart = Date.now();
     _task = document.createElement('div'); _task.className='op-task'; _task.dataset.busy='1';
     const head=document.createElement('div'); head.className='op-task-head';
-    head.appendChild(_el('ico')); head.appendChild(_el('verb','Working\u2026')); head.appendChild(_el('car'));   // .car = CSS-drawn chevron
+    head.appendChild(_el('ico')); head.appendChild(_el('verb')); head.appendChild(_el('car'));   // .verb seeded below via taskVerb; .car = CSS-drawn chevron
     const steps=document.createElement('div'); steps.className='op-task-steps';
     const cnt=document.createElement('div'); cnt.className='op-step-count'; cnt.hidden=true;
     cnt.innerHTML='<span class="sc-n">0 steps</span>';
@@ -954,9 +1019,38 @@
     const thisTask = _task;                       // capture — _task gets nulled on finish
     _task.appendChild(head); _task.appendChild(steps);
     // toggle handled by a delegated listener on `log` (survives session restore)
-    log.appendChild(_task); trim(); return _task;
+    log.appendChild(_task); trim();
+    taskVerb('Working', true);   // seed the live verb through the animation path
+    return _task;
   }
-  function taskVerb(text) { if (!_task) return; const v=_task.querySelector('.verb'); if (v) v.textContent = text; }
+  // Swap the live verb with a modern vertical rise: the outgoing word animates
+  // up and out, the incoming word rises in from below. `ellipsis` appends a
+  // CSS-animated "…" (three pulsing dots) for live states; done labels omit it.
+  function taskVerb(text, ellipsis) {
+    if (!_task) return;
+    const v = _task.querySelector('.verb'); if (!v) return;
+    const words = v.querySelectorAll('.op-verb-word');
+    const cur = words[words.length - 1];   // the currently-shown word is the last
+    // no change (same word + same ellipsis state) → leave the running ellipsis be
+    if (cur && words.length === 1 && cur.dataset.word === text
+        && !!cur.querySelector('.op-ellip') === !!ellipsis) return;
+    // Clean replace: remove EVERY existing word before the new one enters. A
+    // rapid burst of taskVerb calls (the poll replays several actions in one
+    // pass) was leaving stale words behind — the whole turn's verbs piled up in
+    // the done header ("Typing…Clicking…Reading…Plotted for 5m"). Clearing all
+    // of them guarantees exactly one word, animated in via op-msg-in.
+    words.forEach(w => w.remove());
+    const incoming = document.createElement('span');
+    incoming.className = 'op-verb-word op-verb-in';
+    incoming.dataset.word = text;
+    incoming.textContent = text;
+    if (ellipsis) {
+      const e = document.createElement('span'); e.className = 'op-ellip';
+      for (let d = 0; d < 3; d++) { const i = document.createElement('i'); i.textContent = '.'; e.appendChild(i); }
+      incoming.appendChild(e);
+    }
+    v.appendChild(incoming);
+  }
   function taskStep(text) {
     if (!_task) startTask();
     markScroll();
@@ -1095,7 +1189,9 @@
       const dur = _fmtDur(secs);
       label = verb + ' for ' + dur;
     }
-    const v=_task.querySelector('.verb'); if (v) v.textContent = label;
+    // route through taskVerb so the finish animates the same rise-swap and the
+    // live ellipsis drops (done labels like "Worked for 5s" carry no dots).
+    taskVerb(label, false);
     const nsteps = _task.querySelectorAll('.op-task-step').length;
     if (nsteps === 0) {
       _task.classList.add('op-no-steps');         // hide the caret — nothing to expand
@@ -2213,7 +2309,8 @@
       op.dataset.busy = '1'; setCardText(actTxt, 'Starting up'); setCardSub(t.bot || selectedBot(), '');
       try { const d = await (await fetch(RUN_URL.replace('__S__', encodeURIComponent(t.slug)), {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
-        if (d.ok) { _lastAssistant = ''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
+        // fresh watchdog anchor per turn — same reason as dispatchTask's reset
+        if (d.ok) { _lastAssistant = ''; _runProgressTs = 0; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
         else { logRes(d.error || 'failed to run task', false); settleAction(false); } }
       catch { logRes('failed to run task', false); settleAction(false); }
     };
@@ -2630,13 +2727,13 @@
         _seenMsg.add(key);
         if (m.role === 'action') {
           taskActionStep(m.text, m.detail);
-          taskVerb(actCont(m.text) + '\u2026');
+          taskVerb(actCont(m.text), true);
           _lastActionEmoji = actEmoji(m.text); _lastActionVerb = actCont(m.text);
         } else if (m.role === 'assistant') {
           // a genuine final-answer step; remember it — the LAST one becomes the reply bubble
           _lastAssistant = m.text;
           taskStep(m.text);
-          taskVerb('Thinking\u2026');
+          taskVerb('Thinking', true);
         } else if (m.role === 'thinking') {
           // scratch reasoning (agy/gemma's per-step "thinking" field) -- show it live in
           // the trace same as 'assistant', but NEVER let it become the reply bubble: a
@@ -2644,7 +2741,7 @@
           // through to the "no summary" card below, not leak a raw work-summary/checklist
           // .
           taskStep(m.text);
-          taskVerb('Thinking\u2026');
+          taskVerb('Thinking', true);
         } else if (m.role === 'error') {
           const et = (m.text||'').trim();
           turnError('Turn failed', et || 'The agent ended the turn with an error.');   // one card/turn, specific msg preferred
@@ -2753,6 +2850,7 @@
           finishTask();
           logBotReply('_(done — the agent acted but returned no summary. ask it to recap, or try again.)_');
         }
+        _runProgressTs = 0;   // like interrupted/error: never leak this run's stamp into the next turn's dead-run watchdog
         setInFlight(false); }
       else if (d.state === 'interrupted') {           // USER hit stop → clean interrupt, NOT an error
         // server SIGTERM'd the agent (exit -15). Finalize the turn as "Interrupted
@@ -3181,15 +3279,20 @@
       if (d.url) showUrl(d.url);   // reflect the live page URL (incl. agent navigation)
       if (d.click) showAgentClick(d.click);   // draw the agent cursor where it clicked
       if (d.has_frame) { setState('live', ''); _coldSince = 0; _desktopNoFrame = false;
+        _pollCold = false;   // poll authority: feed is healthy — loads may clear again
         // server healthy → if we were showing SIGNAL LOST, reconnect ONCE to
         // resume real frames, then trust the open MJPEG connection (no per-poll
         // reconnect — that caused the ~1/sec flicker).
         if (_wasLost) { _wasLost = false; connectStream(); }
         signalOk();
       }
-      else if (d.status === 'error') { _desktopNoFrame = false; setState('error', 'disconnected'); signalLost(); _coldSince = _coldSince||Date.now(); }
+      else if (d.status === 'error') { _desktopNoFrame = false;
+        setState('error', 'disconnected');
+        if (!_pollCold) { _pollCold = true; signalLost(); }   // transition-gated: assert once per cold spell
+        _coldSince = _coldSince||Date.now(); }
       else if (_isGameSurface() && op.dataset.busy !== '1') {
         _desktopNoFrame = true;
+        _pollCold = false;   // rest state, not a cold spell — desktopIdle owns the stage
         // Desktop surface, idle, no frame yet = the virtual desktop hasn't
         // started (the agent's first task boots it). This is a normal resting
         // state, NOT a lost signal — show it immediately and deterministically
@@ -3203,8 +3306,11 @@
         // brief gaps: the server heartbeats the last frame, so stay as-is (no
         // hide/blink). Only a sustained 6s drop is a real SIGNAL LOST.
         if (coldMs >= 6000) {
-          signalLost();
-          setState('connecting', 'reconnecting…');
+          if (!_pollCold) {   // transition-gated: one assert per cold spell, not per poll
+            _pollCold = true;
+            signalLost();
+            setState('connecting', 'reconnecting…');
+          }
           connectStream();   // idempotent nudge — the pump self-retries
         }
       }
@@ -3360,7 +3466,13 @@
     try { const d = await (await fetch(DISPATCH, { method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify({bot, task:txt, model: o.model || (document.getElementById('op-model')||{}).value||'', effort: o.effort || (document.getElementById('op-effort')||{}).value||'',
         surface: o.surface || _surfaceActive, real_ok: (_surfaceActive==='desktop-real' && _realOk)}) })).json();
-      if (d.ok) { _lastAssistant=''; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }   // don't clear _handledState here — a post-steer dispatch needs the '__interrupted__' guard to swallow the killed run's stale 'done'
+      // _runProgressTs is the dead-run watchdog's anchor and MUST start fresh
+      // each turn: the 'done' path used to leave it at the previous run's last
+      // progress time, so the next dispatch compared "dead for 15s?" against an
+      // hour-old stamp — one alive:false poll during the new run's pre-spawn
+      // window and the watchdog killed the newborn turn as a bare "Error"
+      // (ledger run #10, 2026-07-11: dispatch → auto-stop 1s later).
+      if (d.ok) { _lastAssistant=''; _runProgressTs = 0; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }   // don't clear _handledState here — a post-steer dispatch needs the '__interrupted__' guard to swallow the killed run's stale 'done'
       else { logRes(d.error || 'failed to start ' + bot, false); settleAction(false); }
     } catch { logRes('failed to start agent', false); settleAction(false); }
   }
@@ -3406,10 +3518,13 @@
   const _sendSVG = send.innerHTML;
   const _stopSVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor">'
     + '<rect x="5" y="5" width="14" height="14" rx="2.5"></rect></svg>';
+  let _sendShowStop = null;   // change-guard: this runs per keystroke — don't re-parse the SVG innerHTML when nothing flipped
   function refreshSendButton(){
     // stop only while in-flight AND the box is empty; typing a follow-up flips it
     // back to the send arrow.
     const showStop = _inFlight && !input.value.trim();
+    if (showStop === _sendShowStop) return;
+    _sendShowStop = showStop;
     send.classList.toggle('stopping', showStop);
     send.innerHTML = showStop ? _stopSVG : _sendSVG;
     send.title = showStop ? 'stop' : 'send (Enter)';
@@ -3441,7 +3556,21 @@
   send.addEventListener('click', () => {
     if (_inFlight && !input.value.trim()) stopAgent(); else submit();
   });
-  function autoGrow(){ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight, 84)+'px'; }
+  // The naive version (height='auto' write, then scrollHeight read) forced a
+  // full re-layout of the container-query rail — chat log included — on EVERY
+  // keystroke, on top of the layout the typed character already costs. On
+  // iPhone that doubled per-key work and read as input lag (2026-07-12).
+  // Cheap path: plain reads on clean layout; the dirty auto-dance runs only
+  // when content grew past the box or shrank (deletion).
+  let _growLastLen = 0;
+  function autoGrow(){
+    const len = input.value.length;
+    const shrunk = len < _growLastLen;
+    _growLastLen = len;
+    if (!shrunk && input.scrollHeight <= input.clientHeight) return;   // fits — nothing to grow
+    if (!shrunk && input.clientHeight >= 80) return;                   // already at the 84px cap — growth can't show
+    input.style.height='auto'; input.style.height=Math.min(input.scrollHeight, 84)+'px';
+  }
   input.addEventListener('input', () => { autoGrow(); refreshSendButton(); });
   input.addEventListener('keydown', e => {
     // slash palette (#30 v2) owns the keys while open — it's initialized later

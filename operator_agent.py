@@ -408,12 +408,27 @@ class AgentRunner:
         # ("X is already running a task") with nothing actually running.
         if self.state != "running":
             return False
-        if self._proc is None:
-            # §3.3: between a gate-armed exit and its follow-up turn's spawn,
-            # _proc is momentarily None while the run legitimately continues —
-            # don't let a status poll in that gap read the run as dead.
-            return bool(getattr(self, "_gate_pending", False))
-        return self._proc.poll() is None
+        if self._proc is not None and self._proc.poll() is None:
+            return True
+        # No live process, state 'running'. Three windows where the run
+        # nonetheless legitimately continues: the PRE-SPAWN window (run
+        # thread building the prompt/MCP config before Popen lands — plus
+        # the start() sliver before the thread exists, covered by
+        # _starting), the §3.3 gate gap between turns, and the WRAP-UP
+        # sliver after process exit before the terminal state lands.
+        # Reading any of these as dead had two real costs: the status
+        # poll reported alive:false at birth, which armed the client's
+        # dead-run watchdog and killed newborn first turns as a bare
+        # "Error" (ledger run #10, 2026-07-11) — and a second dispatch in
+        # the pre-spawn window was ACCEPTED, clobbering the spawning run
+        # with a concurrent thread. Thread-aliveness is the truth: _run
+        # always lands a terminal state before its thread exits, so a
+        # dead thread with state still 'running' remains the one genuine
+        # wedge, and the unwedge paths still read it as not-running.
+        if getattr(self, "_gate_pending", False) or getattr(self, "_starting", False):
+            return True
+        t = self._thread
+        return bool(t is not None and t.is_alive())
 
     def start(self, bot: str, task: str, model: str = '', effort: str = '',
               demo: bool = False, surface: str = 'browser',
@@ -461,6 +476,10 @@ class AgentRunner:
             # guard — an exception in this window used to leave a PHANTOM
             # state='running' with no thread (the class of bug behind the
             # v0.9.0 persona-swap .format() KeyError wedge).
+            # _starting spans the set-state → thread.start() sliver so
+            # is_running() (and thus the poll's `alive`) never reads the
+            # newborn run as dead while _thread is still the previous run's.
+            self._starting = True
             self._set_state("running", f"start {bot}")
             operator_steer.clear()   # a fresh run must not inherit stale steers
             try:
@@ -471,6 +490,8 @@ class AgentRunner:
                 self.messages.append({"ts": time.time(), "role": "error",
                                       "text": f"launch failed before spawn: {e}"})
                 return {"ok": False, "error": f"launch failed: {e}"}
+            finally:
+                self._starting = False
 
     def _start_locked(self, bot: str, task: str, model: str, effort: str,
                       demo: bool, binpath: str, b: dict) -> dict:
@@ -643,6 +664,20 @@ class AgentRunner:
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             self._gate_pending = False   # §3.3: the follow-up turn is live now
             self._touch()   # B2: spawn is progress — don't inherit a stale heartbeat
+            if self._cancel_requested:
+                # a Stop landed in the pre-spawn window, when there was no
+                # process to kill — honor it the moment the process exists,
+                # instead of letting an invisible run burn to completion.
+                # _stopped again (stop()'s own set predates this method's
+                # per-run reset above) so _resolve_terminal reads it as an
+                # interrupt, not "error exit -15".
+                self._stopped = True
+                import signal as _sig
+                try:
+                    os.killpg(os.getpgid(self._proc.pid), _sig.SIGTERM)
+                except Exception:  # noqa: BLE001
+                    try: self._proc.terminate()
+                    except Exception: pass
             if self._runtime == "agy":
                 self._start_agy_live_poll()
             for line in self._proc.stdout:
@@ -1306,7 +1341,15 @@ class AgentRunner:
         # §2.3: a stale 'running' (dead process, _run finally never landed) used
         # to make Stop answer "nothing running" while the UI still showed a run
         # — Reset was the only way out. Stop is a recovery action: unwedge here.
+        # BUT only when the run thread is actually dead: a live thread with no
+        # proc is the PRE-SPAWN window, and unwedging that flips a genuinely-
+        # spawning run to idle and orphans its process. There the flags set
+        # above (_stopped/_cancel_requested) are the stop — _run_inner's
+        # post-spawn check reaps the process the moment it exists.
         if self.state == "running":
+            t = self._thread
+            if t is not None and t.is_alive():
+                return {"ok": True, "cancelled_prespawn": True}
             self._proc = None
             self._set_state("idle", "stop: unwedged stale running")
             return {"ok": True, "unwedged": True}

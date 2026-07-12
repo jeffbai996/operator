@@ -169,11 +169,13 @@ def test_start_clears_cancel_requested(runner):
 
 
 def test_run_inner_never_resets_the_cancel_flag():
-    """Grep-level guard: _run_inner's per-run reset block must not touch
-    _cancel_requested — that wipe was the whole B3 bug class."""
-    import inspect
+    """Grep-level guard: _run_inner's per-run reset block must never WRITE
+    _cancel_requested — that wipe was the whole B3 bug class. Reading it is
+    fine (the post-spawn check that honors a pre-spawn Stop does exactly
+    that); only start() may clear it."""
+    import inspect, re
     src = inspect.getsource(OA.AgentRunner._run_inner)
-    assert "_cancel_requested" not in src
+    assert not re.search(r"_cancel_requested\s*=(?!=)", src)
 
 
 # ── 1.0.7 B4: terminal-reason priority is deterministic under races ─────────
@@ -241,3 +243,78 @@ def test_stop_kills_real_run_and_leaves_no_orphans(runner, monkeypatch):
                         lambda *a, **kw: (_ for _ in ()).throw(AssertionError))
     runner._run = lambda binpath, b, task: None
     assert runner.start("claude-a", "next")["ok"]
+
+
+# ── 2026-07-12: `alive` must not lie at birth or wrap-up ─────────────────────
+# The client's dead-run watchdog kills any run whose poll reads alive:false
+# past its grace window. is_running() returning False in the PRE-SPAWN window
+# (run thread building the command, no proc yet) reported newborn runs as
+# dead — combined with the client's stale watchdog anchor, that killed first
+# turns as a bare "Error" (ledger run #10, 2026-07-11). Thread-aliveness is
+# the truth: _run always lands a terminal state before its thread exits.
+
+def _held_run(runner):
+    """Replace _run with a body that parks the thread in 'pre-spawn' (no proc
+    ever assigned) until released. Returns the release event."""
+    gate = threading.Event()
+    runner._run = lambda binpath, b, task: gate.wait(5)
+    return gate
+
+
+def test_is_running_true_during_pre_spawn_window(runner):
+    gate = _held_run(runner)
+    assert runner.start("claude-a", "t")["ok"]
+    try:
+        assert runner._proc is None
+        assert runner.is_running() is True
+        assert runner.snapshot()["alive"] is True
+    finally:
+        gate.set()
+
+
+def test_second_dispatch_rejected_during_pre_spawn(runner):
+    gate = _held_run(runner)
+    assert runner.start("claude-a", "t")["ok"]
+    try:
+        res = runner.start("claude-a", "t2")
+        assert not res["ok"] and "already running" in res["error"]
+    finally:
+        gate.set()
+
+
+def test_stop_during_pre_spawn_cancels_instead_of_unwedging(runner):
+    """A Stop with no proc but a LIVE run thread is a pre-spawn cancel, not a
+    stale-state unwedge — flipping to idle here orphaned the imminent spawn."""
+    gate = _held_run(runner)
+    assert runner.start("claude-a", "t")["ok"]
+    try:
+        res = runner.stop()
+        assert res["ok"] and res.get("cancelled_prespawn")
+        assert runner.state == "running"   # the run thread still owns the terminal state
+        assert runner._cancel_requested and runner._stopped
+    finally:
+        gate.set()
+
+
+def test_is_running_true_during_wrap_up_sliver(runner):
+    """Process exited (poll() != None) but the run thread is still landing the
+    terminal state — that's the tail of a live run, not a death."""
+    class _DoneProc:
+        def poll(self):
+            return 0
+    gate = _held_run(runner)
+    assert runner.start("claude-a", "t")["ok"]
+    runner._proc = _DoneProc()
+    try:
+        assert runner.is_running() is True
+    finally:
+        gate.set()
+        runner._proc = None
+
+
+def test_wedged_dead_thread_still_reads_not_running(runner):
+    """The one genuine wedge — state stuck 'running', run thread gone — must
+    still read as not-running so the unwedge paths (stop/reset) keep working."""
+    runner.state = "running"
+    runner._proc = None
+    assert runner.is_running() is False
