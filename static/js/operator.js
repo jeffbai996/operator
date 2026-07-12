@@ -284,6 +284,30 @@
     window.addEventListener('resize', () => { if (isMobile()) {
       const cur = parseFloat(getComputedStyle(opEl).getPropertyValue('--sheet-h')); if (cur) setH(cur);
     }});
+    // ── iOS keyboard: pin the sheet ABOVE it (visualViewport tracking) ──
+    // The fixed rail sits at LAYOUT-bottom, which is BEHIND the software
+    // keyboard (iOS doesn't resize the layout viewport). Safari compensates
+    // by panning the visual viewport and re-running scroll-caret-into-view
+    // on EVERY keystroke against an input it considers occluded — that
+    // per-key compensation was the iPhone typing lag that survived all the
+    // main-thread fixes (2026-07-12; engine-side profiling showed 60fps and
+    // 5ms key→paint, so the cost was in Safari's input pipeline, not JS).
+    // Lifting the sheet by the keyboard's overlap makes the input genuinely
+    // visible in layout terms, so Safari has nothing to compensate for.
+    if (window.visualViewport) {
+      const vv = window.visualViewport;
+      let _kbLast = -1;
+      const kbFix = () => {
+        if (!isMobile()) { if (_kbLast !== 0) { opEl.style.removeProperty('--kb-off'); _kbLast = 0; } return; }
+        const off = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        if (off === _kbLast) return;   // vv fires scroll often — only write on change
+        _kbLast = off;
+        if (off > 0) opEl.style.setProperty('--kb-off', off + 'px');
+        else opEl.style.removeProperty('--kb-off');
+      };
+      vv.addEventListener('resize', kbFix);
+      vv.addEventListener('scroll', kbFix);
+    }
   })();
 
   // ── kbhint timed visibility ──
@@ -904,7 +928,7 @@
     const card = document.createElement('div'); card.className = 'op-handoff'; card.dataset.handoff='1';
     const head = document.createElement('div'); head.className='op-handoff-head';
     const hi = document.createElement('span'); hi.className='hi';   // CSS stop-square dot (no emoji)
-    const ht = document.createElement('span'); ht.textContent='Operator needs human input';
+    const ht = document.createElement('span'); ht.textContent='Operator needs your input';
     head.appendChild(hi); head.appendChild(ht); card.appendChild(head);
     if (reason && String(reason).trim()) {
       const r = document.createElement('div'); r.className='op-handoff-reason';

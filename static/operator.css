@@ -576,6 +576,10 @@
   .op-finish-expand.collapsed { max-height: 0; opacity: 0; transform: translateY(-3px); }
   /* the trigger re-entering after a collapse eases in too (replays on unhide) */
   .op-finish-btn { animation: op-man-in .22s cubic-bezier(.16,1,.3,1); }
+  /* structural dedupe: while the expand is open its go-button IS the "Finish
+     up" — the trigger can never show beside it, whatever JS state says
+     (two identical buttons kept surfacing in manual mode, the owner 2026-07-12) */
+  .op-finish:has(.op-finish-expand:not([hidden])) .op-finish-btn { display: none; }
   .op-finish-q { font: 500 calc(0.66rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); }
   .op-finish-opt { font-size: 0.86em; font-style: italic; color: var(--muted); }   /* ONLY "(optional)" — small + italic + muted */
   .op-finish-input { width: 100%; box-sizing: border-box; resize: none;
@@ -916,8 +920,13 @@
 
     /* the rail becomes the bottom sheet */
     .op { --sheet-h: 50dvh; }            /* default snap = half */
-    .op-rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    /* --kb-off (JS, visualViewport) lifts the sheet above the iOS keyboard so
+       the input is genuinely visible in layout — Safari's per-keystroke
+       caret-into-view compensation (the typing lag) never triggers. The
+       max-height guard keeps a tall detent from riding up under the header. */
+    .op-rail { position: fixed; left: 0; right: 0; bottom: var(--kb-off, 0px); z-index: 20;
       height: var(--sheet-h); max-width: 100%;
+      max-height: calc(100dvh - var(--kb-off, 0px) - var(--op-hdr-h, 0px) - 8px);
       border-radius: 18px 18px 0 0; border: 1px solid var(--border-2); border-bottom: none;
       background: var(--bg-2); background-clip: padding-box;   /* solid → no corner seam */
       box-shadow: 0 -10px 34px -10px rgba(0,0,0,.7);
@@ -1763,12 +1772,12 @@
      feed (the urlbar is collapsed on this surface), always visible while busy */
   .op-panic { position: absolute; top: 10px; right: 14px; z-index: 60;
     display: inline-flex; align-items: center; gap: 5px;
-    background: rgba(180, 30, 30, .92); color: #fff; border: 1px solid rgba(255,120,120,.5);
-    border-radius: 7px; padding: 0.3rem 0.55rem; cursor: pointer;
-    font: 800 0.62rem/1 'Plus Jakarta Sans', sans-serif; letter-spacing: .07em;
+    background: rgba(180, 30, 30, .8); color: #fff; border: 1px solid rgba(255,120,120,.5);
+    border-radius: 8px; padding: 0.36rem 0.66rem; cursor: pointer;
+    font: 900 0.68rem/1 'Plus Jakarta Sans', sans-serif; letter-spacing: .07em;
     box-shadow: 0 3px 12px -3px rgba(220,50,50,.45), 0 1px 5px rgba(0,0,0,.35);
     transition: background .12s ease, transform .12s ease; }
-  .op-panic:hover { background: rgba(210, 35, 35, .98); transform: scale(1.03); }
+  .op-panic:hover { background: rgba(210, 35, 35, .92); transform: scale(1.03); }
   .op-panic:active { transform: scale(.97); }
   .op-panic[hidden] { display: none; }
 

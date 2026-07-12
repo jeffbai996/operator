@@ -82,6 +82,9 @@ def _computer_label(args: dict) -> tuple[str, str]:
         d = (_xy(args.get("start_coordinate")) + " → " + _xy(args.get("coordinate"))).strip(" →")
     elif act in ("type", "key", "hold_key"):
         d = str(args.get("text") or "")[:120]
+        if act in ("key", "hold_key"):
+            # trace cosmetics: the Windows key shows as its logo, not "win"
+            d = _re.sub(r"\bwin\b", "⊞", d)
     elif act == "scroll":
         d = (str(args.get("scroll_direction") or "") + " " + _xy(args.get("coordinate"))).strip()
     elif act == "wait":

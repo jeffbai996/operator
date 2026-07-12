@@ -54,7 +54,13 @@ _RUN_ARGS = [
     "--memory", "3g",              # XFCE session + chromium need headroom over 2g
     "--cpus", "2",
     "--shm-size", "512m",              # chromium needs shared memory
-    "--security-opt", "no-new-privileges",
+    # no-new-privileges is DEMO-ONLY (2026-07-12): it kills setuid, i.e. sudo.
+    # The private sandbox deliberately allows opuser's passwordless sudo so the
+    # agent can self-serve package installs (the owner: "a bit too locked down") —
+    # the container itself stays the isolation boundary. Public demo visitors
+    # keep the hardened no-sudo container.
+    *(["--security-opt", "no-new-privileges"]
+      if os.environ.get("OPERATOR_DEMO") else []),
     "-v", f"{HOME_VOLUME}:/home/opuser",
 ]
 
