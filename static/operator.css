@@ -584,8 +584,8 @@
   .op-finish-opt { font-size: 0.86em; font-style: italic; color: var(--muted); }   /* ONLY "(optional)" — small + italic + muted */
   .op-finish-input { width: 100%; box-sizing: border-box; resize: none;
     background: var(--bg); color: var(--fg); border: 1px solid var(--border-2); border-radius: 10px;
-    padding: 0.4rem 0.55rem; font: 500 calc(0.85rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif;
-    outline: none; }   /* matches the Message Operator input — both bumped to 0.85rem, equal (the owner: both had shrunk) */
+    padding: 0.4rem 0.55rem; font: 500 calc(0.77rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif;
+    outline: none; }   /* matches the Message Operator input — kept equal through the 2-notch drop */
   /* placeholder: smaller, italic, more grayed out (it was too bright) */
   .op-finish-input::placeholder { font-size: calc(0.72rem * var(--chat-scale)); font-style: italic;
     color: var(--muted); opacity: 0.6; }
@@ -624,9 +624,9 @@
   .op-prefix { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
     color: var(--accent); font: 700 0.85rem/1 'JetBrains Mono', monospace; pointer-events: none; }
   .op-input { flex: 1 1 auto; width: 100%; background: var(--bg); border: 1px solid var(--border-2);
-    border-radius: 10px; color: var(--fg); font: 500 calc(0.85rem * var(--chat-scale))/1 'Plus Jakarta Sans',sans-serif;
+    border-radius: 10px; color: var(--fg); font: 500 calc(0.77rem * var(--chat-scale))/1 'Plus Jakarta Sans',sans-serif;   /* down 2 notches 0.85->0.77, input text + placeholder together — was disproportionate to the model picker */
     padding: 0.7rem 0.8rem 0.7rem 1.85rem; transition: border-color .2s, box-shadow .2s; }
-  .op-input::placeholder { color: var(--muted); }
+  .op-input::placeholder { color: var(--muted); }   /* inherits the input's size — keep them in lockstep */
   .op-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.20); }
   .op-send { flex: 0 0 auto; background: var(--accent); color: #0b0e18; border: none; border-radius: 10px;
     padding: 0 0.95rem; font: 700 0.78rem/1 'Plus Jakarta Sans', sans-serif; cursor: pointer;
@@ -667,7 +667,7 @@
   .op-tab.active { color: var(--fg); background: var(--accent-soft, rgba(184,192,204,.14));
     border-color: var(--border-2); }
   .op-tab .lbl { overflow: hidden; text-overflow: ellipsis; }
-  .op-urlbar { display: flex; align-items: center; gap: 0.42rem; padding: 0.34rem 0.55rem;
+  .op-urlbar { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem;
     background: var(--bg-2); border-bottom: 1px solid var(--border);
     max-height: 60px; overflow: hidden;
     transition: max-height .28s cubic-bezier(.4,0,.2,1), padding .28s cubic-bezier(.4,0,.2,1),
@@ -734,10 +734,10 @@
   .op-favpop .fp-h { font: 500 0.58rem/1.3 'JetBrains Mono', monospace; color: var(--muted);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .op-favpop .fp-txt { min-width: 0; display: flex; flex-direction: column; gap: 0.08rem; }
-  .op-url { font: 500 0.7rem/1.3 'JetBrains Mono', monospace; color: var(--fg-2);
+  .op-url { font: 500 0.78rem/1.3 'JetBrains Mono', monospace; color: var(--fg-2);
     white-space: nowrap; flex: 1 1 auto; min-width: 0; outline: none;
     background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
-    padding: 0.3rem 1.8rem 0.3rem 1.5rem; }   /* left pad clears the in-box lock */
+    padding: 0.4rem 2rem 0.4rem 1.7rem; }   /* left pad clears the in-box lock */
   /* when there's no lock (blank/non-http), reclaim the left pad so the placeholder sits normally */
   .op-url-wrap:has(.op-lock:empty) .op-url { padding-left: 0.6rem; }
   .op-url-reload { position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
@@ -747,8 +747,12 @@
   .op-stage { position: relative; flex: 1 1 auto; background: #05060a; overflow: hidden; outline: none;
     min-height: 280px;
     /* iPad/touch: we own every gesture here — no scroll/zoom/long-press-callout
-       stealing the press-and-hold. Without this iOS Safari hijacks the hold. */
-    touch-action: pinch-zoom; -webkit-touch-callout: none;   /* allow native pinch-zoom; single-finger steering handled in JS */
+       stealing the press-and-hold. Without this iOS Safari hijacks the hold.
+       touch-action:none (was pinch-zoom): pinch-zoom let the compositor START a
+       single-finger PAN before the JS touchmove preventDefault ran, so a scroll
+       gesture slid the fixed page up into the white void above the stage. JS owns
+       every single-finger gesture (scroll/drag/tap), so hand the compositor nothing. */
+    touch-action: none; -webkit-touch-callout: none;
     -webkit-user-select: none; user-select: none; }
   .op[data-state="live"] .op-stage { box-shadow: inset 0 0 26px -8px var(--glow); }
   .op-stage:focus { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 26px -8px var(--glow); }
@@ -880,9 +884,9 @@
     /* MOBILE ONLY: the −/+ control scales the whole chat box together (input + the
        model/effort pickers), so the chatbox text matches the message scale. Desktop
        keeps fixed sizes. */
-    #op-input.op-input { font-size: calc(0.8rem * var(--chat-scale)); }   /* bumped 0.72->0.8 (the owner kept asking for bigger) */
+    #op-input.op-input { font-size: calc(0.72rem * var(--chat-scale)); }   /* down 2 notches 0.8->0.72 (input text too big) */
     .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; padding-right: 1.4em !important; background-position: right 0.22rem center !important; }   /* model/effort scales with -/+ (mobile) but CAPPED; pad-right 1.15->1.4em so a long name like "GPT-5.6 Sol" clears the caret instead of clipping its last letter */
-    #op-input.op-input::placeholder { font-size: calc(0.72rem * var(--chat-scale)); }
+    #op-input.op-input::placeholder { font-size: calc(0.64rem * var(--chat-scale)); }   /* down 2 notches ("Message Operator" too big) */
     .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
        flex-centered digit; desktop keeps its 0.5px top-pad) */
@@ -994,7 +998,7 @@
       padding-bottom: 0.5rem; align-content: start; }
     .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; aspect-ratio: auto; }
       /* full-width single column: let cards stay content-height, not tall squares */
-    .op-lp-name { font-size: calc(0.86rem * var(--chat-scale)); padding-right: 3rem; }
+    .op-lp-name { font-size: calc(0.82rem * var(--chat-scale)); padding-right: 2.2rem; }   /* -1 notch + run further right */
     .op-lp-prompt { font-size: calc(0.72rem * var(--chat-scale)); -webkit-line-clamp: 2; }
     .op-lp-site { font-size: calc(0.64rem * var(--chat-scale)); padding: 0.22rem 0.55rem; }
     .op-lp-go { top: 0.7rem; right: 0.7rem; padding: 0.4rem 0.72rem 0.4rem 0.62rem;
@@ -1304,9 +1308,11 @@
      Operator homepage pattern. Shown only on a fresh session (empty log, no
      run); disappears for good the moment the conversation starts. ── */
   .op-lp { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 1rem; padding: 1.5rem;
+    align-items: safe center; justify-content: safe center; gap: 1rem; padding: 1.5rem;
     /* 3 cols × 218px + 2 × 0.75rem gap — the shared width for bar + grid */
-    --op-lp-w: calc(3 * 218px + 2 * 0.75rem);
+    --op-lp-col: 200px;   /* card column width (scaled down from 218px 2026-07-13) */
+    --op-lp-cardh: 140px; /* fixed card height (~col*7/10); zoom-invariant, equal rows */
+    --op-lp-w: calc(3 * var(--op-lp-col) + 2 * 0.75rem);
     background:
       radial-gradient(120% 95% at 50% 42%, transparent 42%, rgba(0,0,0,.42) 100%),
       color-mix(in srgb, var(--bg-2) 82%, transparent);
@@ -1427,7 +1433,7 @@
      source order beats media queries at equal specificity — so phones rendered
      218px card columns clipped at the screen edge (caught 2026-07-11). */
   @media (min-width: 821px) {
-    .op-lp-grid { grid-template-columns: repeat(3, 218px);
+    .op-lp-grid { grid-template-columns: repeat(3, var(--op-lp-col)); grid-auto-rows: var(--op-lp-cardh);
       gap: 0.75rem; width: max-content; } }
   /* auto-cycle cross-fade: grid eases out (--op-lp-fade), JS swaps cards, the
      fresh set eases back via each card's op-lp-pop entrance. */
@@ -1439,8 +1445,8 @@
     .op-lp-card { animation: none; }
   }
   .op-lp-card { background: color-mix(in srgb, var(--bg) 78%, #000);
-    border: 1px solid var(--border-2); border-radius: 18px;
-    padding: 0.85rem 0.9rem 0.9rem; display: flex; flex-direction: column; gap: 0.45rem;
+    border: 1px solid var(--border-2); border-radius: 16px;
+    padding: 0.7rem 0.78rem 0.78rem; display: flex; flex-direction: column; gap: 0.4rem;
     position: relative; cursor: pointer; text-align: left;  /* body → load into composer; Go launches */
     transition: border-color .15s, transform .15s, box-shadow .15s, background .15s;
     animation: op-lp-pop .3s cubic-bezier(.2,1.1,.35,1) backwards; }
@@ -1448,7 +1454,7 @@
      the mobile block's content-height cards (aspect-ratio:auto, ~line 929)
      actually win on phones (same source-order pitfall). */
   @media (min-width: 821px) {
-    .op-lp-card { aspect-ratio: 10 / 7; } }   /* nudge cards toward square (was content-height ~1.6:1) */
+    .op-lp-card { height: var(--op-lp-cardh); overflow: hidden; } }   /* fixed, equal, zoom-invariant */
   .op-lp-card:nth-child(2) { animation-delay: .04s; } .op-lp-card:nth-child(3) { animation-delay: .08s; }
   .op-lp-card:nth-child(4) { animation-delay: .12s; } .op-lp-card:nth-child(5) { animation-delay: .16s; }
   @keyframes op-lp-pop { from{opacity:0;transform:translateY(6px) scale(.96)} to{opacity:1;transform:none} }
@@ -1458,21 +1464,21 @@
   /* Fixed vertical rhythm so every card lays out identically: the name reserves
      exactly 2 lines and the prompt exactly 2, so the prompt's "…" terminates in
      the same visual band on every card regardless of title length. */
-  .op-lp-name { font: 700 calc(0.9rem * var(--chat-scale))/1.28 var(--chat-font); color: var(--fg);
-    padding-right: 2.6rem;   /* clear the Go button in the corner */
+  .op-lp-name { font: 700 0.78rem/1.28 var(--chat-font); color: var(--fg);   /* down 1 notch 0.82->0.78 */
+    padding-right: 1.8rem;   /* 2.6->1.8: let the title run further right; still clears the Go button's left edge */
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     min-height: calc(2 * 1.28em); }
   /* prompt grows into the taller card: up to 4 lines, reserving 2 so short
      prompts still align the meta row. margin-top:auto on .op-lp-meta pushes the
      pill to the bottom, so the prompt takes whatever vertical space is free. */
-  .op-lp-prompt { font: 500 calc(0.68rem * var(--chat-scale))/1.45 var(--chat-font); color: var(--muted);
-    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+  .op-lp-prompt { font: 500 0.62rem/1.45 var(--chat-font); color: var(--muted);
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
     min-height: calc(2 * 1.45em); }
   /* site pill pinned to the bottom of the card, aligned across cards */
   .op-lp-meta { display: flex; align-items: center; gap: 0.34rem; margin-top: auto;
     padding-top: 0.15rem; min-height: 20px; flex-wrap: wrap; }
   .op-lp-site { background: var(--bg-4); border: 1px solid var(--border); border-radius: 999px;
-    font: 600 calc(0.6rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg-2);
+    font: 600 0.6rem/1.2 var(--chat-font); color: var(--fg-2);
     padding: 0.2rem 0.5rem; white-space: nowrap; max-width: none;
     display: inline-flex; align-items: center; gap: 0.3rem; }
   .op-lp-site img { width: 13px; height: 13px; border-radius: 3px; display: block; }
@@ -1480,13 +1486,13 @@
      as "this one runs itself" next to the neutral site chips */
   .op-lp-site.op-lp-sched { background: rgba(63,185,80,.10); color: #56d364;
     border-color: rgba(63,185,80,.32); }
-  .op-lp-bot { margin-left: auto; font: 600 calc(0.52rem * var(--chat-scale))/1.2 var(--chat-font);
+  .op-lp-bot { margin-left: auto; font: 600 0.52rem/1.2 var(--chat-font);
     color: var(--muted); white-space: nowrap; }
   /* Go — the primary action, top-right. Revealed on card hover (desktop);
      always visible on touch where there's no hover (see mobile block). */
   .op-lp-go { position: absolute; top: 0.7rem; right: 0.7rem; display: inline-flex; align-items: center;
     gap: 0.28rem; background: #e5484d; color: #fff; border: none; border-radius: 999px;
-    font: 700 calc(0.62rem * var(--chat-scale))/1 var(--chat-font); padding: 0.34rem 0.62rem 0.34rem 0.56rem;
+    font: 700 0.62rem/1 var(--chat-font); padding: 0.34rem 0.62rem 0.34rem 0.56rem;
     cursor: pointer; box-shadow: 0 2px 8px -2px rgba(0,0,0,.4);
     opacity: 0; transition: opacity .15s ease, filter .12s ease, transform .12s ease; }
   .op-lp-card:hover .op-lp-go, .op-lp-go:focus-visible { opacity: 1; }
@@ -1501,7 +1507,7 @@
   .op-lp-card:hover .op-lp-edit, .op-lp-edit:focus-visible { opacity: 1; }
   .op-lp-edit:hover { color: var(--fg); background: var(--bg-2); }
   .op-lp-new { border-style: dashed; align-items: center; justify-content: center;
-    color: var(--muted); font: 600 calc(0.68rem * var(--chat-scale))/1.5 var(--chat-font);
+    color: var(--muted); font: 600 0.68rem/1.5 var(--chat-font);
     text-align: center; display: flex; min-height: 92px; }
   .op-lp-new:hover { color: var(--fg-2); }
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
@@ -1525,8 +1531,8 @@
   @media (min-width: 821px) {
     /* 0.70->0.85rem: both inputs had drifted smaller; unified with the base
        .op-input and the follow-up to 0.85rem*scale, equal (2026-07-11). */
-    .op-input { font-size: calc(0.85rem * var(--chat-scale)); }
-    .op-input::placeholder { font-size: calc(0.85rem * var(--chat-scale)); }
+    .op-input { font-size: calc(0.77rem * var(--chat-scale)); }   /* down 2 notches — proportioned to the model picker. NB this block WINS over base .op-input (source order) */
+    .op-input::placeholder { font-size: calc(0.73rem * var(--chat-scale)); }   /* placeholder keeps a -1-notch offset */
     .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.92rem); }
   }
 
@@ -1803,6 +1809,19 @@
     max-height: 52px; opacity: 1; padding: 0.34rem 0.55rem;
     border-bottom-color: var(--border); pointer-events: auto; overflow: visible; }
   .op[data-surface="desktop-real"] .op-tb-sandbox { display: none; }
+
+  /* MAX-SHEET chat (mobile data-sheet="full"): only a sliver of stage remains
+     and the URL bar mangles itself across it — collapse it out with the same
+     smooth ease the desktop surfaces use (2026-07-12). Tabs + taskbar go
+     with it; they share the same strip. */
+  .op[data-sheet="full"] .op-urlbar {
+    max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0;
+    border-bottom-color: transparent; pointer-events: none; }
+  .op[data-sheet="full"] .op-taskbar {
+    max-height: 0 !important; opacity: 0 !important;
+    padding-top: 0 !important; padding-bottom: 0 !important;
+    pointer-events: none !important; overflow: hidden !important; }
+  .op[data-sheet="full"] .op-tabs { display: none; }
   .op-tb-name { font: 700 0.64rem/1 'Plus Jakarta Sans', sans-serif;
     letter-spacing: .09em; text-transform: uppercase; color: var(--fg-2);
     opacity: .75; padding-right: 0.2rem; user-select: none; }

@@ -86,17 +86,32 @@ def snapshot_trajectories(brain_dir: str) -> dict:
     return out
 
 
-def find_trajectory(brain_dir: str, before: dict, strict: bool = False) -> str | None:
+def snapshot_offsets(trajectories: dict) -> dict:
+    """Map each existing trajectory to its pre-launch byte length.
+
+    A resumed agy conversation appends to the same JSONL. Starting reads at
+    this offset skips prior turns without scanning hundreds of MB of old brain
+    files or trusting every legacy transcript to decode cleanly.
+    """
+    offsets = {}
+    for path in (trajectories or {}):
+        try:
+            offsets[path] = os.path.getsize(path)
+        except OSError:
+            continue
+    return offsets
+
+
+def find_trajectory(brain_dir: str, before: dict, strict: bool = False,
+                    allow_touched: bool = False) -> str | None:
     """Pick THIS run's transcript_full.jsonl: a path that's NEW since the pre-launch
     snapshot, or one whose mtime advanced. Falls back to the globally-freshest if
     nothing looks new (best-effort — never raises).
 
-    strict=True (the LIVE poll): return ONLY a brand-new path — never a touched or
-    freshest-overall fallback. agy creates this run's brain dir a few seconds in, so
-    on the first poll cycles brand_new is empty; without strict the poll would lock
-    onto a PRIOR run's trajectory (the VesselFinder/stale-steps bug) and stick there.
-    Strict makes the poll WAIT (return None) until the real new file appears, then
-    lock on it. The post-run _flush_agy calls non-strict so it can still fall back."""
+    strict=True (the LIVE poll): normally return ONLY a brand-new path. A known
+    resumed conversation instead passes allow_touched=True because agy appends to
+    its existing transcript; the pre-launch byte offset prevents old-turn replay.
+    The post-run _flush_agy calls non-strict so it can still fall back."""
     bd = brain_dir
     if not bd or not os.path.isdir(bd):
         return None
@@ -110,12 +125,13 @@ def find_trajectory(brain_dir: str, before: dict, strict: bool = False) -> str |
     brand_new = [(m, pth) for pth, m in now.items() if pth not in before]
     if brand_new:
         return max(brand_new)[1]
-    if strict:
-        return None                        # live poll waits for the real new file
-    # non-strict (final flush): fall back to a touched path, then freshest overall.
     touched = [(m, pth) for pth, m in now.items() if m > before.get(pth, 0)]
     if touched:
-        return max(touched)[1]
+        if not strict or allow_touched:
+            return max(touched)[1]
+    if strict:
+        return None                        # live poll waits for the real new file
+    # non-strict (final flush): fall back to the freshest overall.
     if now:                                # nothing new/touched — freshest overall
         return max((m, pth) for pth, m in now.items())[1]
     return None
@@ -140,9 +156,15 @@ def parse_trajectory(path: str, r) -> bool:
     any error → return False and let the caller fall back to plain stdout."""
     try:
         steps = []
-        with open(path) as f:
+        offset = (getattr(r, "_agy_offsets", {}) or {}).get(path, 0)
+        with open(path, "rb") as f:
+            if offset:
+                try:
+                    f.seek(offset)
+                except OSError:
+                    f.seek(0)
             for line in f:
-                line = line.strip()
+                line = line.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
                 try:

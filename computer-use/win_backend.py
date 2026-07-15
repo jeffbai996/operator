@@ -19,12 +19,15 @@ injection (cursor physically moved) both confirmed from WSL.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
 
 log = logging.getLogger("computer_use.win_backend")
 
@@ -39,6 +42,14 @@ POWERSHELL = (shutil.which("powershell.exe")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CAPTURE_PS1 = os.path.join(_HERE, "win_capture.ps1")
 _INPUT_PS1 = os.path.join(_HERE, "win_input.ps1")
+
+# Input is intentionally NOT launched through WSL interop.  Windows will let an
+# interop child capture the live screen but denies its window-station write
+# access, so SetCursorPos/keybd_event silently do nothing.  A tiny PowerShell
+# broker is registered as an InteractiveToken scheduled task and consumes this
+# user-private file queue from the real input desktop.
+_BROKER_DIR_CACHE: str | None = None
+_BROKER_HEARTBEAT_MAX_AGE = 3.0
 
 # Windows temp dir the screenshots land in (readable from WSL via /mnt/c).
 # Resolved once from the Windows %TEMP% so it works regardless of the login user.
@@ -65,15 +76,112 @@ class WinBackendError(RuntimeError):
     """A PowerShell capture/inject call failed."""
 
 
+_INTEROP_CACHE: str | None = None
+
+
+def _os_stat_sock(path: str) -> bool:
+    """True if path is a live socket."""
+    import stat as _stat
+    try:
+        return _stat.S_ISSOCK(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+# Read-only probe: the cursor position from the INTERACTIVE session is a real
+# non-zero point; from a detached window station it comes back 0,0. One line,
+# no P/Invoke here-string (that's terminator-column-fragile over -Command).
+_INTEROP_PROBE = ("Add-Type -AssemblyName System.Windows.Forms;"
+                  "$p=[System.Windows.Forms.Cursor]::Position;"
+                  'Write-Output "$($p.X),$($p.Y)"')
+
+
+def _interop_reaches_session(sock: str) -> bool:
+    """True if launching a Windows process through this WSL_INTEROP socket lands
+    in the INTERACTIVE desktop session. Probe: Cursor.Position returns the real
+    cursor point (non-0,0) from the interactive session, but 0,0 from a detached
+    window station. Cheap, read-only — never moves anything."""
+    env = os.environ.copy()
+    env["WSL_INTEROP"] = sock
+    try:
+        r = subprocess.run([POWERSHELL, "-NoProfile", "-Command", _INTEROP_PROBE],
+                           capture_output=True, text=True, timeout=8,
+                           stdin=subprocess.DEVNULL, env=env)
+        out = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+        pos = out[-1] if out else ""
+        return bool(pos) and pos != "0,0"
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _live_interop(reprobe: bool = False) -> str | None:
+    """A WSL↔Windows interop socket that reaches the INTERACTIVE desktop session.
+
+    WSL_INTEROP is the socket that makes a WSL process launch Windows binaries in
+    the interactive Windows session. A systemd --user unit (how the operator
+    server runs) inherits NO WSL_INTEROP — so its powershell.exe spawns land in a
+    detached window station: GDI screen CAPTURE still works (it reads the display
+    regardless), but SetCursorPos / mouse_event / SendKeys hit the wrong station
+    and NOTHING moves. That's the "desktop control silently does nothing, yet the
+    feed looks fine" break (2026-07-12).
+
+    NOT every live socket reaches the session — a detached/dead session leaves a
+    live socket whose spawns land nowhere (verified: newest-by-mtime grabbed a
+    socket where GetCursorPos returned 0,0 and the cursor never moved, while an
+    older socket worked). So we PROBE each candidate (newest first) for session
+    reachability and cache the winner. Re-probe on demand when a cached socket
+    stops working. Returns None if nothing reaches the session (→ fall back to
+    inherited env, no worse than before)."""
+    global _INTEROP_CACHE
+    if _INTEROP_CACHE and not reprobe and _os_stat_sock(_INTEROP_CACHE):
+        return _INTEROP_CACHE
+    # own env first if it actually reaches the session
+    env_sock = os.environ.get("WSL_INTEROP")
+    candidates: list[str] = []
+    if env_sock and _os_stat_sock(env_sock):
+        candidates.append(env_sock)
+    try:
+        socks = []
+        for name in os.listdir("/run/WSL"):
+            if not name.endswith("_interop"):
+                continue
+            p = os.path.join("/run/WSL", name)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            import stat as _stat
+            if _stat.S_ISLNK(st.st_mode):   # skip the 1_interop→2_interop symlinks
+                continue
+            socks.append((st.st_mtime, p))
+        socks.sort(reverse=True)
+        candidates += [p for _mt, p in socks if p not in candidates]
+    except OSError:
+        pass
+    for sock in candidates:
+        if _os_stat_sock(sock) and _interop_reaches_session(sock):
+            _INTEROP_CACHE = sock
+            return sock
+    _INTEROP_CACHE = None
+    return None
+
+
 def _pwsh(args: list[str], ps1: str) -> str:
     """Run a vendored .ps1 (Windows path) via powershell.exe and return stdout."""
     win_ps1 = subprocess.run(["wslpath", "-w", ps1], check=True,
                              capture_output=True, text=True).stdout.strip()
     cmd = [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-File", win_ps1, *args]
+    # Ensure the Windows child lands in the INTERACTIVE session so input actually
+    # reaches the owner's desktop (see _live_interop). No-op if the inherited env is
+    # already good; harmless best-effort if no live socket is found.
+    _env = os.environ.copy()
+    _sock = _live_interop()
+    if _sock:
+        _env["WSL_INTEROP"] = _sock
     try:
         r = subprocess.run(cmd, check=True, capture_output=True, text=True,
-                           timeout=30, stdin=subprocess.DEVNULL)
+                           timeout=30, stdin=subprocess.DEVNULL, env=_env)
     except subprocess.CalledProcessError as e:
         raise WinBackendError(f"powershell {os.path.basename(ps1)} {args}: "
                               f"{e.stderr.strip()}") from e
@@ -103,6 +211,79 @@ def ensure(_target=None) -> str:
     if not os.path.exists(_CAPTURE_PS1) or not os.path.exists(_INPUT_PS1):
         raise WinBackendError("win_capture.ps1 / win_input.ps1 missing")
     return "windows-primary"
+
+
+def _broker_dir() -> str:
+    """Return the WSL path shared with the interactive Windows input broker."""
+    global _BROKER_DIR_CACHE
+    configured = os.environ.get("COMPUTER_USE_WIN_BROKER_DIR")
+    if configured:
+        return os.path.abspath(os.path.expanduser(configured))
+    if _BROKER_DIR_CACHE is None:
+        _BROKER_DIR_CACHE = os.path.join(_win_temp(), "operator-input-broker")
+    return _BROKER_DIR_CACHE
+
+
+def ensure_input() -> None:
+    """Fail closed unless the interactive broker has a fresh heartbeat."""
+    heartbeat = os.path.join(_broker_dir(), "heartbeat.json")
+    try:
+        age = time.time() - os.path.getmtime(heartbeat)
+    except OSError as e:
+        raise WinBackendError(
+            "Windows input broker is not running; start the "
+            "OperatorInputBroker scheduled task") from e
+    if age > _BROKER_HEARTBEAT_MAX_AGE:
+        raise WinBackendError(
+            f"Windows input broker heartbeat is stale ({age:.1f}s); restart "
+            "the OperatorInputBroker scheduled task")
+
+
+def _broker_request(action: dict, timeout: float = 6.0) -> None:
+    """Queue one input action and wait for the interactive broker's verdict."""
+    ensure_input()
+    broker = _broker_dir()
+    os.makedirs(broker, mode=0o700, exist_ok=True)
+    request_id = uuid.uuid4().hex
+    request = os.path.join(broker, f"{request_id}.request.json")
+    response = os.path.join(broker, f"{request_id}.response.json")
+    fd, pending = tempfile.mkstemp(prefix=f".{request_id}.", suffix=".tmp",
+                                   dir=broker)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(action, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(pending, request)
+    except Exception:
+        try:
+            os.unlink(pending)
+        except OSError:
+            pass
+        raise
+
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            try:
+                # Windows PowerShell 5.1 writes an UTF-8 BOM; accept that and
+                # the BOM-less responses produced by tests/other brokers.
+                with open(response, encoding="utf-8-sig") as f:
+                    result = json.load(f)
+                if not result.get("ok"):
+                    raise WinBackendError(result.get("error") or
+                                          "Windows input broker rejected action")
+                return
+            except FileNotFoundError:
+                time.sleep(0.02)
+        raise WinBackendError(
+            f"Windows input broker timed out after {timeout:.1f}s")
+    finally:
+        for path in (request, response):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def screen_size(_target=None) -> tuple[int, int]:
@@ -203,25 +384,25 @@ def execute(action: dict, _target: str) -> None:
 
     if kind in ("left_click", "right_click", "double_click", "mouse_move"):
         win_action = "move" if kind == "mouse_move" else kind
-        _pwsh(["-Action", win_action, "-X", str(x), "-Y", str(y)], _INPUT_PS1)
+        _broker_request({"action": win_action, "x": x, "y": y})
         return
     if kind == "type":
-        _pwsh(["-Action", "type", "-Text", action.get("text", "")], _INPUT_PS1)
+        _broker_request({"action": "type", "text": action.get("text", "")})
         return
     if kind == "key":
         combo = action.get("text", "")
         parts = [p.strip().lower() for p in combo.split("+")]
         if any(p in _VK_ROUTED_MODS for p in parts):
-            _pwsh(["-Action", "hotkey", "-Key", combo], _INPUT_PS1)
+            _broker_request({"action": "hotkey", "key": combo})
         else:
-            _pwsh(["-Action", "key", "-Key", _sendkeys(combo)], _INPUT_PS1)
+            _broker_request({"action": "key", "key": _sendkeys(combo)})
         return
     if kind == "scroll":
         direction = action.get("scroll_direction", "down")
         amount = int(action.get("scroll_amount", 3))
         signed = amount if direction == "up" else -amount
-        _pwsh(["-Action", "scroll", "-X", str(x), "-Y", str(y),
-               "-Amount", str(signed)], _INPUT_PS1)
+        _broker_request({"action": "scroll", "x": x, "y": y,
+                         "amount": signed})
         return
     if kind in ("wait", "screenshot"):
         return

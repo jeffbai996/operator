@@ -78,7 +78,7 @@ DESKTOP_FLAVORS = {
     "desktop-sandbox": ("an ISOLATED Linux desktop running in a Docker container"
                         " (its own filesystem, network and user — nothing on the"
                         " host can be touched). Act freely. THE ENVIRONMENT:"
-                        " 1024x768 screen, a full XFCE4 desktop — a panel along"
+                        " 960x768 screen, a full XFCE4 desktop — a panel along"
                         " the TOP edge (Applications menu at its left end, open"
                         " windows listed in the middle, clock at the right) and"
                         " a small app dock at the BOTTOM center. Chromium is"

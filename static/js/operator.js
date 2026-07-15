@@ -1328,7 +1328,9 @@
   let _maps = [];                        // shipped game maps (vision/maps/)
   let _activeMap = '';                   // '' = none; folded into dispatch text only
   const _isGameSurface = () => _surfaceActive !== 'browser';   // desktop = game-capable
-  const _SURF_CHIP = { 'desktop-sandbox': 'sandbox', 'desktop-real': 'computer' };
+  // The sandbox is already unmistakable from the desktop taskbar/feed. Keep
+  // its brow chip empty so the Operator controls survive narrow/high-zoom rails.
+  const _SURF_CHIP = { 'desktop-real': 'computer' };
   const _SURF_ICON = {
     browser: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg>',
     'desktop-sandbox': '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5M12 12v9"></path></svg>',
@@ -1729,19 +1731,19 @@
   const _LP_EXAMPLE_POOL = [
     { name: 'Book a table for two at Mott 32', prompt: 'On OpenTable, find a table for two at Mott 32 this Friday around 7pm and show me what times are available.', sites: ['opentable.com'], isExample: true },
     { name: 'Order sushi from a top-rated spot', prompt: 'Open Uber Eats, find a top-rated sushi restaurant near me that can deliver now, and build a cart for two — stop before placing the order so I can review it.', sites: ['ubereats.com'], isExample: true },
-    { name: 'Restock this week’s grocery staples', prompt: 'On Instacart, fill my cart with this week’s staples: milk, eggs, bread, coffee, bananas, and chicken. Stop at checkout for me to confirm.', sites: ['instacart.com'], isExample: true },
-    { name: 'Find the cheapest flights to Hawaii', prompt: 'Search Google Flights for round-trip fares from my city to Hawaii next month, 7–10 nights, and list the three cheapest reasonable options with times.', sites: ['flights.google.com'], isExample: true },
-    { name: 'Track my in-transit Amazon orders', prompt: 'Check my recent Amazon orders and tell me which items are still in transit and when each is expected to arrive.', sites: ['amazon.com'], isExample: true },
+    { name: 'Restock grocery staples', prompt: 'On Instacart, fill my cart with this week’s staples: milk, eggs, bread, coffee, bananas, and chicken. Stop at checkout for me to confirm.', sites: ['instacart.com'], isExample: true },
+    { name: 'Find cheap flights to Hawaii', prompt: 'Search Google Flights for round-trip fares from my city to Hawaii next month, 7–10 nights, and list the three cheapest reasonable options with times.', sites: ['flights.google.com'], isExample: true },
+    { name: 'Track my Amazon orders', prompt: 'Check my recent Amazon orders and tell me which items are still in transit and when each is expected to arrive.', sites: ['amazon.com'], isExample: true },
     { name: 'Brief me on today’s top stories', prompt: 'Open Reuters and give me a short brief of today’s top business and world stories, grouped by theme.', sites: ['reuters.com'], isExample: true },
-    { name: 'Compare well-reviewed Barcelona hotels', prompt: 'On Booking.com, find three well-reviewed hotels in central Barcelona for a weekend next month under $200/night and summarize the trade-offs.', sites: ['booking.com'], isExample: true },
+    { name: 'Compare Barcelona hotels', prompt: 'On Booking.com, find three well-reviewed hotels in central Barcelona for a weekend next month under $200/night and summarize the trade-offs.', sites: ['booking.com'], isExample: true },
     { name: 'Plan a Saturday hike nearby', prompt: 'On AllTrails, find three well-rated day hikes near me for this Saturday, and summarize distance, elevation, and difficulty for each.', sites: ['alltrails.com'], isExample: true },
-    { name: 'Find a highly-rated dinner spot tonight', prompt: 'On Yelp, find three highly-rated restaurants near me open for dinner tonight in the $$ range, and summarize what each is known for.', sites: ['yelp.com'], isExample: true },
+    { name: 'Find a dinner spot tonight', prompt: 'On Yelp, find three highly-rated restaurants near me open for dinner tonight in the $$ range, and summarize what each is known for.', sites: ['yelp.com'], isExample: true },
     { name: 'Build a dinner-party playlist', prompt: 'On Spotify, build me a 2-hour dinner-party playlist — warm, low-key, mostly instrumental — and show the tracklist before saving it.', sites: ['spotify.com'], isExample: true },
     { name: 'Check the weekend forecast', prompt: 'On Weather.gov, pull the detailed forecast for my area Friday through Sunday and tell me the best window for an outdoor plan.', sites: ['weather.gov'], isExample: true },
     { name: 'Shortlist condos under $600k', prompt: 'On Redfin, find three 2-bed condos near me listed under $600k, and summarize square footage, HOA, and days on market for each.', sites: ['redfin.com'], isExample: true },
-    { name: 'Price a 5-night trip to Mexico City', prompt: 'On Kayak, price a 5-night trip to Mexico City next month — flights plus a central hotel — and give me two options at different budgets.', sites: ['kayak.com'], isExample: true },
+    { name: 'Price a trip to Mexico City', prompt: 'On Kayak, price a 5-night trip to Mexico City next month — flights plus a central hotel — and give me two options at different budgets.', sites: ['kayak.com'], isExample: true },
     { name: 'Find tickets to an upcoming game', prompt: 'On SeatGeek, find pairs of tickets to the next home game for my team, under $150 each, and list the three best value seats.', sites: ['seatgeek.com'], isExample: true },
-    { name: 'Read up on how mRNA vaccines work', prompt: 'On Wikipedia, give me a clear plain-English summary of how mRNA vaccines work, with the key milestones in their development.', sites: ['wikipedia.org'], isExample: true },
+    { name: 'How mRNA vaccines work', prompt: 'On Wikipedia, give me a clear plain-English summary of how mRNA vaccines work, with the key milestones in their development.', sites: ['wikipedia.org'], isExample: true },
     { name: 'Pick a sci-fi movie for tonight', prompt: 'On IMDb, find three well-reviewed sci-fi films from the last five years I could stream tonight, with a one-line hook for each.', sites: ['imdb.com'], isExample: true },
     { name: 'Build a literary-fiction reading list', prompt: 'On Goodreads, put together a five-book summer reading list of literary fiction with high ratings, and tell me what each is about.', sites: ['goodreads.com'], isExample: true },
     { name: 'Compare 65-inch 4K TVs under $800', prompt: 'On Best Buy, compare three 65-inch 4K TVs under $800 and summarize the trade-offs in picture, ports, and reviews.', sites: ['bestbuy.com'], isExample: true },
@@ -3505,25 +3507,24 @@
     if (MODE === 'auto') {
       logUser(txt);
       if (_inFlight) {
-        // SOFT STEER (1.0.12): the message reaches the LIVE run — injected
-        // right after the agent's next tool call (steer hook, claude runtime)
-        // or as one more resumed turn if it lands as the run finishes. The
-        // run is never killed; Stop (■) remains the hard redirect path.
-        // (Replaces the old interrupt-steer: stop + re-dispatch.)
-        try {
-          const r = await fetch(SAY_URL, { method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({text: txt}) });
-          const d = await r.json().catch(() => ({}));
-          if (r.ok && d.ok) {
-            _steerQueued = true;
-            logEvent("Steering — lands at the agent's next step", true);
-            return;
-          }
-          if (r.status !== 409) { logEvent((d.error||'steer failed').slice(0,80), false); return; }
-        } catch(_){}
-        // 409 = the run ended in the race — deliver as a normal follow-up turn
+        // INTERRUPT-STEER (restored 2026-07-12): a mid-run message stops
+        // the current turn and immediately redirects the bot — barge-in, not a
+        // polite queue. The 1.0.12 soft-steer ("lands at the agent's next step",
+        // delivered via SAY_URL) read as sluggish; the old stop+re-dispatch
+        // "worked well enough." This is intentional steering, NOT an error —
+        // close the current turn quietly as "Steered" (no Interrupted/error UI,
+        // no extra message). Stop (■) is unchanged.
+        _interrupting = true; _steering = true;   // hard-suppress terminal handling until the new run is RUNNING
+        try { await fetch(STOP_URL, {method:'POST'}); } catch(_){}
+        if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
+        op.dataset.busy='0'; op.dataset.agent='';
         _inFlight = false;
+        await new Promise(r => setTimeout(r, 350));   // let the backend register the stop
+        _postSteerUntil = Date.now() + 1500;
+        _interrupting = false; _handledState = 'done';
+        setTimeout(()=>{ _steering = false; }, 8000);   // backstop: never leave terminal handling suppressed forever
+        dispatchTask(txt);
+        return;
       }
       dispatchTask(txt);
       return;
@@ -3722,9 +3723,12 @@
       }
     }
     if (_tScroll) {
-      // page scrolls opposite to finger movement (finger up = content up = scroll down)
-      _tScrollDy += (_tLastY - t.clientY);
-      _tScrollDx += (_tLastX - t.clientX);
+      // Forward the finger's direction directly to the remote wheel gesture.
+      // The viewport-origin fix prevents the old white-void capture; scroll
+      // direction is independent and should follow the Operator control's
+      // established drag convention. Wheel/trackpad remains native passthrough.
+      _tScrollDy += (t.clientY - _tLastY);
+      _tScrollDx += (t.clientX - _tLastX);
       _tLastY = t.clientY; _tLastX = t.clientX;
       if (!_tScrollT) _tScrollT = setTimeout(() => {
         const dy = _tScrollDy, dx = _tScrollDx; _tScrollDy = 0; _tScrollDx = 0; _tScrollT = null;

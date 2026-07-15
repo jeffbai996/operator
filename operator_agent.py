@@ -305,6 +305,9 @@ class AgentRunner:
         self._agy_buf: list = []          # agy plain-text stdout lines (no JSON stream)
         self._agy_brain_dir: str = ''     # ~/.gemini/antigravity-cli/brain (set per-run)
         self._agy_traj_before: dict = {}  # {trajectory_path: mtime} snapshot pre-launch
+        self._agy_offsets: dict = {}      # {trajectory_path: pre-launch byte length}
+        self._agy_resumed: bool = False   # resumed agy appends to an existing JSONL
+        self._agy_live_traj: str = ''     # path locked by the live poll
         # SHARED conversation transcript across ALL bots (runtime-agnostic) so the
         # convo survives switching claude-a↔claude-b↔gpt. [{role:'user'|'assistant', text}]
         # Persisted to disk so it ALSO survives a server restart (the store/Flask
@@ -582,6 +585,9 @@ class AgentRunner:
         self._cum_in_tokens = 0    # sum of every reported turn-input this run (burn)
         self._tok_stop_fired = False  # one-shot governor cap-stop per run (#34)
         self._agy_traj_before = {}
+        self._agy_offsets = {}
+        self._agy_resumed = False
+        self._agy_live_traj = ""
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
         self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
                                           # tool_calls, no content) — the "overthink loop"
@@ -654,6 +660,9 @@ class AgentRunner:
             self._agy_mcp_dir = plan.agy_mcp_dir
             self._agy_brain_dir = plan.agy_brain_dir
             self._agy_traj_before = self._agy_snapshot_trajectories()
+            self._agy_offsets = operator_agy.snapshot_offsets(
+                self._agy_traj_before)
+            self._agy_resumed = bool(resume_id)
             self._agy_convs_before = operator_agy.conversation_ids()
         import tempfile as _tf
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
@@ -1146,7 +1155,8 @@ class AgentRunner:
         """Thin hook — see operator_agy.find_trajectory for the strict/live
         vs final-flush selection rules."""
         return operator_agy.find_trajectory(
-            self._agy_brain_dir, self._agy_traj_before or {}, strict=strict)
+            self._agy_brain_dir, self._agy_traj_before or {}, strict=strict,
+            allow_touched=bool(strict and self._agy_resumed))
 
     def _agy_parse_trajectory(self, path: str) -> bool:
         """Thin hook: the trajectory parser lives in operator_agy (R5); this
@@ -1190,7 +1200,7 @@ class AgentRunner:
 
         parsed_answer = False
         try:
-            traj = self._agy_find_trajectory()
+            traj = self._agy_live_traj or self._agy_find_trajectory()
             if traj:
                 parsed_answer = self._agy_parse_trajectory(traj)
         except Exception:  # noqa: BLE001 — trace is best-effort; stdout is the floor
