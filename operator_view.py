@@ -142,6 +142,7 @@ class _Streamer:
         # else they raise "bound to a different event loop" on the next action and the
         # status card flashes "Failed" for every click/keystroke. Rebuilt lazily.
         self._io_lock = None
+        self._eager_evt = None  # asyncio.Event bound to the dead loop -> rebuilt lazily on this loop
         self._key_repeat = {}   # drop any Tasks bound to the dead old loop
         try:
             self._loop.run_until_complete(self._grab_loop())
@@ -401,14 +402,44 @@ class _Streamer:
             lo = self.tier == "lo"
             args = {"format": "jpeg",
                     "quality": TIER_LO_QUALITY if lo else JPEG_QUALITY}
-            if lo and self.vw > TIER_LO_MAX_W and self.vh:
-                # F1: downscale per-capture (clip covers the viewport, scale caps
-                # the output width) — a page-level emulation override would resize
-                # the SHARED page under the agent. No clip when the viewport is
-                # unknown (nothing sane to scale against) or already narrow.
-                args["clip"] = {"x": 0, "y": 0,
-                                "width": float(self.vw), "height": float(self.vh),
-                                "scale": TIER_LO_MAX_W / float(self.vw)}
+            # FULL-COVERAGE, DEVICE-RES frames (2026-07-12, rev 2). On a Chrome
+            # whose device scale ≠ 1 (Windows display scaling — here 1.25),
+            # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
+            # the FULL device viewport so coverage is complete (no right/bottom
+            # crop — the owner's "right edge cut off" report).
+            #
+            # OUTPUT AT DEVICE RESOLUTION (scale=1.0), not CSS width. Click
+            # accuracy does NOT depend on frame size — the frontend sends
+            # NORMALIZED (0..1) coords that _viewport_css maps to CSS pixels for
+            # Input.dispatchMouseEvent, so frame dimensions are irrelevant to
+            # where a tap lands. The earlier "normalize to CSS width" clip threw
+            # away ~20% of resolution for nothing (690 vs 863 px on a 1.25x
+            # display) → frames upscaled soft on the phone ("pixelated as shit").
+            # WORSE: only the CDP path downscaled; the except-branch fallback
+            # (page.screenshot) captures at DEVICE res, so a transient CDP-grab
+            # failure during a nav flipped the served frame 690<->863 every few
+            # frames — the phone's <img> rescaled each swap ("spasming between
+            # small and big at constant frequency"). Same device-res on both
+            # paths = one stable size, no rescale pulse, full sharpness.
+            # lo tier still downscales (bandwidth) but by a FIXED cap, so its
+            # size is stable too.
+            try:
+                _m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"),
+                                            timeout=1.0)
+                _dev = (_m or {}).get("layoutViewport") or {}
+                _dw = float(_dev.get("clientWidth") or 0)
+                _dh = float(_dev.get("clientHeight") or 0)
+                if _dw and _dh:
+                    _scale = min(1.0, TIER_LO_MAX_W / _dw) if lo else 1.0
+                    # clip uses document coordinates, so its origin must follow
+                    # the live viewport. At y=0 a scrolled page captures the
+                    # offscreen region above it (a giant blank band on Yahoo).
+                    _dx = float(_dev.get("pageX") or 0)
+                    _dy = float(_dev.get("pageY") or 0)
+                    args["clip"] = {"x": _dx, "y": _dy, "width": _dw,
+                                    "height": _dh, "scale": _scale}
+            except Exception:
+                pass   # metrics unavailable → unclipped frame (full coverage on stock scale)
             res = await asyncio.wait_for(
                 sess.send("Page.captureScreenshot", args),
                 timeout=2.5)
@@ -567,6 +598,7 @@ class _Streamer:
             live = [p for p in ctx.pages if not p.is_closed()]
             if live:
                 self._page = live[-1]
+                self._cdp = None   # session was bound to the dead page — never dispatch input into it
                 return True
             return False
         except Exception:  # noqa: BLE001 — browser/context dropped
@@ -754,11 +786,19 @@ class _Streamer:
             return ""
 
     async def _cdp_session(self, p):
-        """Reusable CDP session for raw input/screenshot ops. Rebuilt if missing."""
+        """Reusable CDP session for raw input/screenshot ops. Rebuilt if missing
+        OR if the cache belongs to a DIFFERENT page than the one requested: a
+        session is bound to one target, so after a page swap a stale cache
+        dispatched clicks/keys into the old (background/closed) tab while the
+        capture showed the new one — taps rippled, steers returned ok, and the
+        visible page never reacted (2026-07-12, after a tab close). Most
+        _page-swap sites null the cache manually; this identity check is the
+        backstop so no future swap site can reintroduce the class."""
         sess = getattr(self, "_cdp", None)
-        if sess is None:
+        if sess is None or getattr(self, "_cdp_for", None) is not p:
             sess = await p.context.new_cdp_session(p)
             self._cdp = sess
+            self._cdp_for = p
         return sess
 
     async def _cdp_click(self, p, x: float, y: float, button: str = "left",
@@ -799,6 +839,27 @@ class _Streamer:
                 self.last_click = (x / d["w"], y / d["h"], time.monotonic())
         except Exception:
             pass
+
+    async def _cdp_scroll(self, p, dx: float, dy: float) -> None:
+        """Scroll via raw CDP Input.dispatchMouseEvent(type=mouseWheel), NOT
+        Playwright's page.mouse.wheel(). Same reason clicks use raw CDP: on a
+        connect_over_cdp handle the high-level page.mouse.wheel() SILENTLY
+        NO-OPS — it returns without error but dispatches nothing, so the page
+        never moves ("scroll up/down randomly broke", 2026-07-12; verified:
+        p.mouse.wheel left scrollY at 0, a raw mouseWheel at the same delta
+        moved it). Wheel events need a position → dispatch at the viewport
+        centre, which is where a real trackpad/wheel gesture over the page
+        lands. Timeout-bounded so a wedged page can't hold _io_lock."""
+        sess = await self._cdp_session(p)
+        try:
+            d = await self._viewport_dims(p)
+            cx = float(d.get("w") or 800) / 2.0
+            cy = float(d.get("h") or 600) / 2.0
+        except Exception:
+            cx, cy = 400.0, 300.0
+        await asyncio.wait_for(sess.send("Input.dispatchMouseEvent", {
+            "type": "mouseWheel", "x": cx, "y": cy,
+            "deltaX": float(dx or 0), "deltaY": float(dy or 0)}), timeout=4)
 
     async def _cdp_navigate(self, p, url: str, timeout: float = 4) -> None:
         """Navigate via raw CDP Page.navigate, bypassing Playwright's
@@ -922,13 +983,15 @@ class _Streamer:
                         t.cancel()
             elif kind == "scroll":
                 # numeric dy/dx → precise user wheel/touch scroll; else keyword amounts.
+                # Raw CDP mouseWheel (see _cdp_scroll) — p.mouse.wheel() no-ops
+                # on connect_over_cdp handles.
                 dx = action.get("dx"); dy = action.get("dy")
                 if isinstance(dy, (int, float)) or isinstance(dx, (int, float)):
-                    await p.mouse.wheel(float(dx or 0), float(dy or 0))
+                    await self._cdp_scroll(p, float(dx or 0), float(dy or 0))
                 else:
                     amt = {"up": -600, "down": 600, "top": -100000,
                            "bottom": 100000}.get(val, 600)
-                    await p.mouse.wheel(0, amt)
+                    await self._cdp_scroll(p, 0, amt)
             elif kind == "back":
                 # wait_until="commit" returns as soon as the navigation COMMITS (not
                 # full load), so we don't hold the io-lock for up to 15s while the page
@@ -1923,17 +1986,19 @@ def operator_sandbox_file(rel: str):
 
 
 def _desktop_real_preflight() -> str | None:
-    """Probe the real-desktop capture before a desktop-real run. Returns an
-    error string when the console can't actually be seen. A locked or
-    non-interactive Windows session reports the disconnected-console default
+    """Probe real-desktop capture and input before a desktop-real run.
+
+    Returns an error string when the console can't actually be controlled. A
+    locked or non-interactive Windows session reports the disconnected-console default
     geometry (exactly 1024×768) and captures a blank frame — on this panel
     (2816×1940) that geometry is unambiguous. The probe costs one capture
     (~1-2s), paid only on desktop-real dispatches."""
     try:
         wb = _load_cu("win_backend.py")
+        wb.ensure_input()
         w, h = wb.screen_size()
     except Exception as e:  # noqa: BLE001 — no powershell / capture broke
-        return f"desktop-real capture unavailable: {e}"
+        return f"desktop-real unavailable: {e}"
     if (w, h) == (1024, 768):
         return ("the Windows console looks locked or headless (phantom "
                 "1024×768 screen) — unlock the desktop, then dispatch again")
