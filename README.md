@@ -120,6 +120,8 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 
 ## Roadmap
 
+**Sessions + conversation sidebar** — multiple conversations instead of the single shared session: a collapsible sidebar listing chats (rename / delete / switch), and "New chat" landing on the welcome view — the wordmark + composer launchpad. The header's launchpad button (return-to-splash, mid-conversation included) is the seed of this surface.
+
 **v1.1 — perception depth + the canvas-game showcase**
 - Self-hosted OpenRSC demo (zero ToS risk) — the flagship RuneScape-class canvas run.
 - Sprite-capture workflow: lift template sprites from live frames into `vision/maps/`.
