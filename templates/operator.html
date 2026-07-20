@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
 {% block title %}operator — host-app{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1026">
 {# PWA (1.0.14): _base.html has no head block, so these ride in the body —
    browsers collect link/meta wherever they appear. Relative start_url/scope in
    the manifest resolve correctly under both /operator and /squad/operator. #}
@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="Operator">
 <link rel="apple-touch-icon" href="{{ url_for('operator.static', filename='icons/operator-180.png') }}">
 
-<div class="op" id="op" data-state="idle" data-busy="0">
+<div class="op op-booting" id="op" data-state="idle" data-busy="0">
 
   <!-- LEFT RAIL -->
   <aside class="op-rail">
@@ -22,7 +22,7 @@
       <span class="op-titlewrap" id="op-brand" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="switch surface">
         <span class="op-brand-text">
           <span class="op-title">Operator</span>
-          <span class="op-verline"><span class="op-ver">1.0.20</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+          <span class="op-verline"><span class="op-ver">1.0.26</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
         </span>
         <svg class="op-brand-caret" viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1.5l4 3.5 4-3.5"></path></svg>
       </span>
@@ -37,6 +37,7 @@
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
+      <button class="op-full-btn op-iconbtn" id="op-lp-open" title="task launchpad" aria-label="open task launchpad"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-clear" title="clear chat" aria-label="clear chat"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path><path d="M10 11v6M14 11v6"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-flat" title="high-contrast / flat theme" aria-label="toggle flat theme"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-full" title="fullscreen">⤢</button>
@@ -75,7 +76,7 @@
 
     <div class="op-logwrap" id="op-logwrap">
       <div class="op-log" id="op-log"></div>
-      <button class="op-jump" id="op-jump" type="button" aria-label="jump to present" hidden><svg class="op-jump-ff" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 5l8 7-8 7z"></path><path d="M12 5l8 7-8 7z"></path></svg>Jump to present</button>
+      <button class="op-jump" id="op-jump" type="button" aria-label="jump to present" hidden><svg class="op-jump-ff" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 5l8 7-8 7z"></path><path d="M12 5l8 7-8 7z"></path></svg>Jump</button>
     </div>
 
 
@@ -118,7 +119,7 @@
       <span class="op-dotstat" id="op-dotstat" title="page status"></span>
       <div class="op-url-wrap">
         <span class="op-lock" id="op-lock" aria-hidden="true" title=""></span>
-        <input class="op-url" id="op-url" autocomplete="off" spellcheck="false" placeholder="enter a URL and press Enter" value="">
+        <input type="url" class="op-url" id="op-url" autocomplete="off" spellcheck="false" placeholder="enter a URL and press Enter" value="">
         <button class="op-ubtn op-url-reload" id="op-reload" data-kind="reload" title="reload" aria-label="reload"><svg class="ic-reload" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 6a7 7 0 1 0 1.5 5"></path><path d="M16.5 3v3.2H13.3"></path></svg><svg class="ic-stop" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l8 8M14 6l-8 8"></path></svg></button>
         <div class="op-nav-hairline" id="op-nav-hairline" aria-hidden="true"></div>
       </div>
@@ -145,6 +146,7 @@
           <button class="op-ham-item" data-kind="tab_next"><span>Next tab</span><span class="k">⇥</span></button>
           <button class="op-ham-item" data-kind="home"><span>Home</span><span class="k">⌂</span></button>
           <div class="op-ham-sep"></div>
+          <button class="op-ham-item" data-kind="extensions"><span>Extensions</span><span class="k">✦</span></button>
           <button class="op-ham-item" id="op-ham-history"><span>History</span><span class="k">🕘</span></button>
           <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="k">⚙</span></button>
         </div>
@@ -198,20 +200,56 @@
     </div>
     <div class="op-stage" id="op-stage" tabindex="0" aria-label="live browser — click to interact, focus to type">
       <img class="op-view" id="op-view" alt="">
-      <div class="op-lp" id="op-lp" hidden>
+      <!-- ships COLLAPSED: initLaunchpad() runs post-paint (setTimeout 0), so an
+           expanded first paint flashed the category tabs + card grid for ~400ms
+           on every splash refresh before the JS collapse landed . -->
+      <div class="op-lp op-lp-collapsed" id="op-lp">
+        <button type="button" class="op-lp-theme" id="op-lp-theme" aria-label="use light mode" title="use light mode">
+          <svg class="op-lp-theme-day" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg>
+          <svg class="op-lp-theme-night" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg>
+        </button>
+        <button type="button" class="op-lp-close" id="op-lp-x" aria-label="close welcome screen" title="close">
+          <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg>
+        </button>
+        <div class="op-lp-hero">
+          <div class="op-lp-wordmark" id="op-lp-wordmark">Operator</div>
+          {# demo-only (CSS-gated on body.op-demo): the public demo's welcome notice.
+             This hero view doubles as the future "new chat" landing page once
+             sessions + a conversation sidebar exist — keep it self-contained. #}
+          <div class="op-lp-demonote" id="op-lp-demonote">Live demo — contact the administrator for access.</div>
+          <div class="op-lp-composer">
+            <textarea id="op-lp-input" class="op-lp-input" rows="1" autocomplete="off" spellcheck="false" placeholder="What can I help you do?"></textarea>
+            <button type="button" class="op-lp-send" id="op-lp-send" aria-label="send task" title="send task">
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.5 4.5v5a3 3 0 0 1-3 3H5"></path><path d="M8 9.5l-3 3 3 3"></path></svg>
+            </button>
+          </div>
+          <div class="op-lp-cats" role="list" aria-label="task categories">
+            <button type="button" class="op-lp-cat active" data-category="all" aria-pressed="true"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><circle cx="7.5" cy="7.5" r="4.5"></circle><path d="m11 11 4 4"></path></svg>Browse</button>
+            <button type="button" class="op-lp-cat" data-category="delivery" aria-pressed="false"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 6.5h12v8H3zM5 6.5V4h8v2.5M6 10.5h6"></path></svg>Food</button>
+            <button type="button" class="op-lp-cat" data-category="local" aria-pressed="false"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 16s5-4.4 5-8.5a5 5 0 0 0-10 0C4 11.6 9 16 9 16z"></path><circle cx="9" cy="7.5" r="1.6"></circle></svg>Local</button>
+            <button type="button" class="op-lp-cat" data-category="shopping" aria-pressed="false"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.5 6h11l-.7 9h-9.6zM6.5 6V4.8a2.5 2.5 0 0 1 5 0V6"></path></svg>Shop</button>
+            <button type="button" class="op-lp-cat" data-category="travel" aria-pressed="false"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6"></circle><path d="M3 9h12M9 3c2 2 2 10 0 12M9 3c-2 2-2 10 0 12"></path></svg>Travel</button>
+            <button type="button" class="op-lp-cat" data-category="research" aria-pressed="false"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.5 3.5h4A2.5 2.5 0 0 1 10 6v8.5a2.5 2.5 0 0 0-2.5-2.5h-4z"></path><path d="M14.5 3.5h-2A2.5 2.5 0 0 0 10 6v8.5a2.5 2.5 0 0 1 2.5-2.5h2z"></path></svg>Research</button>
+            <button type="button" class="op-lp-cat" data-category="media" aria-pressed="false"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6"></circle><path d="m7.5 6.5 4 2.5-4 2.5z"></path></svg>Media</button>
+            <button type="button" class="op-lp-cat" id="op-lp-tasks-toggle" aria-pressed="false" title="show saved tasks"><svg class="op-lp-cat-ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M5 3h8a1 1 0 0 1 1 1v11l-5-3-5 3V4a1 1 0 0 1 1-1z"></path></svg>Saved</button>
+          </div>
+        </div>
+        <div class="op-lp-results"><div class="op-lp-results-inner">
         <div class="op-lp-bar">
-          <span class="op-lp-title">Saved tasks</span>
-          <!-- 🔍 filters the visible set (saved tasks, or examples when none saved) -->
-          <button type="button" class="op-lp-search" id="op-lp-search" aria-label="search tasks" title="Search tasks" aria-pressed="false" hidden>
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.2"></circle><path d="M10.2 10.2L14 14"></path></svg>
-          </button>
-          <!-- ↻ shuffles the example set; only shown in the empty/examples state -->
-          <button type="button" class="op-lp-refresh" id="op-lp-refresh" aria-label="show different examples" title="Show different examples" hidden>
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5V5H11"></path></svg>
-          </button>
-          <button type="button" class="op-lp-close" id="op-lp-x" aria-label="close saved tasks" title="close">
-            <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg>
-          </button>
+          <span class="op-lp-title" id="op-lp-title">Things to do with Operator</span>
+          <div class="op-lp-actions">
+            <!-- 🔍 filters examples or saved tasks -->
+            <button type="button" class="op-lp-search" id="op-lp-search" aria-label="search tasks" title="Search tasks" aria-pressed="false" hidden>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.2"></circle><path d="M10.2 10.2L14 14"></path></svg>
+            </button>
+            <!-- ↻ shuffles the example set; only shown in the examples state -->
+            <button type="button" class="op-lp-refresh" id="op-lp-refresh" aria-label="show different examples" title="Show different examples" hidden>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5V5H11"></path></svg>
+            </button>
+            <button type="button" class="op-lp-add" id="op-lp-add" aria-label="save a task" title="Save a task">
+              <svg class="op-lp-add-ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"></path></svg>
+            </button>
+          </div>
         </div>
         <div class="op-lp-searchrow" id="op-lp-searchrow" hidden>
           <svg class="op-lp-searchrow-ic" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.2"></circle><path d="M10.2 10.2L14 14"></path></svg>
@@ -222,6 +260,7 @@
         </div>
         <div class="op-lp-grid" id="op-lp-grid"></div>
         <div class="op-lp-empty" id="op-lp-empty" hidden>No tasks match “<span id="op-lp-empty-q"></span>”</div>
+        </div></div>
       </div>
       <span class="op-kbhint">tap to focus/steer · type to send keys</span>
       <div class="op-agent-cursor" id="op-agent-cursor" aria-hidden="true">
@@ -249,7 +288,7 @@
       <input type="text" class="op-nt-input" id="op-nt-name" placeholder="e.g. Lunch order" autocomplete="off" spellcheck="false">
       <label class="op-nt-lbl" for="op-nt-prompt">What would you like Operator to do?</label>
       <textarea class="op-nt-input" id="op-nt-prompt" rows="4" placeholder="e.g. Order my usual chicken burrito bowl from Chipotle on DoorDash, deliver to home."></textarea>
-      <label class="op-nt-lbl" for="op-nt-sites">What tools or websites would you like Operator to use?</label>
+      <label class="op-nt-lbl" for="op-nt-sites">Websites and tools Operator can use</label>
       <div class="op-nt-pillwrap">
         <div class="op-nt-pills" id="op-nt-pills">
           <input type="text" class="op-nt-pill-in" id="op-nt-sites" placeholder="Type a site or tool and press Enter…" autocomplete="off" spellcheck="false">
@@ -262,7 +301,7 @@
            already runs. "Custom (cron)" keeps the raw escape hatch. -->
       <div class="op-nt-sched-row">
         <select class="op-nt-input" id="op-nt-rep">
-          <option value="" selected>Manual only</option>
+          <option value="" selected>None</option>
           <option value="hourly">Hourly</option>
           <option value="daily">Daily</option>
           <option value="weekdays">Weekdays</option>
@@ -322,5 +361,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1026"></script>
 {% endblock %}

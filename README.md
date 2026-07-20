@@ -64,10 +64,11 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.20** — highlights since v1.0.16: viewport-true CDP capture,
-> the real-desktop input broker (per-user Task Scheduler, no elevation), an
-> interactive-session automation Chrome that survives watchdog relaunches,
-> iOS keyboard-safe sheet geometry, and first-turn watchdog + feed-signal fixes.
+> **Status:** **v1.0.26** — highlights since v1.0.20: the full-viewport splash
+> homepage with a flash-free collapsed boot, restored-session wiring that can't
+> paint an inert cockpit, chat-style auto-resizing composers, viewport
+> self-repair, and a visible-browser contract — cockpit runs refuse the silent
+> headless fallback, so the agent always drives the browser the feed shows.
 
 ## What it does
 
@@ -137,6 +138,16 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.26** — **flash-free splash boot + the agent drives the browser you're watching**. The welcome splash now ships pre-collapsed in the markup itself, so a page refresh paints the calm wordmark-and-composer assembly directly instead of flashing the category tabs and card grid for the beat before the post-paint JS collapse landed. And a new cockpit contract kills the invisible-browsing failure mode: launch adapters set `OPERATOR_REQUIRE_CDP=1`, so when the feed's Chrome is unreachable the Playwright MCP fails loudly instead of silently falling back to a headless browser the live view never shows — the agent reports the browser down, which is the truth. The sandbox desktop also moves from XGA to a compact 960×768 (5:4) viewport that fits tall and high-zoom cockpit layouts better while keeping the coordinate scale the model's click grounding is calibrated for.
+
+**v1.0.25** — **restored-session wiring + composer auto-resize**. The launchpad lifecycle separates into wiring, rendering, and visibility layers: control wiring always runs, so a device restoring a cached conversation boots a live cockpit with a working HOME/reopen path instead of a painted, inert splash (the old nonempty-log guard returned before any listeners attached; init failures were also swallowed by blind catches — they surface on the console now). Both composers auto-resize like a chat, including a scale-aware pill on coarse-pointer WebKit that grows per painted line to a ~9-line cap before scrolling. Polish: the trash lands on the solid splash, category pills gain clearance from their scroll row's clip edge, fullscreen panel margins tighten, and the schedule picker's empty state reads "None".
+
+**v1.0.23** — **splash, viewport, and composer polish**. Separate top-right theme and close controls return, steering hints hide while the splash owns the screen, and light mode replaces gray blocks with white surfaces and softer card borders. The splash paints before session state restores, launchpad controls initialize independently from model discovery (a slow backend can't leave cards, pills, or close inert), click-away collapse uses a compact 24px halo around the card block, and both composers expand through useful multiline drafts before scrolling. Asset cache revisions are independent from the displayed release so long-lived tabs can't retain stale styling.
+
+**v1.0.22** — **viewport recovery + launchpad polish**. Browser targets retain a persistent desktop-metrics session, switched tabs reassert it, and capture self-repairs collapsed viewports instead of rendering a blank or mobile-width frame. The launchpad gets quieter crossfades, stable search/refresh/add ordering, clearer Browse/Food/Local/Shop/Travel/Research/Media categories, and a Saved source with a minimal empty state.
+
+**v1.0.21** — **true homepage state**. The fresh-session splash owns the full viewport with no chat rail, resize gutter, site header, browser chrome, or empty-cockpit escape hatch; the first submitted task reveals the complete interface in one transition.
 
 **v1.0.20** — **the real-desktop input boundary, fixed for good**. WSL-interoped PowerShell can *capture* the interactive session but Windows silently denies its window-station *input* writes (`SetCursorPos` returns false — clicks vanished without an error). Input now crosses a per-user `InteractiveToken` Task Scheduler broker (`computer-use/install-win-input-broker.ps1` — no elevation, no service), rejected actions fail loudly instead of silently, and desktop-real dispatch pre-flights both capture and broker health. The automation Chrome learns the same trick: launched via an interactive scheduled task, so a watchdog relaunch lands on the real desktop instead of a session-0 void where the window clamps to a 1024×768 virtual display and single-instancing poisons every later manual open. Plus: the demo-badge regex accepts bare version strings (a hardcoded `v` prefix silently ate the " demo" suffix), chat input and placeholder re-proportioned to the model picker, saved-task card titles get a smaller face and a longer run before the ellipsis.
 

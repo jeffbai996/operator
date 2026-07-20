@@ -1,14 +1,14 @@
 #!/bin/bash
 # Boot the isolated desktop: Xvfb :1 → dbus → a full XFCE4 session → chromium.
 set -e
-# XGA on purpose — the model's click grounding is calibrated around 1024x768;
+# Compact 5:4 geometry; keep in sync with sandbox_container.GEOMETRY;
 # keep in sync with sandbox_container.GEOMETRY
 # A stale X lock survives an unclean stop (same persistence class as the
 # chromium SingletonLock below) and makes Xvfb refuse to start ("Server is
 # already active for display 1") -> the whole desktop wedges on restart.
 # Clear it -- it's only meaningful within one boot.
 rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
-Xvfb :1 -screen 0 1024x768x24 -nolisten tcp &
+Xvfb :1 -screen 0 960x768x24 -nolisten tcp &
 # clients all read DISPLAY from env — never pass a --display flag (openbox 3.6
 # had none and died on one; that exact bug shipped once)
 export DISPLAY=:1

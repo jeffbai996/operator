@@ -30,6 +30,11 @@ import os as _os_cfg
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
 # unset for the owner live cockpit (-> no behavior change); set only by demo_server.py.
 DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
+# Match the remote browser to the visible stage by default. The desktop CSS
+# floor below prevents responsive mobile layouts while matching the aspect
+# removes the four-edge letterbox gutter. Set OPERATOR_VIEWPORT_FOLLOW=0 only
+# as an explicit recovery switch.
+_VIEW_FOLLOW = _os_cfg.environ.get("OPERATOR_VIEWPORT_FOLLOW", "1") != "0"
 # both the live _Streamer and the agent MCP attach here in demo mode (isolated
 # Chrome), never :9222 (the logged-in browser). The unguessable path gate is the
 # WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
@@ -50,6 +55,9 @@ IDLE_STOP_AFTER = 90.0
 TIER_LO_QUALITY = 35
 TIER_LO_MAX_W = 900
 TIER_LO_SANDBOX_FPS, TIER_LO_SANDBOX_Q = 6, 12
+MIN_VIEWPORT_W, MIN_VIEWPORT_H = 320, 240
+DESKTOP_LAYOUT_MIN_W = 1280
+DESKTOP_CSS_MIN_W = 1024
 
 bp = Blueprint("operator", __name__,
                 template_folder="templates", static_folder="static",
@@ -71,6 +79,10 @@ import base64 as _b64ph
 # renders blank under headless+no-GPU (see comment above), so google.com is the
 # option that actually paints. Still navigated via raw CDP Page.navigate.
 _NEWTAB_DATA_URL = "https://www.google.com"
+_DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+)
 
 
 # tiny dark placeholder frame (matches --bg) so the MJPEG stream always has
@@ -92,7 +104,22 @@ class _Streamer:
     vh: int = 0
     cur_url: str = ""             # URL cached by the async grab loop; read by sync status route
     last_click: tuple = (0.0, 0.0, 0.0)   # (norm_x, norm_y, monotonic_ts) — agent cursor
-    zoom: float = 1.0                      # CSS zoom factor for the page (chrome control)
+    # zoom is CSS document zoom — fine-tuning ON TOP of the layout width below.
+    # It does NOT change innerWidth (proven live 2026-07-16), so it can never
+    # make a desktop-width layout fit a phone; view_w is the lever that reflows.
+    # 0.8 = two 0.1 notches under neutral . The old 0.5 was a
+    # band-aid that shrank content INSIDE the giant pre-view_w canvas.
+    zoom: float = 0.8
+    # view_w — the CSS layout width Operator forces via CDP. Keep it at or above
+    # a desktop responsive breakpoint; narrower values make surviving tabs
+    # silently flip into a site's mobile layout after tab/viewport changes.
+    # height 0 = auto (keep the real window height); 0 disables the override.
+    view_w: int = DESKTOP_LAYOUT_MIN_W
+    # view_h — 0 = auto (native window height). Set alongside view_w by the
+    # stage_size steer (smart viewport follow): the viewer's stage aspect
+    # becomes the remote viewport aspect, so the frame fills the stage with no
+    # letterbox on any device.
+    view_h: int = 0
     _thread: threading.Thread | None = None
     _loop: asyncio.AbstractEventLoop | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -101,6 +128,7 @@ class _Streamer:
     _pw = None
     _browser = None
     _cdp = None
+    _metric_sessions: dict = field(default_factory=dict)
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
     _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch 
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
@@ -204,16 +232,27 @@ class _Streamer:
             await self._browser.new_context()
         pages = [p for p in ctx.pages if not p.is_closed()]
         if pages:
+            for page in pages:
+                await self._force_desktop_page(page)
             self._page = pages[0]
+            # The sweep left the session cache bound to the LAST page swept —
+            # drop it so nothing reuses a session for a page we didn't select.
+            self._cdp = None
+            self._cdp_for = None
         else:
             # fallback page: navigate it to the landing URL — a bare new_page()
             # sits on about:blank forever ("new tab doesn't load the home page")
             self._page = await ctx.new_page()
             self._cdp = None
             try:
+                await self._force_desktop_page(self._page)
                 await self._cdp_navigate(self._page, _NEWTAB_DATA_URL)
             except Exception:  # noqa: BLE001 — landing nav is best-effort
                 pass
+        try:
+            ctx.on("page", lambda page: asyncio.create_task(self._force_desktop_page(page)))
+        except Exception:
+            pass
         try:
             await ctx.add_init_script("""
                 (function(){
@@ -235,7 +274,17 @@ class _Streamer:
                     f"document.addEventListener('DOMContentLoaded',()=>{{document.documentElement.style.zoom='{self.zoom}';}});")
         except Exception:
             pass
-        # also install on the CURRENTLY-open page (init script only covers future loads).
+        # Init scripts only cover future documents, so apply the persisted zoom
+        # to the currently open target as well.
+        try:
+            if self.zoom and self.zoom != 1.0:
+                await asyncio.wait_for(self._page.evaluate(
+                    "zoom => { document.documentElement.style.zoom = String(zoom); }",
+                    self.zoom,
+                ), timeout=2.5)
+        except Exception:
+            pass
+        # Also install click tracking on the CURRENTLY-open page.
         # WRAP IN A TIMEOUT: evaluate() on a privileged page (chrome://new-tab-page) or a
         # busy/heavy page (e.g. Bloomberg mid-load) can BLOCK FOREVER with no built-in
         # timeout, wedging _attach before it ever sets status="live" — the streamer then
@@ -262,10 +311,37 @@ class _Streamer:
     def _update_viewport(self) -> None:
         try:
             vp = self._page.viewport_size
-            if vp:
-                self.vw, self.vh = vp["width"], vp["height"]
+            if vp and self._accept_viewport(vp.get("width"), vp.get("height")):
+                return
         except Exception:  # noqa: BLE001
             pass
+
+    def _accept_viewport(self, width, height) -> bool:
+        """Cache only usable browser viewports; transient single-digit widths
+        otherwise poison frame clipping and every later click mapping."""
+        try:
+            width, height = int(width), int(height)
+        except (TypeError, ValueError):
+            return False
+        if width < MIN_VIEWPORT_W or height < MIN_VIEWPORT_H:
+            return False
+        self.vw, self.vh = width, height
+        return True
+
+    def _matches_view_metrics(self, width, height) -> bool:
+        """True only when a usable viewport matches Operator's current target."""
+        try:
+            width, height = int(width), int(height)
+        except (TypeError, ValueError):
+            return False
+        if width < MIN_VIEWPORT_W or height < MIN_VIEWPORT_H:
+            return False
+        # Chrome's 125% host display scale turns a 1280 device-metrics width
+        # into 1024 CSS px. Responsive layout follows CSS pixels, so compare
+        # the observed viewport to the desktop CSS floor, not to view_w.
+        if width < DESKTOP_CSS_MIN_W:
+            return False
+        return True
 
     def _iolock(self):
         if self._io_lock is None:
@@ -290,7 +366,7 @@ class _Streamer:
             if time.monotonic() - self.last_view > IDLE_STOP_AFTER:
                 break
             try:
-                self._refresh_active_page()
+                await self._refresh_active_page()
                 await self._follow_active_tab()
                 async with self._iolock():
                     png = await self._grab(self._page)
@@ -332,22 +408,21 @@ class _Streamer:
                     try:
                         _vp = await asyncio.wait_for(self._page.evaluate(
                             "({w: window.innerWidth, h: window.innerHeight})"), timeout=1.0)
-                        if _vp and _vp.get("w"):
-                            self.vw, self.vh = int(_vp["w"]), int(_vp["h"])
+                        if _vp and self._accept_viewport(_vp.get("w"), _vp.get("h")):
+                            pass
                         else:
-                            self._update_viewport()
+                            await self._force_desktop_page(self._page)
                     except Exception:
                         # JS world slow/unavailable → CDP layout metrics, then sync helper.
                         try:
-                            sess = self._cdp or await self._page.context.new_cdp_session(self._page)
-                            self._cdp = sess
+                            sess = await self._cdp_session(self._page)
                             m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"), timeout=1.0)
                             vv = (m or {}).get("visualViewport") or {}
                             cw, ch = int(vv.get("clientWidth") or 0), int(vv.get("clientHeight") or 0)
-                            if cw and ch:
-                                self.vw, self.vh = cw, ch
+                            if self._accept_viewport(cw, ch):
+                                pass
                             else:
-                                self._update_viewport()
+                                await self._force_desktop_page(self._page)
                         except Exception:
                             self._update_viewport()
             except Exception as e:  # noqa: BLE001
@@ -395,10 +470,10 @@ class _Streamer:
         a short-timeout page.screenshot if CDP isn't available."""
         import base64 as _b64
         try:
-            sess = getattr(self, "_cdp", None)
-            if sess is None:
-                sess = await page.context.new_cdp_session(page)
-                self._cdp = sess
+            # Identity-checked session (not a bare self._cdp read): the attach
+            # sweep / any page swap can leave the cache bound to a DIFFERENT
+            # page, streaming one tab while input targets another (Codex P1).
+            sess = await self._cdp_session(page)
             lo = self.tier == "lo"
             args = {"format": "jpeg",
                     "quality": TIER_LO_QUALITY if lo else JPEG_QUALITY}
@@ -406,7 +481,7 @@ class _Streamer:
             # whose device scale ≠ 1 (Windows display scaling — here 1.25),
             # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
             # the FULL device viewport so coverage is complete (no right/bottom
-            # crop — the owner's "right edge cut off" report).
+            # crop — the owner "right edge cut off").
             #
             # OUTPUT AT DEVICE RESOLUTION (scale=1.0), not CSS width. Click
             # accuracy does NOT depend on frame size — the frontend sends
@@ -426,10 +501,30 @@ class _Streamer:
             try:
                 _m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"),
                                             timeout=1.0)
-                _dev = (_m or {}).get("layoutViewport") or {}
+                _css = ((_m or {}).get("cssLayoutViewport")
+                        or (_m or {}).get("layoutViewport") or {})
+                _dev = ((_m or {}).get("layoutViewport")
+                        or (_m or {}).get("cssLayoutViewport") or {})
+                _cw = float(_css.get("clientWidth") or 0)
+                _ch = float(_css.get("clientHeight") or 0)
+                if (not self._accept_viewport(_cw, _ch)
+                        or not self._matches_view_metrics(_cw, _ch)):
+                    # A switched target can inherit a collapsed/stale emulation
+                    # viewport. Repair it on a persistent metrics session, then
+                    # re-read before clipping this frame.
+                    await self._force_desktop_page(page)
+                    _m = await asyncio.wait_for(
+                        sess.send("Page.getLayoutMetrics"), timeout=1.0)
+                    _css = ((_m or {}).get("cssLayoutViewport")
+                            or (_m or {}).get("layoutViewport") or {})
+                    _dev = ((_m or {}).get("layoutViewport")
+                            or (_m or {}).get("cssLayoutViewport") or {})
+                    _cw = float(_css.get("clientWidth") or 0)
+                    _ch = float(_css.get("clientHeight") or 0)
+                    self._accept_viewport(_cw, _ch)
                 _dw = float(_dev.get("clientWidth") or 0)
                 _dh = float(_dev.get("clientHeight") or 0)
-                if _dw and _dh:
+                if self._accept_viewport(_cw, _ch) and _dw and _dh:
                     _scale = min(1.0, TIER_LO_MAX_W / _dw) if lo else 1.0
                     # clip uses document coordinates, so its origin must follow
                     # the live viewport. At y=0 a scrolled page captures the
@@ -481,7 +576,7 @@ class _Streamer:
             return
         self._eager_evt.clear()
 
-    def _refresh_active_page(self) -> None:
+    async def _refresh_active_page(self) -> None:
         try:
             ctx = self._browser.contexts[0]
             live = [p for p in ctx.pages if not p.is_closed()]
@@ -503,6 +598,7 @@ class _Streamer:
                 self._page = switch_to
                 self._cdp = None
                 self._update_viewport()
+                await self._force_desktop_page(self._page)
         except Exception:  # noqa: BLE001
             pass
 
@@ -551,6 +647,7 @@ class _Streamer:
                     self._page = pg
                     self._cdp = None
                     self._update_viewport()
+                    await self._force_desktop_page(self._page)
                 try:
                     await asyncio.wait_for(pg.bring_to_front(), timeout=0.5)
                 except Exception:  # noqa: BLE001 — foregrounding is best-effort
@@ -586,6 +683,7 @@ class _Streamer:
                     self._page = pg
                     self._cdp = None
                     self._update_viewport()
+                    await self._force_desktop_page(self._page)
                     return
         except Exception:  # noqa: BLE001
             pass
@@ -599,6 +697,7 @@ class _Streamer:
             if live:
                 self._page = live[-1]
                 self._cdp = None   # session was bound to the dead page — never dispatch input into it
+                await self._force_desktop_page(self._page)
                 return True
             return False
         except Exception:  # noqa: BLE001 — browser/context dropped
@@ -614,6 +713,7 @@ class _Streamer:
             except Exception:  # noqa: BLE001
                 pass
         self._page = self._browser = self._pw = None
+        self._metric_sessions.clear()
         # an error status (wedge, attach failure) must SURVIVE teardown — it
         # carries the user-facing message and keys the relaunch backoff
         if self.status != "error":
@@ -634,16 +734,17 @@ class _Streamer:
             return {"ok": False, "error": str(e), "cleared": 0, "failed": 0}
         for pg in pages:
             try:
-                sess = await ctx.new_cdp_session(pg)
+                sess = await self._metric_session(pg)
                 await asyncio.wait_for(
                     sess.send("Emulation.clearDeviceMetricsOverride"), timeout=1.5)
+                # Re-assert OUR phone-legible width — clearing alone drops the
+                # page back to the native ~1349px canvas (the miniscule bug).
+                # Only for the live page; other tabs just get de-emulated.
+                if pg is self._page:
+                    await self._apply_view_metrics(pg, sess)
                 await asyncio.wait_for(
                     sess.send("Emulation.setTouchEmulationEnabled",
                               {"enabled": False}), timeout=1.5)
-                try:
-                    await sess.detach()
-                except Exception:  # noqa: BLE001
-                    pass
                 cleared += 1
             except Exception:  # noqa: BLE001 — dead/privileged page, keep sweeping
                 failed += 1
@@ -688,6 +789,14 @@ class _Streamer:
             return {"ok": False, "error": str(e)}
 
     async def _switch_tab(self, idx: int) -> dict:
+        lock = self._iolock()
+        await lock.acquire()
+        try:
+            return await self._switch_tab_locked(idx)
+        finally:
+            lock.release()
+
+    async def _switch_tab_locked(self, idx: int) -> dict:
         try:
             ctx = self._browser.contexts[0]
             pages = [p for p in ctx.pages if not p.is_closed()]
@@ -696,6 +805,10 @@ class _Streamer:
                 self._cdp = None
                 await self._page.bring_to_front()
                 self._update_viewport()
+                await self._force_desktop_page(self._page)
+                fresh = await self._grab(self._page)
+                if fresh:
+                    self.frame, self.frame_ts = fresh, time.monotonic()
                 return {"ok": True}
             return {"ok": False, "error": "bad tab index"}
         except Exception as e:  # noqa: BLE001
@@ -709,6 +822,14 @@ class _Streamer:
             return {"ok": False, "error": str(e)}
 
     async def _close_tab(self, idx: int) -> dict:
+        lock = self._iolock()
+        await lock.acquire()
+        try:
+            return await self._close_tab_locked(idx)
+        finally:
+            lock.release()
+
+    async def _close_tab_locked(self, idx: int) -> dict:
         try:
             ctx = self._browser.contexts[0]
             pages = [p for p in ctx.pages if not p.is_closed()]
@@ -726,6 +847,7 @@ class _Streamer:
                     except Exception:  # noqa: BLE001
                         pass
                     self._page = closing; self._cdp = None; self._update_viewport()
+                    await self._force_desktop_page(self._page)
                     return {"ok": True, "reset": True}
                 await closing.close()
                 live = [p for p in ctx.pages if not p.is_closed()]
@@ -741,6 +863,11 @@ class _Streamer:
                         live = []
                 if live:
                     self._page = live[-1]; self._cdp = None; self._update_viewport()
+                    await self._page.bring_to_front()
+                    await self._force_desktop_page(self._page)
+                    fresh = await self._grab(self._page)
+                    if fresh:
+                        self.frame, self.frame_ts = fresh, time.monotonic()
                 return {"ok": True}
             return {"ok": False, "error": "bad tab index"}
         except Exception as e:  # noqa: BLE001
@@ -754,12 +881,21 @@ class _Streamer:
             return {"ok": False, "error": str(e)}
 
     async def _new_tab(self) -> dict:
+        lock = self._iolock()
+        await lock.acquire()
+        try:
+            return await self._new_tab_locked()
+        finally:
+            lock.release()
+
+    async def _new_tab_locked(self) -> dict:
         try:
             ctx = self._browser.contexts[0]
             pg = await ctx.new_page()
             self._cdp = None
             await self._cdp_navigate(pg, _NEWTAB_DATA_URL)
             self._page = pg; self._cdp = None; self._update_viewport()
+            await self._force_desktop_page(self._page)
             return {"ok": True}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
@@ -791,15 +927,101 @@ class _Streamer:
         session is bound to one target, so after a page swap a stale cache
         dispatched clicks/keys into the old (background/closed) tab while the
         capture showed the new one — taps rippled, steers returned ok, and the
-        visible page never reacted (2026-07-12, after a tab close). Most
+        visible page never reacted . Most
         _page-swap sites null the cache manually; this identity check is the
         backstop so no future swap site can reintroduce the class."""
         sess = getattr(self, "_cdp", None)
-        if sess is None or getattr(self, "_cdp_for", None) is not p:
-            sess = await p.context.new_cdp_session(p)
+        bound = getattr(self, "_cdp_for", None)
+        if sess is None or bound is not p:
+            # A send failure clears _cdp but leaves _cdp_for as the identity of
+            # the failed target. Evict that one stale persistent session before
+            # rebuilding; tab switches keep their already-healthy map entries.
+            if sess is None and bound is p:
+                self._metric_sessions.pop(p, None)
+            sess = await self._metric_session(p)
             self._cdp = sess
             self._cdp_for = p
         return sess
+
+    async def _metric_session(self, p):
+        """Persistent per-target CDP session for emulation state.
+
+        Device metrics are session-scoped: applying them on a temporary session
+        and detaching immediately reverts the page. Keep one session alive per
+        target and reuse that exact session for capture/input when the tab is
+        active; a separate screenshot session would still see collapsed pixels.
+        """
+        sess = self._metric_sessions.get(p)
+        if sess is None:
+            sess = await p.context.new_cdp_session(p)
+            self._metric_sessions[p] = sess
+        return sess
+
+    async def _force_desktop_page(self, p) -> None:
+        """Clear stale mobile emulation and advertise a desktop browser.
+
+        Operator is a persistent shared Chrome, so an earlier computer-use run
+        can leave a target with mobile metrics/touch enabled. Apply this per
+        target (including new tabs) so both responsive layout and HTTP UA stay
+        desktop without changing the real window geometry or screenshot scale.
+        """
+        try:
+            sess = await self._metric_session(p)
+            # Clear any STALE metrics an agent run / stray browser_resize left,
+            # then re-apply OUR deliberate phone-legible width (view_w). Clearing
+            # alone reverts to the shared Chrome window's native ~1349px canvas —
+            # the "everything miniscule" bug. Distinct from stray agent overrides:
+            # this is the operator's own, re-asserted on every attach/nav.
+            await asyncio.wait_for(
+                sess.send("Emulation.clearDeviceMetricsOverride"), timeout=3)
+            await self._apply_view_metrics(p, sess)
+            await asyncio.wait_for(
+                sess.send("Emulation.setTouchEmulationEnabled", {"enabled": False}), timeout=3)
+            await asyncio.wait_for(sess.send("Emulation.setUserAgentOverride", {
+                "userAgent": _DESKTOP_USER_AGENT,
+                "acceptLanguage": "en-US,en;q=0.9",
+                "platform": "Win32",
+                "userAgentMetadata": {
+                    "brands": [
+                        {"brand": "Chromium", "version": "150"},
+                        {"brand": "Google Chrome", "version": "150"},
+                        {"brand": "Not_A Brand", "version": "99"},
+                    ],
+                    "fullVersionList": [
+                        {"brand": "Chromium", "version": "150.0.0.0"},
+                        {"brand": "Google Chrome", "version": "150.0.0.0"},
+                        {"brand": "Not_A Brand", "version": "99.0.0.0"},
+                    ],
+                    "platform": "Windows",
+                    "platformVersion": "10.0.0",
+                    "architecture": "x86",
+                    "model": "",
+                    "mobile": False,
+                    "bitness": "64",
+                    "wow64": False,
+                },
+            }), timeout=3)
+        except Exception:
+            pass
+
+    async def _apply_view_metrics(self, p, sess=None) -> None:
+        """Force the layout viewport to view_w CSS px so a desktop page reflows
+        to a phone-legible width. mobile=False keeps DESKTOP layouts (we want the
+        full site, just narrower — not the mobile skin). height/deviceScaleFactor
+        0 = auto (keep the real window height and display density). No-op when
+        view_w is falsy (native width)."""
+        if not self.view_w:
+            return
+        try:
+            sess = sess or await self._metric_session(p)
+            await asyncio.wait_for(sess.send("Emulation.setDeviceMetricsOverride", {
+                "width": int(self.view_w), "height": int(self.view_h or 0),
+                "deviceScaleFactor": 0, "mobile": False,
+                "screenWidth": int(self.view_w),
+                "screenHeight": int(self.view_h or 1400),
+            }), timeout=3)
+        except Exception:
+            pass
 
     async def _cdp_click(self, p, x: float, y: float, button: str = "left",
                          clicks: int = 1, ramp: bool = True) -> None:
@@ -845,7 +1067,7 @@ class _Streamer:
         Playwright's page.mouse.wheel(). Same reason clicks use raw CDP: on a
         connect_over_cdp handle the high-level page.mouse.wheel() SILENTLY
         NO-OPS — it returns without error but dispatches nothing, so the page
-        never moves ("scroll up/down randomly broke", 2026-07-12; verified:
+        never moves ("scroll up/down randomly broke", the owner 2026-07-12; verified:
         p.mouse.wheel left scrollY at 0, a raw mouseWheel at the same delta
         moved it). Wheel events need a position → dispatch at the viewport
         centre, which is where a real trackpad/wheel gesture over the page
@@ -876,21 +1098,21 @@ class _Streamer:
         to page.evaluate, then to the cached streamer dims."""
         # 1) CDP — works even when the page disables eval()
         try:
-            sess = getattr(self, "_cdp", None)
-            if sess is None:
-                sess = await p.context.new_cdp_session(p)
-                self._cdp = sess
-            m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"), timeout=3)
-            vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
-            w = vp.get("clientWidth"); h = vp.get("clientHeight")
-            if w and h:
-                return {"w": w, "h": h}
+            sess = await self._cdp_session(p)
+            for attempt in range(2):
+                m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"), timeout=3)
+                vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
+                w = vp.get("clientWidth"); h = vp.get("clientHeight")
+                if self._accept_viewport(w, h):
+                    return {"w": float(w), "h": float(h)}
+                if attempt == 0:
+                    await self._force_desktop_page(p)
         except Exception:
             self._cdp = None
         # 2) page eval (works on normal sites)
         try:
             d = await p.evaluate("({w: window.innerWidth, h: window.innerHeight})")
-            if d.get("w") and d.get("h"):
+            if self._accept_viewport(d.get("w"), d.get("h")):
                 return d
         except Exception:
             pass
@@ -1045,12 +1267,58 @@ class _Streamer:
                     await p.evaluate(f"document.documentElement.style.zoom = '{self.zoom}'")
                 except Exception:
                     pass
+            elif kind == "stage_size":
+                # Smart viewport follow: the viewer's stage size (CSS px, sent as
+                # "WxH" in value) becomes the remote layout viewport, clamped —
+                # the captured frame then matches the stage aspect exactly (no
+                # letterbox on any device). Applied immediately when idle; during
+                # a live run only STORED (mid-run frame size stays stable for the
+                # agent) — the run-end emulation sweep re-asserts the latest via
+                # _apply_view_metrics. Gated: demo always, prod via env.
+                if not _VIEW_FOLLOW:
+                    return {"ok": False, "ignored": "viewport follow disabled"}
+                try:
+                    w_s, h_s = str(val).lower().split("x", 1)
+                    w, h = int(float(w_s)), int(float(h_s))
+                except Exception:
+                    return {"ok": False, "error": "stage_size wants value=WxH"}
+                # Preserve a desktop-class responsive layout even when the
+                # viewer is narrow. Scale height with the width floor so the
+                # captured frame keeps the stage aspect on tablets.
+                if w < DESKTOP_LAYOUT_MIN_W:
+                    h = round(h * DESKTOP_LAYOUT_MIN_W / max(1, w))
+                    w = DESKTOP_LAYOUT_MIN_W
+                w = min(1600, w); h = max(480, min(1300, h))
+                if w * h > 1_900_000:
+                    h = 1_900_000 // w
+                w -= w % 2; h -= h % 2
+                if (w, h) == (self.view_w, self.view_h):
+                    return {"ok": True, "view": [w, h], "applied": False}
+                self.view_w, self.view_h = w, h
+                busy = False
+                try:
+                    busy = operator_agent.runner.is_running()
+                except Exception:
+                    pass
+                if not busy:
+                    await self._apply_view_metrics(p)
+                    # Prime the buffer under the same I/O lock before the action
+                    # returns. The pump therefore swaps old-layout pixels
+                    # directly for the final viewport instead of catching an
+                    # intermediate responsive/mobile frame.
+                    fresh = await self._grab(p)
+                    if fresh:
+                        self.frame = fresh
+                        self.frame_ts = time.monotonic()
+                return {"ok": True, "view": [w, h], "applied": not busy}
             elif kind == "reset_view":
                 # strip emulation overrides an agent run (or a stray
                 # browser_resize) left on the shared browser — the "stuck
                 # phone-zoom + dead scrolling" recovery, one tap from the menu
                 res = await self._clear_emulation()
                 return res
+            elif kind == "extensions":
+                await self._cdp_navigate(p, "chrome://extensions/")
             elif kind == "hard_reload":
                 await p.reload(timeout=20000)
                 await p.keyboard.press("Control+Shift+r")
@@ -1063,7 +1331,9 @@ class _Streamer:
                     nxt = live[(live.index(self._page) + 1) % len(live)]
                     await nxt.bring_to_front()
                     self._page = nxt
+                    self._cdp = None
                     self._update_viewport()
+                    await self._force_desktop_page(self._page)
             else:
                 return {"ok": False, "error": f"unknown action '{kind}'"}
             _u = self._safe_url(p); self.cur_url = _u or self.cur_url
@@ -1364,7 +1634,7 @@ def operator_page():
     from flask import make_response
     # demo: serve the standalone, de-PII'd template (no the app chrome/nav, no owner
     # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
-    _tmpl = "operator_demo.html" if DEMO else "operator.html"
+    _tmpl = "operator.html"   # public build: no demo template fork
     resp = make_response(render_template(_tmpl))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -1734,6 +2004,8 @@ def _desktop_steer(action: dict) -> dict:
 @bp.route("/operator/steer", methods=["POST"])
 def operator_steer():
     data = request.get_json(silent=True) or request.form
+    if DEMO and data.get("kind") == "extensions":
+        return jsonify(ok=False, error="extensions are unavailable in demo mode"), 403
     action = {"kind": data.get("kind"), "value": data.get("value", ""),
               "x": data.get("x", 0), "y": data.get("y", 0),
               # dx/dy carry the wheel/touch scroll delta (kind=="scroll"). Must default

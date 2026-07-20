@@ -36,5 +36,13 @@ _gov() {
 if [ -n "$EP" ]; then
   exec npx -y @playwright/mcp@latest --caps vision,pdf --output-dir "$OUT" --cdp-endpoint "$EP" | _gov
 fi
+# Cockpit runs (OPERATOR_REQUIRE_CDP=1, set by the launch adapters) must NEVER
+# take the headless fallback: the live feed streams the CDP Chrome, so an agent
+# in a fallback browser "works" invisibly while the visible browser sits dead.
+# Fail the MCP loudly instead — the agent then reports the browser down.
+if [ "${OPERATOR_REQUIRE_CDP:-}" = "1" ]; then
+  echo "playwright-mcp: FATAL — no CDP endpoint on :${PORT} and OPERATOR_REQUIRE_CDP=1 forbids the headless fallback (run chrome-attach.sh)" >&2
+  exit 1
+fi
 # no logged-in Chrome up → let the MCP launch its own (fresh) browser
 exec npx -y @playwright/mcp@latest --caps vision,pdf --output-dir "$OUT" --viewport-size "$VIEWPORT" --headless | _gov

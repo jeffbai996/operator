@@ -24,51 +24,103 @@ import operator_view as OV
 # ── F1: _grab capture params (hermetic, fake CDP session) ────────────────────
 
 class _FakeSess:
-    """Records CDP sends; answers captureScreenshot with a tiny valid payload."""
-    def __init__(self):
+    """Records CDP sends; answers captureScreenshot with a tiny valid payload
+    and getLayoutMetrics with the given metrics (raises when None — the
+    'metrics unavailable' path)."""
+    def __init__(self, metrics=None):
         self.calls = []
+        self._metrics = metrics
 
     async def send(self, method, params=None):
         self.calls.append((method, params or {}))
         if method == "Page.captureScreenshot":
             return {"data": base64.b64encode(b"\xff\xd8fakejpeg").decode()}
+        if method == "Page.getLayoutMetrics":
+            if self._metrics is None:
+                raise RuntimeError("no metrics")
+            return self._metrics
         return {"result": {"value": "null"}}
 
 
-def _grab_with(tier, vw=1400, vh=900):
+def _mk_metrics(cw, ch, zoom=1.1, page_x=0, page_y=0):
+    """Device viewport = css × zoom — the Windows display-scale shape that
+    produced the cropped/offset frames (2026-07-12)."""
+    return {"layoutViewport": {"pageX": page_x * zoom, "pageY": page_y * zoom,
+                               "clientWidth": cw * zoom, "clientHeight": ch * zoom},
+            "cssLayoutViewport": {"pageX": page_x, "pageY": page_y,
+                                  "clientWidth": cw, "clientHeight": ch}}
+
+
+def _grab_with(tier, vw=1400, vh=900, metrics="auto"):
     st = OV._Streamer()
     st.tier = tier
     st.vw, st.vh = vw, vh
-    st._cdp = _FakeSess()
-    out = asyncio.run(st._grab(object()))
-    shot = next(p for m, p in st._cdp.calls if m == "Page.captureScreenshot")
+    if metrics == "auto":
+        metrics = _mk_metrics(vw, vh)
+    # _grab sessions are identity-checked against the page (Codex P1: a cache
+    # bound to another tab streamed the wrong page) — seed _cdp_for to match.
+    pg = object()
+    sess = _FakeSess(metrics)
+    st._cdp = sess
+    st._cdp_for = pg
+    out = asyncio.run(st._grab(pg))
+    shot = next(p for m, p in sess.calls if m == "Page.captureScreenshot")
     return out, shot
 
 
-def test_grab_hi_params_unchanged():
+def test_grab_hi_clips_full_device_viewport_at_native_res():
+    """2026-07-12 rev 2: clip covers the FULL device viewport (no right/bottom
+    crop — the owner "right edge cut off") and outputs at DEVICE resolution
+    (scale=1.0). Click accuracy is independent of frame size — the frontend
+    sends normalized (0..1) coords that _viewport_css maps to CSS px — so we
+    keep native sharpness instead of downscaling to CSS width. Downscaling only
+    the CDP path (while the fallback captured device-res) flipped served frame
+    sizes 690<->863 mid-nav → the phone rescaled each swap ("spasming small/big
+    at constant frequency") and the small frames upscaled soft ("pixelated")."""
     out, shot = _grab_with("hi")
     assert out == b"\xff\xd8fakejpeg"
     assert shot["quality"] == OV.JPEG_QUALITY
-    assert "clip" not in shot
+    clip = shot["clip"]
+    assert clip["width"] == pytest.approx(1400 * 1.1)   # full device viewport
+    assert clip["height"] == pytest.approx(900 * 1.1)
+    assert clip["scale"] == pytest.approx(1.0)          # native device res
+
+
+def test_grab_clip_follows_scrolled_device_viewport():
+    """The clip is in document coordinates. Anchoring it at (0, 0) while the
+    page is scrolled captures the area above the viewport, which produced a
+    giant blank band over Yahoo Finance on the scaled Windows Chrome."""
+    metrics = _mk_metrics(1098, 980, zoom=1.25, page_x=8, page_y=475.2)
+    _, shot = _grab_with("hi", vw=1098, vh=980, metrics=metrics)
+    clip = shot["clip"]
+    assert clip["x"] == pytest.approx(10)
+    assert clip["y"] == pytest.approx(594)
 
 
 def test_grab_lo_downscales_and_compresses_harder():
     _, shot = _grab_with("lo", vw=1400, vh=900)
     assert shot["quality"] == OV.TIER_LO_QUALITY < OV.JPEG_QUALITY
     clip = shot["clip"]
-    assert clip["width"] == 1400.0 and clip["height"] == 900.0
-    assert clip["scale"] == pytest.approx(OV.TIER_LO_MAX_W / 1400.0)
+    assert clip["width"] == pytest.approx(1400 * 1.1)   # still full-coverage clip
+    # lo caps the output width at TIER_LO_MAX_W of the DEVICE width (fixed cap →
+    # stable frame size, no rescale pulse).
+    assert clip["scale"] == pytest.approx(OV.TIER_LO_MAX_W / (1400 * 1.1))
 
 
-def test_grab_lo_skips_clip_when_viewport_unknown():
-    _, shot = _grab_with("lo", vw=0, vh=0)
+def test_grab_skips_clip_when_metrics_unavailable():
+    _, shot = _grab_with("lo", vw=0, vh=0, metrics=None)
     assert shot["quality"] == OV.TIER_LO_QUALITY
-    assert "clip" not in shot     # nothing sane to scale against — quality only
+    assert "clip" not in shot     # no metrics — unclipped full frame beats a blind crop
 
 
-def test_grab_lo_skips_clip_on_already_narrow_viewport():
+def test_grab_lo_narrow_device_viewport_not_upscaled():
+    """When the device viewport is already under the lo cap, scale is clamped to
+    1.0 — a lo frame is never UPSCALED past native (that would waste bytes and
+    reintroduce the soft-upscale look)."""
+    # device width = 800 * 1.1 = 880 < TIER_LO_MAX_W (900) → clamp to 1.0
     _, shot = _grab_with("lo", vw=800, vh=600)
-    assert "clip" not in shot     # never upscale a small viewport
+    clip = shot["clip"]
+    assert clip["scale"] == pytest.approx(1.0)
 
 
 # ── F1: the load-bearing byte-ratio proof (real headless Chromium) ───────────
@@ -108,6 +160,7 @@ def test_lo_tier_frame_is_materially_smaller_than_hi():
                 viewport={"width": 1400, "height": 900}, device_scale_factor=2)
             await page.set_content(_BUSY_HTML)
             st = OV._Streamer()
+            st.view_w, st.view_h = 1400, 900
             st.vw, st.vh = 1400, 900
             st.tier = "hi"
             hi = await st._grab(page)
@@ -283,6 +336,55 @@ def test_do_action_without_page_does_not_poke():
     res = asyncio.run(st._do_action({"kind": "click"}))
     assert not res["ok"]
     assert st._eager_evt is None or not st._eager_evt.is_set()
+
+
+class _WheelSpyPage:
+    """Fake page recording whether Playwright's high-level mouse.wheel is called
+    — it must NOT be: on a connect_over_cdp handle it silently no-ops. Scroll
+    must go through _cdp_scroll (raw CDP mouseWheel) instead."""
+    class _Mouse:
+        def __init__(self): self.wheel_calls = []
+        async def wheel(self, dx, dy): self.wheel_calls.append((dx, dy))
+    def __init__(self): self.mouse = self._Mouse()
+    @property
+    def url(self): return "https://example.test/"
+
+
+def _scroll_dispatch(action):
+    """Run _do_action(scroll) with _cdp_scroll stubbed to record its args and
+    p.mouse.wheel spied. Returns (cdp_scroll_calls, mouse_wheel_calls)."""
+    st = OV._Streamer()
+    pg = _WheelSpyPage()
+    st._page = pg
+    cdp_calls = []
+
+    async def fake_cdp_scroll(p, dx, dy):
+        cdp_calls.append((dx, dy))
+    st._cdp_scroll = fake_cdp_scroll
+
+    async def run():
+        return await st._do_action(action)
+    asyncio.run(run())
+    return cdp_calls, pg.mouse.wheel_calls
+
+
+def test_scroll_numeric_uses_raw_cdp_not_playwright_wheel():
+    """Regression: 'scroll up/down randomly broke' — p.mouse.wheel() no-ops on
+    the CDP handle. Numeric dy must dispatch via _cdp_scroll, never mouse.wheel."""
+    cdp, wheel = _scroll_dispatch({"kind": "scroll", "dx": 0, "dy": 500})
+    assert cdp == [(0.0, 500.0)]
+    assert wheel == [], "scroll must NOT use Playwright p.mouse.wheel (it no-ops)"
+
+
+def test_scroll_keyword_uses_raw_cdp():
+    """Keyword scrolls (up/down/top/bottom) also route through _cdp_scroll."""
+    cdp, wheel = _scroll_dispatch({"kind": "scroll", "value": "down",
+                                   "dx": None, "dy": None})
+    assert cdp == [(0, 600)]          # 'down' → +600
+    assert wheel == []
+    cdp, _ = _scroll_dispatch({"kind": "scroll", "value": "bottom",
+                               "dx": None, "dy": None})
+    assert cdp == [(0, 100000)]       # 'bottom' → large positive delta
 
 
 def test_desktop_pace_sleeps_full_interval_when_idle():

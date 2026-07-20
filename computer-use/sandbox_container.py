@@ -36,11 +36,10 @@ import time
 CONTAINER = os.environ.get("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox")
 IMAGE = os.environ.get("OPERATOR_SANDBOX_IMAGE", "operator-sandbox:latest")
 DISPLAY = ":1"                       # the container's internal Xvfb display
-# XGA, deliberately: Claude's coordinate grounding is calibrated around
-# 1024x768 (Anthropic's computer-use reference container runs exactly this) —
-# at 1280x800 clicks on dense targets (calendar grids) landed visibly off.
-GEOMETRY = "1024x768x24"
-SCREEN_W, SCREEN_H = 1024, 768
+# Compact 5:4 viewport: close to the old XGA coordinate scale, but a little
+# squarer so the whole desktop fits tall/high-zoom Operator layouts better.
+GEOMETRY = "960x768x24"
+SCREEN_W, SCREEN_H = 960, 768
 
 # Resource + safety caps for the container. No host bind-mounts (that would
 # breach isolation) — the home dir persists in a NAMED VOLUME instead, so an

@@ -59,12 +59,18 @@
   /* operator is a computer UI — lock the PAGE from scrolling (no rubber-band,
      no scroll-past-bottom). Only inner regions (.op-log, .op-stage) scroll. */
   /* page scroll-lock applies on desktop/tablet only — phones scroll normally so the
-     chat isn't trapped at a tiny height (option 3). The browser stage never scrolls
-     regardless (its own touch-action:none). */
+     chat isn't trapped at a tiny height (option 3). The browser stage reserves one-
+     finger gestures for steering while leaving native pinch zoom available. */
   @media (min-width: 821px) {
     html.op-locked, body.op-locked { overflow: hidden !important; height: 100%;
       overscroll-behavior: none; }
   }
+  /* Operator always owns a true viewport-origin coordinate system. This also
+     protects the standalone/demo shell from the browser's default 8px body
+     margin and prevents zoom-induced down/right drift if host layout rules are
+     late, missing, or temporarily recomputed. */
+  html.op-locked, body.op-locked {
+    margin: 0 !important; padding: 0 !important; width: 100%; max-width: none; }
   /* the page becomes a viewport-tall column: header (natural height) + .wrap fills
      the rest; .op fills .wrap. So .op's bottom always lands ON the viewport edge,
      never past it — no clipped bottom border, on any header height / device. */
@@ -77,30 +83,47 @@
        to the compact Operator UI, but that made navigating between Operator and other
        pages jarring. We now inherit the shared header.site size verbatim — only the
        margin below it is trimmed since the op grid sits right under it. */
-    body.op-locked header.site { margin-bottom: 0.6rem; }
+    body.op-locked header.site { width: min(calc(100% - 3rem), 1100px);
+      margin-left: auto; margin-right: auto; margin-bottom: 0.6rem; }
     body.op-locked header.site .nav-caret { font-size: 0.66em; }
     body.op-locked .wrap { flex: 1 1 auto; min-height: 0; min-width: 0;
       width: 100%; max-width: 100%; overflow: hidden;
-      padding-top: 12px; padding-bottom: 9px !important; display: flex; flex-direction: column; }
+      padding-top: 6px; padding-bottom: 0 !important; display: flex; flex-direction: column; }
     body.op-locked main, body.op-locked .container { overflow: hidden;
       flex: 1 1 auto; min-height: 0; min-width: 0; width: 100%; max-width: 100%;
       margin: 0 !important; padding-bottom: 0 !important;   /* no extra bottom gap below the op grid */
       display: flex; flex-direction: column; }
+    /* windowed wears the SAME slim 6px frame as fullscreen . The op's own padding is the gutter; wrap side/bottom padding
+       stays 0. wrap padding-top 12→6 so header gap stays ~12 with the frame. */
     body.op-locked .op { flex: 1 1 auto; min-height: 0; min-width: 0;
-      width: 100%; max-width: 100%; height: auto !important; margin: 0 !important; }
+      width: 100%; max-width: 100%; height: auto !important; margin: 0 !important;
+      gap: 8px; padding: 8px; box-sizing: border-box; background: var(--bg); }
   }
 
   /* full-window: hide the site header + let the operator page own the viewport */
   body.op-full header.site { display: none !important; }
   body.op-full main, body.op-full .container, body.op-full .wrap {
     max-width: none !important; margin: 0 !important; padding: 0 !important; }
-  body.op-full { overflow: hidden; background: #0c0e13; }   /* page bg behind the operator (covers any edge gap) */
-  body.op-full:has(.op-flat) { background: #000; }          /* flat fullscreen → pitch black edge-to-edge */
-  body.op-full .op { position: fixed; inset: 0; height: 100vh; height: 100dvh; width: 100vw;
-    box-sizing: border-box; border-radius: 0; gap: 10px; padding: 10px; background: var(--bg); z-index: 50;
-    box-sizing: border-box; overflow: hidden; }
-  body.op-full .op.op-flat { background: #000; }   /* the operator surface itself, flat fullscreen */
+  body.op-full { overflow: hidden; background: #0c0e13; }
+  body.op-full:has(.op-flat) { background: #000; }
+  body.op-full .op { position: fixed; inset: 0; width: auto; height: auto;
+    min-width: 0; min-height: 0; margin: 0; box-sizing: border-box;
+    border-radius: 0; gap: 8px; padding: 8px; background: var(--bg); z-index: 50;   /* slim frame, nudged 6→8  */
+    overflow: hidden; }
+  body.op-full .op.op-flat { background: #000; }
   body.op-full .op-rail, body.op-full .op-browser { border-radius: 10px; }
+
+  /* Fresh homepage is intentionally chrome-free, including host-app's site
+     header. It returns with the cockpit after the first task is submitted. */
+  body.op-locked:has(.op[data-mode="auto"][data-busy="0"] .op-lp:not([hidden])) header.site {
+    display: none !important; }
+  body.op-locked:has(.op[data-mode="auto"][data-busy="0"] .op-lp:not([hidden])) .wrap {
+    padding-top: 0 !important; padding-bottom: 0 !important; }
+  /* the splash is its own full-bleed surface — the cockpit's black frame
+     (the 8px .op gutter) must not ring it  */
+  body.op-locked:has(.op[data-mode="auto"][data-busy="0"] .op-lp:not([hidden])) .op,
+  body.op-full:has(.op[data-mode="auto"][data-busy="0"] .op-lp:not([hidden])) .op {
+    padding: 0 !important; }
 
   /* ── LEFT RAIL ─────────────────────────────────────────────── */
   .op-rail { grid-column: 1; grid-row: 1; position: relative; display: flex; flex-direction: column; gap: 0.28rem; min-width: 248px;
@@ -117,24 +140,46 @@
   @container rail (max-width: 340px) {
     .op-surface-chip { font-size: 0.38rem; padding: 1px 3px; letter-spacing: .02em; }
   }
-  @container rail (max-width: 304px) {
-    .op-head { gap: 0.16rem; }
-    .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }   /* tighten MAN/AUTO labels */
-    .op-fontpill button { width: 17px; }
-    /* Space is getting tight — gracefully fade the caret out (collapse its width
-       too) BEFORE the MAN/AUTO pill would overlap it. The wordmark stays, and
-       its hover-shade becomes the "click me" affordance instead of the caret. */
-    .op-head .op-brand-caret { opacity: 0 !important; width: 0; margin: 0;
-      transition: opacity .18s ease, width .18s ease; }
-    /* the chip is a hint, not a control — below this width it would ride
-       under MAN/AUTO, so it bows out (the surface popover still shows where
-       you are) */
-    .op-surface-chip { opacity: 0; width: 0; padding: 0; border: 0; margin: 0; }
+  /* Shed-then-minimize, PER LAYOUT: the wordmark sheds its caret when the full
+     titlewrap (80px natural) would clip, and minimizes entirely (scale, not
+     clip — no letter chopped mid-word) at the width where even the caret-less
+     wordmark (66px) can't render whole. Thresholds are in rail CONTENT-box px
+     (@container measures content, ~viewport−24 on mobile) and are CALIBRATED
+     PER MEDIA LAYOUT — mobile header controls are 28px/larger, desktop's are
+     compact, so one shared threshold either chops the wordmark (mobile) or
+     hides it beside acres of empty bar . Measured
+     non-wordmark chrome: mobile ≈ 302px, desktop ≈ 223px. Minimizing costs
+     the surface-menu button below the threshold — accepted tradeoff, same as
+     the original 273 rule. */
+  @media (max-width: 820px) {
+    @container rail (max-width: 408px) {
+      .op-head { gap: 0.16rem; }
+      .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }   /* tighten MAN/AUTO labels */
+      .op-fontpill button { width: 17px; }
+      .op-head .op-brand-caret { opacity: 0 !important; width: 0; margin: 0;
+        transition: opacity .18s ease, width .18s ease; }
+      /* the chip is a hint, not a control — it bows out with the caret (the
+         surface popover still shows where you are) */
+      .op-surface-chip { opacity: 0; width: 0; padding: 0; border: 0; margin: 0; }
+    }
+    @container rail (max-width: 368px) {
+      .op-head .op-titlewrap { transform: scale(0); max-width: 0; opacity: 0; margin-right: 0; margin-left: 0; }
+      .op-head .op-mode { margin-left: 8px; }   /* keep a gap from the status dot once the wordmark is gone */
+    }
   }
-  @container rail (max-width: 273px) {
-    /* shrink the Operator+version unit to nothing (scale, not clip — so no letter gets chopped mid-word) */
-    .op-head .op-titlewrap { transform: scale(0); max-width: 0; opacity: 0; margin-right: 0; margin-left: 0; }
-    .op-head .op-mode { margin-left: 8px; }   /* keep a gap from the status dot once the wordmark is gone */
+  @media (min-width: 821px) {
+    @container rail (max-width: 306px) {
+      .op-head { gap: 0.16rem; }
+      .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }
+      .op-fontpill button { width: 17px; }
+      .op-head .op-brand-caret { opacity: 0 !important; width: 0; margin: 0;
+        transition: opacity .18s ease, width .18s ease; }
+      .op-surface-chip { opacity: 0; width: 0; padding: 0; border: 0; margin: 0; }
+    }
+    @container rail (max-width: 290px) {
+      .op-head .op-titlewrap { transform: scale(0); max-width: 0; opacity: 0; margin-right: 0; margin-left: 0; }
+      .op-head .op-mode { margin-left: 8px; }
+    }
   }
   /* trash + contrast + fullscreen: inline group, pushed right. Sized small so all five
      controls fit one row without crushing — never collapse/wrap. */
@@ -162,7 +207,7 @@
     flex: 0 0 auto; white-space: nowrap; }   /* fixed wordmark — never let the flex row squeeze it to 0 */
   .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
-  .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans',sans-serif; color: var(--fg);
+  .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans', sans-serif; color: var(--fg);
     letter-spacing: -.01em; margin-right: 0.15rem; white-space: nowrap; }
   .op-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex:0 0 auto;
     transition: background .3s, box-shadow .3s; }
@@ -414,13 +459,13 @@
   /* "Jump to bottom" live pill — rises from above the input when scrolled up; red dot = feed is live. */
   /* "Jump to present" pill — filled red, fast-forward glyph, rises from above the input. */
   .op-jump { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%) translateY(8px);
-    height: 19px; padding: 0 0.5rem 0 0.4rem; border-radius: 999px; cursor: pointer;
+    height: 24px; padding: 0 0.7rem 0 0.55rem; border-radius: 999px; cursor: pointer;
     background: var(--bad); color: #fff; border: 1px solid var(--bad);
-    display: inline-flex; align-items: center; gap: 0.24rem; white-space: nowrap;
-    font: 600 0.6rem/1 'Plus Jakarta Sans', sans-serif;
+    display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap;
+    font: 700 0.72rem/1 'Plus Jakarta Sans', sans-serif;
     box-shadow: none; z-index: 6;
     opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
-  .op-jump-ff { flex: 0 0 auto; width: 10px !important; height: 10px !important; }   /* ▶▶ filled fast-forward */
+  .op-jump-ff { flex: 0 0 auto; width: 12px !important; height: 12px !important; }   /* ▶▶ filled fast-forward */
   .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
   .op-jump:hover { background: #e5484d; border-color: #e5484d; }   /* stay red on hover, no gray, no glow */
   /* conversation log — flex-grows, scrolls */
@@ -510,7 +555,7 @@
     box-shadow: 0 20px 60px rgba(0,0,0,.6); }
   @keyframes op-lb-in { from { opacity: 0 } to { opacity: 1 } }
   /* wrap, never sideways-scroll — the chat column is too narrow to pan  */
-  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.45rem 0 0.35rem; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; position: relative; }   /* breathing room — 0.1rem stuck the block onto the text above (2026-07-12) */
+  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.45rem 0 0.35rem; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; position: relative; }   /* breathing room — 0.1rem stuck the block onto the text above  */
   .op-msg.bot .bubble pre code { background: none; border: none; padding: 0; }   /* no double box */
   /* code-block copy button: top-right, hover-reveal, theme-safe */
   .op-copy { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
@@ -585,7 +630,7 @@
   .op-finish-input { width: 100%; box-sizing: border-box; resize: none;
     background: var(--bg); color: var(--fg); border: 1px solid var(--border-2); border-radius: 10px;
     padding: 0.4rem 0.55rem; font: 500 calc(0.77rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif;
-    outline: none; }   /* matches the Message Operator input — kept equal through the 2-notch drop */
+    outline: none; }   /* matches the Message Operator input — kept equal through the 2-notch drop  */
   /* placeholder: smaller, italic, more grayed out (it was too bright) */
   .op-finish-input::placeholder { font-size: calc(0.72rem * var(--chat-scale)); font-style: italic;
     color: var(--muted); opacity: 0.6; }
@@ -624,7 +669,7 @@
   .op-prefix { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
     color: var(--accent); font: 700 0.85rem/1 'JetBrains Mono', monospace; pointer-events: none; }
   .op-input { flex: 1 1 auto; width: 100%; background: var(--bg); border: 1px solid var(--border-2);
-    border-radius: 10px; color: var(--fg); font: 500 calc(0.77rem * var(--chat-scale))/1 'Plus Jakarta Sans',sans-serif;   /* down 2 notches 0.85->0.77, input text + placeholder together — was disproportionate to the model picker */
+    border-radius: 10px; color: var(--fg); font: 500 calc(0.77rem * var(--chat-scale))/1 'Plus Jakarta Sans',sans-serif;   /* down 2 notches 0.85->0.77, input text + placeholder together — was disproportionate to the model picker  */
     padding: 0.7rem 0.8rem 0.7rem 1.85rem; transition: border-color .2s, box-shadow .2s; }
   .op-input::placeholder { color: var(--muted); }   /* inherits the input's size — keep them in lockstep */
   .op-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.20); }
@@ -638,7 +683,7 @@
   .op-resizer { grid-column: 1; grid-row: 1; justify-self: end; align-self: stretch;
     width: 10px; margin-right: -0.7rem; cursor: ew-resize; z-index: 8;
     display: flex; align-items: center; justify-content: center;
-    -webkit-user-select: none; user-select: none; touch-action: none; }
+    -webkit-user-select: none; user-select: none; touch-action: pinch-zoom; }
   .op-resizer::before { content: ""; width: 3px; height: 38px; border-radius: 3px;
     background: var(--border-2); transition: background .15s, height .15s; }
   .op-resizer:hover::before, .op-resizer.dragging::before { background: var(--accent); height: 60px; }
@@ -667,7 +712,7 @@
   .op-tab.active { color: var(--fg); background: var(--accent-soft, rgba(184,192,204,.14));
     border-color: var(--border-2); }
   .op-tab .lbl { overflow: hidden; text-overflow: ellipsis; }
-  .op-urlbar { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem;
+  .op-urlbar { display: flex; align-items: center; gap: 0.5rem; padding: 0.22rem 0.7rem;   /* slimmed toward the rail head, round two  */
     background: var(--bg-2); border-bottom: 1px solid var(--border);
     max-height: 60px; overflow: hidden;
     transition: max-height .28s cubic-bezier(.4,0,.2,1), padding .28s cubic-bezier(.4,0,.2,1),
@@ -737,7 +782,7 @@
   .op-url { font: 500 0.78rem/1.3 'JetBrains Mono', monospace; color: var(--fg-2);
     white-space: nowrap; flex: 1 1 auto; min-width: 0; outline: none;
     background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
-    padding: 0.4rem 2rem 0.4rem 1.7rem; }   /* left pad clears the in-box lock */
+    padding: 0.3rem 2rem 0.3rem 1.7rem; }   /* left pad clears the in-box lock */
   /* when there's no lock (blank/non-http), reclaim the left pad so the placeholder sits normally */
   .op-url-wrap:has(.op-lock:empty) .op-url { padding-left: 0.6rem; }
   .op-url-reload { position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
@@ -746,13 +791,10 @@
   .op-url .scheme { color: var(--muted); }
   .op-stage { position: relative; flex: 1 1 auto; background: #05060a; overflow: hidden; outline: none;
     min-height: 280px;
-    /* iPad/touch: we own every gesture here — no scroll/zoom/long-press-callout
-       stealing the press-and-hold. Without this iOS Safari hijacks the hold.
-       touch-action:none (was pinch-zoom): pinch-zoom let the compositor START a
-       single-finger PAN before the JS touchmove preventDefault ran, so a scroll
-       gesture slid the fixed page up into the white void above the stage. JS owns
-       every single-finger gesture (scroll/drag/tap), so hand the compositor nothing. */
-    touch-action: none; -webkit-touch-callout: none;
+    /* The stage owns one-finger steering, but native two-finger page zoom must
+       remain available when a pinch begins over the feed. pinch-zoom suppresses
+       compositor panning without disabling pinch at gesture start. */
+    touch-action: pinch-zoom; -webkit-touch-callout: none;
     -webkit-user-select: none; user-select: none; }
   .op[data-state="live"] .op-stage { box-shadow: inset 0 0 26px -8px var(--glow); }
   .op-stage:focus { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 26px -8px var(--glow); }
@@ -872,7 +914,7 @@
        viewport-stickiness.) */
     html.op-locked, body.op-locked { overflow: hidden; height: 100dvh; }
     body.op-locked header.site { position: relative; z-index: 30;
-      background: var(--bg); }
+      width: calc(100% - 1.8rem); background: var(--bg); }
 
     /* ── browser fills the screen; chat is a draggable BOTTOM SHEET over it
        (iOS Maps / Uber idiom). Snap states: peek / half / full via --sheet-h. ── */
@@ -884,9 +926,16 @@
     /* MOBILE ONLY: the −/+ control scales the whole chat box together (input + the
        model/effort pickers), so the chatbox text matches the message scale. Desktop
        keeps fixed sizes. */
-    #op-input.op-input { font-size: calc(0.72rem * var(--chat-scale)); }   /* down 2 notches 0.8->0.72 (input text too big) */
+    #op-input.op-input { font-size: calc(0.72rem * var(--chat-scale)); }   /* down 2 notches 0.8->0.72  */
+    /* keep the "Leave a message for Operator?" follow-up input IN LOCKSTEP with
+       the main Message Operator input on mobile — the 2-notch drop above was
+       only applied to #op-input, so on iPad the finish-input stayed oversized
+       . Match both the
+       typed text (0.72) and placeholder (0.64). */
+    .op-finish-input { font-size: calc(0.72rem * var(--chat-scale)); }
+    .op-finish-input::placeholder { font-size: calc(0.64rem * var(--chat-scale)); }
     .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; padding-right: 1.4em !important; background-position: right 0.22rem center !important; }   /* model/effort scales with -/+ (mobile) but CAPPED; pad-right 1.15->1.4em so a long name like "GPT-5.6 Sol" clears the caret instead of clipping its last letter */
-    #op-input.op-input::placeholder { font-size: calc(0.64rem * var(--chat-scale)); }   /* down 2 notches ("Message Operator" too big) */
+    #op-input.op-input::placeholder { font-size: calc(0.64rem * var(--chat-scale)); }   /* down 2 notches 0.72->0.64 ("Message Operator" too big) */
     .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
        flex-centered digit; desktop keeps its 0.5px top-pad) */
@@ -907,9 +956,8 @@
     .op-mode-btn { padding: 0 0.6rem; font-size: 0.78rem; display: flex; align-items: center; }
     .op-mode-thumb { border-radius: 7px; }
     .op-head { gap: 0.3rem; align-items: center; }
-    /* iOS focus-zoom is handled in JS (lock maximum-scale on focus, restore on
-       blur) so we keep the compact font here without the box zooming the viewport
-       AND without blocking pinch-zoom otherwise. See the focusin/focusout handler. */
+    /* Keep the compact input; native iOS focus zoom is preferable to ever
+       mutating the viewport into a page-wide zoom lock. */
 
     /* browser occupies the VISIBLE area ABOVE the sheet (not the whole viewport) so
        the contain-fit frame scales into what you can actually see — no black band up
@@ -935,11 +983,11 @@
       background: var(--bg-2); background-clip: padding-box;   /* solid → no corner seam */
       box-shadow: 0 -10px 34px -10px rgba(0,0,0,.7);
       transition: height .28s cubic-bezier(.22,1,.36,1);
-      padding: 0 0.7rem 0.7rem; overflow: hidden; touch-action: none; }
+      padding: 0 0.7rem 0.7rem; overflow: hidden; touch-action: pinch-zoom; }
     .op.op-sheet-dragging .op-rail { transition: none; }   /* live drag = no lag */
 
     .op-sheet-handle { display: flex; align-items: flex-start; justify-content: center;
-      height: 14px; padding-top: 6px; margin: 0 -0.7rem 0; cursor: grab; flex: 0 0 auto; touch-action: none; }
+      height: 14px; padding-top: 6px; margin: 0 -0.7rem 0; cursor: grab; flex: 0 0 auto; touch-action: pinch-zoom; }
     /* tighten the head up against the grip — no big black gap above "Operator" */
     .op-rail .op-head { margin-top: 0; }
     .op-sheet-handle:active { cursor: grabbing; }
@@ -988,6 +1036,11 @@
     .op[data-sheet="peek"][data-status-min="1"] .op-log { padding-top: 0; }
     .op[data-sheet="peek"] .op-inputbox { order: 0; margin: 0; flex: 0 0 auto; }
 
+    /* A fresh-session launchpad is the whole mobile surface. The normal rail
+       returns as soon as the launchpad closes or dispatches its first task. */
+    .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) { --sheet-h: 0px !important; }
+    .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-rail { display: none; }
+
     /* ── MOBILE launchpad (saved-task cards): the feed area above the sheet is
        short, so make the cards a single scrollable column that fills the width
        and doesn't get clipped. ── */
@@ -998,14 +1051,13 @@
       padding-bottom: 0.5rem; align-content: start; }
     .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; aspect-ratio: auto; }
       /* full-width single column: let cards stay content-height, not tall squares */
-    .op-lp-name { font-size: calc(0.82rem * var(--chat-scale)); padding-right: 2.2rem; }   /* -1 notch + run further right */
+    .op-lp-name { font-size: calc(0.82rem * var(--chat-scale)); padding-right: 2.2rem; }   /* -1 notch + run further right  */
     .op-lp-prompt { font-size: calc(0.72rem * var(--chat-scale)); -webkit-line-clamp: 2; }
     .op-lp-site { font-size: calc(0.64rem * var(--chat-scale)); padding: 0.22rem 0.55rem; }
     .op-lp-go { top: 0.7rem; right: 0.7rem; padding: 0.4rem 0.72rem 0.4rem 0.62rem;
       font-size: calc(0.68rem * var(--chat-scale)); }   /* bigger tap target on touch */
     .op-lp-go svg { width: 12px; height: 12px; }
     .op-lp-edit { width: 32px; height: 32px; opacity: 1; }   /* always visible on touch (no hover) */
-    .op-lp-new { min-height: 64px; }
   }
 
   /* ── redesign 2026-06-26: modern chatbox + browser chrome ── */
@@ -1064,7 +1116,7 @@
     white-space: nowrap; box-shadow: none; }
   .op-tab:hover { background: var(--bg-4); color: var(--fg-2); }
   .op-tab.active { background: var(--bg); color: var(--fg); border-color: #ededea; }
-  .op-tab { cursor: grab; touch-action: none; }   /* none: pointer-drag must own touch gestures (strip still wheel/trackpad-scrolls) */
+  .op-tab { cursor: grab; touch-action: pinch-zoom; }   /* custom drag owns one finger; native pinch remains available */
   .op-tab.dragging { opacity: 0.55; cursor: grabbing; transform: scale(1.04);
     box-shadow: 0 4px 14px rgba(0,0,0,.5); z-index: 2; }
   .op-tab .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
@@ -1087,11 +1139,24 @@
   .op-steer { display: flex; gap: 0.4rem; align-items: center; }
   .op-input { flex: 1 1 auto; width: 100%; background: transparent; border: none; outline: none;
     color: var(--fg); font: 500 0.58rem/1.35 'Plus Jakarta Sans', sans-serif; padding: 0.2rem 0.25rem;
-    text-align: left; resize: none; overflow-y: auto; max-height: 5.2em;
+    text-align: left; resize: none; overflow-y: hidden; max-height: 140px;
     white-space: pre-wrap; word-break: break-word; }
-  /* iOS zooms in on focus of any input < 16px — bump to 16px on touch devices
-     (the box stays compact; only the typed-text size nudges up on phones). */
-  /* (mobile 16px no-zoom rule removed — owner prefers the compact size) */
+  /* iOS forcibly zooms a page when an editable control computes below 16px.
+     Keep the surrounding compact UI, but meet that threshold on coarse-pointer
+     WebKit instead of ever disabling native page zoom in the viewport.
+     #op-input is carved out like the URL bar (1.0.23): the rail chatbox keeps
+     the owner-preferred compact size from 2026-07-13 and accepts Safari's
+     focus zoom — the blanket 16px force-up was what made "Message Operator"
+     oversized and misaligned against the compact rail (2026-07-18). */
+  @supports (-webkit-touch-callout: none) {
+    @media (pointer: coarse) {
+      #op textarea:not(#op-input):not(.op-nt-input),
+      #op input[type="text"]:not(.op-nt-input):not(.op-nt-pill-in),
+      #op input[type="search"], #op input:not([type]):not(.op-nt-pill-in) {
+        font-size: 16px !important;
+      }
+    }
+  }
   .op-steer { align-items: center; }   /* small send btn centered on the input line — no gap */
   .op-input::placeholder { color: var(--muted); text-align: left; }
   .op-send { flex: 0 0 auto; width: 23px; height: 23px; background: #ededea; color: #0b0e18;
@@ -1144,6 +1209,8 @@
     padding-top: 0.25rem; border-top: 1px solid var(--border); overflow: visible;
     visibility: hidden; }   /* revealed once loadModels sets the saved model — avoids default-flash on refresh */
   .op-modelrow.op-ready { visibility: visible; }
+  #op-model { flex: 0 1 auto; min-width: 0; }
+  #op-effort { flex: 0 1 auto; min-width: 0; max-width: 38%; }
   .op-mini:disabled { opacity: 0.45; cursor: default; }
   /* ── Slash palette (#30 v2): saved tasks summoned by typing "/" in the composer.
      Zero standing chrome — the palette floats above the inputbox only while the
@@ -1217,9 +1284,9 @@
     color: var(--fg-2); margin-top: 0.35rem; }
   .op-nt-input { width: 100%; box-sizing: border-box; background: var(--bg-3);
     border: 1px solid var(--border-2); border-radius: 8px; color: var(--fg);
-    font: 500 calc(0.73rem * var(--chat-scale))/1.45 var(--chat-font);
+    font: 500 0.68rem/1.45 var(--chat-font);
     padding: 0.48rem 0.6rem; }
-  .op-nt-input::placeholder { color: var(--muted); }
+  .op-nt-input::placeholder { color: var(--muted); font-size: inherit; }
   .op-nt-input:focus { outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(184,192,204,.14); }
   textarea.op-nt-input { resize: vertical; min-height: 4.4em; }
@@ -1243,9 +1310,14 @@
     transition: background .12s, color .12s; }
   .op-nt-pill-x:hover { background: var(--bad, #e5534b); color: #fff; }
   .op-nt-pill-in { flex: 1 1 90px; min-width: 90px; background: transparent; border: none;
-    outline: none; color: var(--fg); font: 500 calc(0.71rem * var(--chat-scale))/1.4 var(--chat-font);
+    outline: none; color: var(--fg); font: 500 0.68rem/1.4 var(--chat-font);
     padding: 0.12rem 0.1rem; }
-  .op-nt-pill-in::placeholder { color: var(--muted); }
+  .op-nt-pill-in::placeholder { color: var(--muted); font-size: inherit; }
+  /* Save-task dialog controls are carved out of the coarse-pointer 16px
+     force-up (see the #op textarea block): typed text and placeholder share
+     the compact dialog scale, accepting Safari's focus zoom — the 16px
+     element / 0.68rem placeholder split read as "typed text comes out
+     enormous" . */
   .op-nt-sug { position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 5;
     background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 9px;
     box-shadow: 0 10px 28px rgba(0,0,0,.55); max-height: 214px; overflow-y: auto; padding: 3px;   /* taller — the pick list grew (v0.7.0) */
@@ -1321,16 +1393,224 @@
   .op-lp::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .045;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"); }
   .op-lp > * { position: relative; z-index: 1; }
-  /* the launchpad owns its own taps/scroll — the feed's touch-action:none must not
-     leak in (that + the stage steer handler is why iPad taps did nothing).
+  /* the launchpad owns its own taps/scroll — the feed's steering handler must not
+     leak in (that interception is why iPad taps once did nothing).
      pan-y + contain: a swipe scrolls the launchpad ITSELF (or nothing) and never
      chains out to scroll the page/feed (the iPad "scroll leaks through" bug);
      overflow-y makes it the scroll container when the grid is taller than it. */
-  .op-lp { touch-action: pan-y; overscroll-behavior: contain; overflow-y: auto; }
-  .op-lp-card, .op-lp-go, .op-lp-edit, .op-lp-close, .op-lp-new { touch-action: manipulation; }
-  .op-lp-grid { touch-action: pan-y; }
+  .op-lp { touch-action: pan-y pinch-zoom; overscroll-behavior: contain; overflow-y: auto; }
+  .op-lp-card, .op-lp-go, .op-lp-edit, .op-lp-close, .op-lp-add { touch-action: manipulation; }
+  .op-lp-grid { touch-action: pan-y pinch-zoom; }
   .op-lp[hidden] { display: none; }
   .op[data-mode="man"] .op-lp { display: none !important; }
+  /* The server renders the splash as the initial surface. Keep it on top for
+     the first two animation frames while local/shared session state restores,
+     so neither the rail nor browser chrome can flash before launchpad paint. */
+  body:has(.op.op-booting) header.site { display: none !important; }
+  body:has(.op.op-booting) .wrap,
+  body:has(.op.op-booting) main,
+  body:has(.op.op-booting) .container {
+    max-width: none !important; margin: 0 !important; padding: 0 !important; }
+  .op.op-booting { position: fixed; inset: 0; width: auto; height: auto !important;
+    max-width: none; z-index: 50; grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .op.op-booting .op-rail,
+  .op.op-booting .op-resizer,
+  .op.op-booting .op-urlbar,
+  .op.op-booting .op-tabs,
+  .op.op-booting .op-taskbar { display: none !important; }
+  .op.op-booting .op-browser { grid-column: 1; border: 0; border-radius: 0; }
+  .op.op-booting .op-stage { min-height: 100%; }
+  .op.op-booting .op-lp { display: flex !important; }
+  /* Homepage is a real app state, not an overlay floating inside the cockpit.
+     Until the first task starts, the splash owns the entire Operator canvas:
+     no chat rail, resize gutter, URL chrome, or browser frame peeking through.
+     Hiding the launchpad during dispatch releases all normal cockpit layout in
+     the same frame, so there is only one transition point. */
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-rail,
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-resizer,
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-inputbox,
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-urlbar,
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-tabs,
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-taskbar {
+    display: none !important; }
+  .op:has(.op-lp:not([hidden])) .op-kbhint { display: none !important; }
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-browser {
+    grid-column: 1; border: 0; border-radius: 0; }
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-stage {
+    min-height: 100%; }
+  /* There is no second way into the cockpit from homepage mode: submitting a
+     task is the door. The old X merely exposed an empty control panel. */
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-lp-close {
+    display: none; }
+  /* The idle stage borrows the original OpenAI Operator hierarchy: a strong
+     wordmark, one broad task composer, then quiet category tabs. It remains our
+     dark cockpit and feeds our existing saved-task system underneath. */
+  .op-lp-hero { width: min(100%, var(--op-lp-w)); display: flex; flex-direction: column;
+    align-items: center; gap: 0.9rem; margin: 0 0 0.25rem; }
+  /* rem-only, NOT vw: under page zoom vw shrinks while rem text grows, so a
+     vw-clamped wordmark scaled out of proportion to everything else. Mobile
+     keeps its vw clamp below — narrow screens genuinely need viewport fit. */
+  .op-lp-wordmark { font: 700 5.6rem/0.9 'Plus Jakarta Sans',
+    sans-serif; color: var(--fg); letter-spacing: -.03em;
+    text-rendering: geometricPrecision; }
+  /* ── The welcome/splash view (ALL instances — the owner 2026-07-17: prod too, the
+     translucent veil let the live feed bleed through and read as broken): the
+     launchpad as a landing page — wordmark + composer on solid near-black,
+     cluster centered on the viewport middle. Prototype of the future "new
+     chat" page (sessions + conversation sidebar). The admin-contact notice
+     stays demo-only below. ── */
+  .op-lp-demonote { display: none; font: 500 0.72rem/1.5 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); letter-spacing: .01em; text-align: center; }
+  .op-demo .op-lp-demonote { display: block; }
+  .op-lp { justify-content: safe center;
+    /* solid near-black, no translucency/blur — the welcome page is a surface
+       of its own, not a veil over the browser feed */
+    background: #08090c; backdrop-filter: none; }
+  [data-theme="light"] .op-lp:not(.op-lp-over) { background: #fafafa; }
+  /* Cards are part of first paint, so keep the compact hero near the top and
+     reserve the remaining height for the fixed two-row grid. */
+  .op-lp-hero { margin-top: 0; gap: 0.6rem; }
+  .op-lp-composer { margin-top: 1.4rem; }   /* pulled close under the wordmark  */
+  .op-lp-wordmark { font-size: 2.4rem; }
+  /* ── the post-trash presentation: tasks over the LIVE feed, old translucent
+     blur look — a glance at what's still on screen, not the solid splash ── */
+  .op-lp.op-lp-over { background:
+      radial-gradient(120% 95% at 50% 42%, transparent 42%, rgba(0,0,0,.42) 100%),
+      color-mix(in srgb, var(--bg-2) 82%, transparent);
+    backdrop-filter: blur(3px); }
+  /* ── kill the host gutter: the host-app .wrap pads 0 24px; the fullscreen
+     cockpit should bleed edge-to-edge ── */
+  body.op-locked .wrap, body.op-full .wrap { margin: 0 !important; padding: 0; }
+  /* ── header: the brand must SHRINK before MAN/AUTO can occlude it ── */
+  .op-head .op-titlewrap { flex: 0 1 auto; min-width: 0; }
+  .op-head .op-brand-text { min-width: 0; }
+  .op-head .op-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* the X escape hatch (all instances): returns to the live feed. The old
+     "submitting a task is the door" homepage rule predates the header reopen
+     button — without an X, reopening the splash mid-run would trap you. */
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-lp-close {
+    display: inline-flex; }
+  /* fixed, not absolute: an ancestor (.op-lp-bar) is positioned at runtime, which
+     hijacked absolute anchoring; the splash is full-viewport so fixed pins
+     the X to the view's true top-right and it survives launchpad scroll */
+  .op-lp-close { position: fixed; top: 1.1rem; right: 1.1rem; z-index: 3; }
+  /* the launchpad reopen button only makes sense in auto mode (manual mode
+     force-hides the launchpad itself) */
+  .op[data-mode="man"] #op-lp-open { display: none; }
+  .op-lp-composer { width: min(100%, 36rem); min-height: 42px; position: relative; display: flex;
+    align-items: center; padding: 0.4rem 3rem 0.4rem 0.92rem; box-sizing: border-box;
+    background: color-mix(in srgb, var(--bg) 78%, #000); border: 1px solid var(--border-2);
+    border-radius: 999px; cursor: text;
+    transition: border-color .16s ease, background .16s ease; }
+  .op-lp-composer:focus-within { border-color: color-mix(in srgb, var(--fg-2) 68%, transparent);
+    background: color-mix(in srgb, var(--bg) 68%, #000); }
+  .op-lp-input { display: block; width: 100%; height: 1.3em; min-height: 1.3em; max-height: none;
+    resize: none; overflow-y: hidden;
+    padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg);
+    font: 500 calc(0.68rem * var(--chat-scale))/1.3 'Anthropic Sans', var(--chat-font);
+    letter-spacing: -.01em; caret-color: var(--fg); }
+  .op-lp-input::placeholder { color: var(--muted); opacity: .88;
+    font-size: inherit; }
+  /* EMPTY state: clamp any inline auto-resize height. iPad Safari rounds the
+     textarea's scrollHeight differently than Chrome, so the JS grow-to-fit
+     could leave the empty box taller than one line — flex centers the tall
+     box but the placeholder rides its top ("What can I help you do?"
+     misaligned, the owner 2026-07-19, second occurrence). */
+  .op-lp-input:placeholder-shown { -webkit-user-select: none; user-select: none;
+    height: 1.3em !important; }
+  .op-lp-input:not(:placeholder-shown) { -webkit-user-select: text; user-select: text; }
+  .op-lp-send { position: absolute; right: 0.55rem; bottom: 0.35rem; width: 30px; height: 30px;
+    display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%;
+    padding: 0; gap: 0; background: var(--fg); color: var(--bg); cursor: pointer;
+    transition: opacity .12s ease, filter .12s ease; }
+  .op-lp-send svg { width: 16px; height: 16px; flex: 0 0 16px; }
+  .op-lp-send:hover { filter: brightness(.88); }
+  .op-lp-send:active { filter: brightness(.75); }
+  .op-lp-theme { position: fixed; top: calc(1.1rem + 3px); right: 4rem; z-index: 4;
+    width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center;
+    justify-content: center; border: 1px solid transparent; border-radius: 9px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    transition: color .16s ease, background .16s ease, border-color .16s ease; }
+  .op-lp-theme:hover { color: var(--fg); background: var(--bg-3); border-color: var(--border-2); }
+  .op-lp-theme:active { transform: scale(.94); }
+  .op-lp-theme svg { display: block; }
+  .op-lp-theme-night { display: none !important; }
+  [data-theme="light"] .op-lp-theme-day { display: none; }
+  [data-theme="light"] .op-lp-theme-night { display: block !important; }
+  .op-lp-cats { width: min(100%, var(--op-lp-w)); display: flex; align-items: center; justify-content: center;
+    flex-wrap: nowrap; gap: 0.22rem; padding: 3px 0.1rem; box-sizing: border-box;   /* vertical clearance: overflow-x:auto clips the pressed pill's bottom curve at 0px  */
+    overflow-x: auto; scrollbar-width: none; }
+  .op-lp-cats::-webkit-scrollbar { display: none; }
+  .op-lp-cat { display: inline-flex; align-items: center; gap: 0.38rem; min-width: max-content;
+    flex: 0 0 auto;
+    padding: 0.42rem 0.58rem; border: 1px solid transparent; border-radius: 999px;
+    background: transparent; color: var(--fg-2); cursor: pointer; white-space: nowrap;
+    font: 600 0.65rem/1 'Anthropic Sans', var(--chat-font);
+    transition: color .12s ease, background .12s ease, border-color .12s ease; }
+  .op-lp-cat[hidden] { display: none; }
+  .op-lp-cat:hover { color: var(--fg); background: var(--bg-3);
+    border-color: color-mix(in srgb, var(--fg) 26%, transparent); }   /* thin modern hover border  */
+  .op-lp-cat.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+  /* collapsed default: nothing is "selected" yet — suppress the active fill
+     (any theme) until the user opens a view  */
+  .op-lp.op-lp-collapsed .op-lp-cat.active { color: var(--fg-2) !important;
+    background: transparent !important; border-color: transparent !important; }
+  .op-lp-cat-ico { width: 14px; height: 14px; flex: 0 0 auto; fill: none;
+    stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+  @media (max-width: 1060px) and (min-width: 821px) {
+    .op-lp-cats { justify-content: flex-start; overflow-x: auto; scrollbar-width: none; }
+    .op-lp-cats::-webkit-scrollbar { display: none; }
+  }
+  @media (max-width: 820px) {
+    .op-lp { justify-content: flex-start; padding: 1.1rem 0.8rem 1.5rem; gap: 0.72rem; }
+    .op-lp-hero { align-items: flex-start; gap: 0.7rem; }
+    .op-lp-wordmark { align-self: center; font-size: clamp(2.4rem, 11vw, 3rem); margin-left: 0; }
+    .op-lp-composer { min-height: 44px; border-radius: 999px; padding: 0.42rem 3rem 0.42rem 0.9rem; }
+    .op-lp-input { font-size: max(16px, calc(0.64rem * var(--chat-scale))); }
+    .op-lp-send { width: 30px; height: 30px; right: 0.58rem; }
+    .op-lp-cats { justify-content: flex-start; overflow-x: auto; scrollbar-width: none;
+      padding-bottom: 3px; }
+    .op-lp-cats::-webkit-scrollbar { display: none; }
+    .op-lp-cat { font-size: 0.68rem; padding: 0.45rem 0.62rem; }
+  }
+  /* Coarse-pointer WebKit: computed 16px (WebKit's anti-focus-zoom floor keys
+     on COMPUTED font-size) painted at the compact 11.2px via scale(.7) — the
+     documented small-visual-size technique. Two 2026-07-18 failures shape the
+     layout context it runs in:
+       · flex defeat — as a flex item the widened 142.857% layout box shrank
+         straight back to the pill width and painted squished at ~70%. The
+         composer is a BLOCK here, so the widened box sticks and paints back
+         to exactly the pill's inner width.
+       · centered-margin defeat — the JS height compensation (negative bottom
+         margin) fought align-items:center and swallowed multiline growth
+         (+0.2px for a 2-line draft). In block flow it subtracts cleanly, so
+         the pill stretches per painted line.
+     overflow:hidden + the 22px radius keep every painted line and the caret
+     inside the pill (the 999px stadium let edge rows poke past the curve);
+     symmetric padding replaces flex centering for the one-line look. */
+  @supports (-webkit-touch-callout: none) {
+    @media (pointer: coarse) {
+      .op-lp-composer { display: block; overflow: hidden; border-radius: 22px;
+        min-height: 0; padding: 0.86rem 3rem 0.98rem 0.92rem; }   /* hair up  */
+      .op-lp-input { font-size: 16px !important; width: 142.857%;
+        transform: scale(.7); transform-origin: left top; }
+    }
+  }
+  .op-lp-results { width: min(100%, var(--op-lp-w)); display: grid; grid-template-rows: 1fr;
+    opacity: 1; transform: translateY(0);
+    transition: grid-template-rows .42s cubic-bezier(.22,.8,.28,1),
+      opacity .2s ease, transform .42s cubic-bezier(.22,.8,.28,1); }
+  .op-lp-results-inner { min-height: 0; overflow: hidden; display: flex;
+    flex-direction: column; align-items: center; }
+  .op-lp { transition: gap .42s cubic-bezier(.22,.8,.28,1); }
+  .op-lp.op-lp-collapsed { gap: 0; }
+  .op-lp.op-lp-collapsed .op-lp-results { grid-template-rows: 0fr; opacity: 0;
+    transform: translateY(14px); pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-results, .op-lp { transition: none; }
+  }
   /* title bar: label left, a clear labeled Close on the right (the old tiny
      corner X was unhittable) */
   /* bar width is locked to the 3-column card block (--op-lp-w) so the heading
@@ -1341,11 +1621,15 @@
   /* real section heading: the card-title font (var(--chat-font)), a step up in
      size from the card names (0.82rem), aligned to the grid's left edge. Reads
      as the menu's title, not a micro-label. */
-  .op-lp-title { font: 700 calc(1.5rem * var(--chat-scale))/1.1 var(--chat-font);
+  .op-lp-title { font: 700 calc(1.35rem * var(--chat-scale))/1.1 var(--chat-font);
     color: var(--fg-2); letter-spacing: -0.01em; margin-left: 2px;   /* teeny nudge off the card's left edge */ }
+  .op-lp-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; }
+  .op-lp-actions > button { flex: 0 0 auto; align-self: center; padding: 0; gap: 0; }
+  .op-lp-actions > button svg { display: block; flex: 0 0 auto; }
+  .op-lp-actions > button:active { filter: brightness(.72); }
   /* ↻ refresh — pushed to the right beside Close (title keeps the left edge).
      Flat ghost button; the icon spins once on press for tactile feedback. */
-  .op-lp-refresh { margin-left: auto; margin-right: 0.4rem;
+  .op-lp-refresh { margin: 0;
     display: inline-flex; align-items: center; justify-content: center;
     width: calc(28px * var(--chat-scale)); height: calc(28px * var(--chat-scale));
     background: transparent; border: 1px solid transparent; color: var(--muted);
@@ -1353,7 +1637,6 @@
     transition: background .12s ease, color .12s ease, border-color .12s ease; }
   .op-lp-refresh[hidden] { display: none; }
   .op-lp-refresh:hover { background: var(--bg-3); color: var(--fg-2); border-color: var(--border-2); }
-  .op-lp-refresh:active { transform: scale(.94); }
   .op-lp-refresh.op-spin svg { animation: op-lp-spin .45s cubic-bezier(.4,0,.2,1); }
   @keyframes op-lp-spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }
   @media (pointer: coarse) {
@@ -1361,23 +1644,26 @@
     .op-lp-refresh svg { width: 18px; height: 18px; }
   }
   /* 🔍 search — same flat ghost button as ↻, sits to its left (saved-tasks state only) */
-  .op-lp-search { margin-left: auto; margin-right: 0.4rem;
+  .op-lp-search { margin: 0;
     display: inline-flex; align-items: center; justify-content: center;
     width: calc(28px * var(--chat-scale)); height: calc(28px * var(--chat-scale));
     background: transparent; border: 1px solid transparent; color: var(--muted);
     border-radius: 8px; cursor: pointer;
     transition: background .12s ease, color .12s ease, border-color .12s ease; }
   .op-lp-search[hidden] { display: none; }
-  /* when 🔍 is showing, it already claims the left auto-margin — ↻ must not add a
-     second one (they never coexist, but keep the margin single-source). */
-  .op-lp-search:not([hidden]) ~ .op-lp-refresh { margin-left: 0.4rem; }
   .op-lp-search:hover { background: var(--bg-3); color: var(--fg-2); border-color: var(--border-2); }
-  .op-lp-search:active { transform: scale(.94); }
   .op-lp-search.op-lp-search-on { background: var(--bg-3); color: var(--accent); border-color: var(--border-2); }
   @media (pointer: coarse) {
     .op-lp-search { width: 40px; height: 40px; border-radius: 10px; }
     .op-lp-search svg { width: 18px; height: 18px; }
   }
+  .op-lp-add { margin: 0; width: 28px; height: 28px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent; border-radius: 8px; background: transparent;
+    color: var(--muted); cursor: pointer; }
+  .op-lp-add-ico { display: block; width: 14px; height: 14px; }
+  .op-lp-add:hover { background: var(--bg-3); color: var(--fg); border-color: var(--border-2); }
+  @media (pointer: coarse) { .op-lp-add { width: 40px; height: 40px; } }
   /* search input row — drops under the bar, locked to the same block width */
   .op-lp-searchrow { display: flex; align-items: center; gap: 0.5rem;
     width: min(100%, var(--op-lp-w)); margin: -0.05rem 0 0.55rem; padding: 0 2px;
@@ -1410,8 +1696,8 @@
     .op-lp-searchclear { width: 28px; height: 28px; }
   }
   .op-lp-close { display: inline-flex; align-items: center; justify-content: center;
-    width: calc(28px * var(--chat-scale)); height: calc(28px * var(--chat-scale));
-    background: transparent; border: 1px solid transparent;
+    width: 32px; height: 32px;
+    padding: 0; gap: 0; background: transparent; border: 1px solid transparent;
     color: var(--muted); border-radius: 8px; cursor: pointer;
     transition: background .12s ease, color .12s ease, border-color .12s ease; }
   .op-lp-close svg { width: calc(15px * var(--chat-scale));
@@ -1434,11 +1720,12 @@
      218px card columns clipped at the screen edge (caught 2026-07-11). */
   @media (min-width: 821px) {
     .op-lp-grid { grid-template-columns: repeat(3, var(--op-lp-col)); grid-auto-rows: var(--op-lp-cardh);
-      gap: 0.75rem; width: max-content; } }
-  /* auto-cycle cross-fade: grid eases out (--op-lp-fade), JS swaps cards, the
-     fresh set eases back via each card's op-lp-pop entrance. */
-  .op-lp-grid { transition: opacity .24s ease, transform .24s ease; }
-  .op-lp-grid.op-lp-fading { opacity: 0; transform: translateY(-6px); }
+      gap: 0.75rem; width: max-content;
+      max-height: calc(2 * var(--op-lp-cardh) + 0.75rem); overflow: hidden; } }
+  /* Quiet cross-fade: geometry never moves, so cycling cannot make the fixed
+     card grid wobble. Fresh cards use the same short opacity entrance. */
+  .op-lp-grid { transition: opacity .2s ease; }
+  .op-lp-grid.op-lp-fading { opacity: 0; pointer-events: none; }
   @media (prefers-reduced-motion: reduce) {
     .op-lp-grid { transition: none; }
     .op-lp-grid.op-lp-fading { opacity: 1; transform: none; }
@@ -1447,24 +1734,37 @@
   .op-lp-card { background: color-mix(in srgb, var(--bg) 78%, #000);
     border: 1px solid var(--border-2); border-radius: 16px;
     padding: 0.7rem 0.78rem 0.78rem; display: flex; flex-direction: column; gap: 0.4rem;
-    position: relative; cursor: pointer; text-align: left;  /* body → load into composer; Go launches */
-    transition: border-color .15s, transform .15s, box-shadow .15s, background .15s;
-    animation: op-lp-pop .3s cubic-bezier(.2,1.1,.35,1) backwards; }
+    box-sizing: border-box; position: relative; cursor: pointer; text-align: left;  /* body → load into composer; Go launches */
+    transition: border-color .15s, box-shadow .15s, background .15s; }
+  /* Light mode is paper, not a stack of gray slabs. Keep the canvas barely
+     off-white and put every interactive surface on clean white; borders and
+     type carry the hierarchy instead of large tinted fills. */
+  [data-theme="light"] .op-lp-composer,
+  [data-theme="light"] .op-lp-searchinput,
+  [data-theme="light"] .op-lp-card,
+  [data-theme="light"] .op-lp-cat,
+  [data-theme="light"] .op-nt-pills,
+  [data-theme="light"] .op-nt-pill { background: #fff; }
+  [data-theme="light"] .op-lp-composer:focus-within,
+  [data-theme="light"] .op-lp-searchinput:focus,
+  [data-theme="light"] .op-lp-cat:hover { background: #fff; }
+  [data-theme="light"] .op-lp-cat { border-color: rgba(20, 24, 31, .1); }
+  [data-theme="light"] .op-lp-cat.active {
+    color: #16191f; background: #fff; border-color: rgba(20, 24, 31, .34);
+    box-shadow: 0 1px 3px rgba(20, 24, 31, .12); }
+  [data-theme="light"] .op-lp-card { border-color: #e4e7eb; }
   /* squarish cards are a DESKTOP look — scoped like the grid geometry above, so
      the mobile block's content-height cards (aspect-ratio:auto, ~line 929)
      actually win on phones (same source-order pitfall). */
   @media (min-width: 821px) {
     .op-lp-card { height: var(--op-lp-cardh); overflow: hidden; } }   /* fixed, equal, zoom-invariant */
-  .op-lp-card:nth-child(2) { animation-delay: .04s; } .op-lp-card:nth-child(3) { animation-delay: .08s; }
-  .op-lp-card:nth-child(4) { animation-delay: .12s; } .op-lp-card:nth-child(5) { animation-delay: .16s; }
-  @keyframes op-lp-pop { from{opacity:0;transform:translateY(6px) scale(.96)} to{opacity:1;transform:none} }
-  .op-lp-card:hover { border-color: var(--accent); transform: translateY(-2px);
+  .op-lp-card:hover { border-color: var(--accent);
     box-shadow: 0 8px 22px rgba(0,0,0,.4); }
   .op-lp-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* Fixed vertical rhythm so every card lays out identically: the name reserves
      exactly 2 lines and the prompt exactly 2, so the prompt's "…" terminates in
      the same visual band on every card regardless of title length. */
-  .op-lp-name { font: 700 0.78rem/1.28 var(--chat-font); color: var(--fg);   /* down 1 notch 0.82->0.78 */
+  .op-lp-name { font: 700 0.78rem/1.28 var(--chat-font); color: var(--fg);   /* down 1 notch 0.82->0.78  */
     padding-right: 1.8rem;   /* 2.6->1.8: let the title run further right; still clears the Go button's left edge */
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     min-height: calc(2 * 1.28em); }
@@ -1494,11 +1794,11 @@
     gap: 0.28rem; background: #e5484d; color: #fff; border: none; border-radius: 999px;
     font: 700 0.62rem/1 var(--chat-font); padding: 0.34rem 0.62rem 0.34rem 0.56rem;
     cursor: pointer; box-shadow: 0 2px 8px -2px rgba(0,0,0,.4);
-    opacity: 0; transition: opacity .15s ease, filter .12s ease, transform .12s ease; }
+    opacity: 0; transition: opacity .15s ease, filter .12s ease; }
   .op-lp-card:hover .op-lp-go, .op-lp-go:focus-visible { opacity: 1; }
   .op-lp-go svg { margin-top: -0.5px; }
-  .op-lp-go:hover { filter: brightness(1.08); transform: scale(1.04); }
-  .op-lp-go:active { transform: scale(.97); }
+  .op-lp-go:hover { filter: brightness(1.08); }
+  .op-lp-go:active { filter: brightness(.88); }
   /* Edit — user tasks only, flat pencil, fades in on card hover */
   .op-lp-edit { position: absolute; bottom: 0.6rem; right: 0.6rem; width: 26px; height: 26px;
     display: inline-flex; align-items: center; justify-content: center; border-radius: 8px;
@@ -1506,10 +1806,10 @@
     cursor: pointer; opacity: 0; transition: opacity .15s ease, color .12s ease, background .12s ease; }
   .op-lp-card:hover .op-lp-edit, .op-lp-edit:focus-visible { opacity: 1; }
   .op-lp-edit:hover { color: var(--fg); background: var(--bg-2); }
-  .op-lp-new { border-style: dashed; align-items: center; justify-content: center;
-    color: var(--muted); font: 600 0.68rem/1.5 var(--chat-font);
-    text-align: center; display: flex; min-height: 92px; }
-  .op-lp-new:hover { color: var(--fg-2); }
+  /* The splash owns the stage completely; never leak a stale remote click
+     cursor or its press indicator through during launchpad paint. */
+  .op:has(.op-lp:not([hidden])) .op-agent-cursor,
+  .op:has(.op-lp:not([hidden])) .op-steer-cursor { display: none !important; }
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
   .op-anim-ready .op-mini { transition: opacity .2s ease; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
@@ -1527,12 +1827,12 @@
      −/+ chat scale like mobile always did — it was a FIXED 0.70rem here, so
      the size pill couldn't touch it and a fresh browsing context (e.g. the
      installed PWA, whose localStorage starts empty) read smaller with no way
-     back (2026-07-11). Default scale 1.05 ≈ a half-notch bump too. */
+     back . Default scale 1.05 ≈ a half-notch bump too. */
   @media (min-width: 821px) {
     /* 0.70->0.85rem: both inputs had drifted smaller; unified with the base
-       .op-input and the follow-up to 0.85rem*scale, equal (2026-07-11). */
-    .op-input { font-size: calc(0.77rem * var(--chat-scale)); }   /* down 2 notches — proportioned to the model picker. NB this block WINS over base .op-input (source order) */
-    .op-input::placeholder { font-size: calc(0.73rem * var(--chat-scale)); }   /* placeholder keeps a -1-notch offset */
+       .op-input and the follow-up to 0.85rem*scale, equal . */
+    .op-input { font-size: calc(0.77rem * var(--chat-scale)); }   /* down 2 notches 0.85->0.77 — was outsized vs the model picker . NB this desktop block WINS over the base .op-input rules above (source order); edit here, not there */
+    .op-input::placeholder { font-size: calc(0.73rem * var(--chat-scale)); }   /* "Message Operator" keeps its -1-notch offset: 0.81->0.73 */
     .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.92rem); }
   }
 
@@ -1554,7 +1854,7 @@
   .op-task-head .ico { width: 14px; height: 14px; flex: 0 0 auto; position: relative; }
   /* constant-speed solid spinner: a faint gray track with one SOLID gray arc
      sweeping at LINEAR velocity. Hard color stops — the earlier gradient tail
-     read as a blurred/faded smear (2026-07-12); the arc is a crisp solid
+     read as a blurred/faded smear ; the arc is a crisp solid
      segment in a distinct gray shade from the track. */
   .op-task[data-busy="1"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
     border-radius:50%;
@@ -1812,7 +2112,7 @@
 
   /* MAX-SHEET chat (mobile data-sheet="full"): only a sliver of stage remains
      and the URL bar mangles itself across it — collapse it out with the same
-     smooth ease the desktop surfaces use (2026-07-12). Tabs + taskbar go
+     smooth ease the desktop surfaces use . Tabs + taskbar go
      with it; they share the same strip. */
   .op[data-sheet="full"] .op-urlbar {
     max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0;

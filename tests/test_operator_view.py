@@ -17,6 +17,8 @@ Run (same shape as the sibling operator tests) from modules/operator:
 """
 import importlib
 import os
+import re
+from pathlib import Path
 
 import pytest
 from flask import Flask
@@ -32,6 +34,165 @@ import operator_agent as OA
 # stand-in so the page routes render (we assert status/headers, not markup).
 _STUB_BASE = ("<!doctype html><title>{% block title %}{% endblock %}</title>"
               "{% block content %}{% endblock %}")
+
+
+def test_streamer_defaults_to_soft_zoom_and_desktop_width() -> None:
+    # zoom default is 0.8 — two notches under neutral . The
+    # real "fits the screen" lever is view_w, which reflows the layout without
+    # crossing responsive mobile breakpoints; zoom fine-tunes on top.
+    s = OV._Streamer()
+    assert s.zoom == 0.8
+    assert s.view_w == 1280
+    assert OV._VIEW_FOLLOW is True
+
+
+def test_model_picker_preserves_selected_label_width_for_caret_position() -> None:
+    css = (Path(__file__).resolve().parents[1] / "static/operator.css").read_text(encoding="utf-8")
+
+    assert "#op-model { flex: 0 1 auto; min-width: 0; }" in css
+    assert "#op-effort { flex: 0 1 auto; min-width: 0; max-width: 38%; }" in css
+
+
+def test_ios_page_zoom_remains_available_over_operator_stage_and_input() -> None:
+    root = Path(__file__).resolve().parents[1]
+    static = root / "static"
+    css = (static / "operator.css").read_text(encoding="utf-8")
+    js = (static / "js/operator.js").read_text(encoding="utf-8")
+    template = (root / "templates/operator.html").read_text(encoding="utf-8")
+
+    stage_start = css.index(".op-stage {")
+    stage_rule = css[stage_start:css.index("}", stage_start)]
+    assert "touch-action: pinch-zoom;" in stage_rule
+    assert "touch-action: none;" not in css
+    assert ".op-lp { touch-action: pan-y pinch-zoom;" in css
+    assert "user-scalable=no" not in js
+    assert "maximum-scale=1" not in js
+    touchstart = js[js.index("stage.addEventListener('touchstart'"):]
+    touchstart = touchstart[:touchstart.index("stage.addEventListener('touchmove'")]
+    assert "e.preventDefault()" not in touchstart
+
+    ios_text_rule = css[css.index("@supports (-webkit-touch-callout: none)"):]
+    ios_text_rule = ios_text_rule[:ios_text_rule.index("}\n  }")]
+    assert "@media (pointer: coarse)" in ios_text_rule
+    assert "#op textarea" in ios_text_rule
+    assert '#op input[type="text"]' in ios_text_rule
+    assert '#op input[type="url"]' not in ios_text_rule
+    assert "font-size: 16px !important;" in ios_text_rule
+    assert '<input type="url" class="op-url" id="op-url"' in template
+    assert ".op-url { font-size: 0.66rem; }" in css
+
+
+def test_splash_is_the_initial_html_boot_surface() -> None:
+    root = Path(__file__).resolve().parents[1]
+    template = (root / "templates/operator.html").read_text(encoding="utf-8")
+    css = (root / "static/operator.css").read_text(encoding="utf-8")
+    js = (root / "static/js/operator.js").read_text(encoding="utf-8")
+
+    assert '<div class="op op-booting" id="op"' in template
+    splash_open = template[template.index('<div class="op-lp op-lp-collapsed" id="op-lp"') :]
+    splash_open = splash_open[:splash_open.index(">") + 1]
+    assert "hidden" not in splash_open
+    # the COLLAPSED assembly ships in the markup (1.0.26): initLaunchpad() runs
+    # post-paint, so an expanded first paint flashed the tabs/grid on refresh.
+    assert ".op.op-booting .op-lp { display: flex !important; }" in css
+    assert ".op.op-booting .op-urlbar" in css
+    assert "classList.remove('op-booting')" in js
+
+
+def test_welcome_launchpad_defaults_to_two_rows_and_standalone_add() -> None:
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/operator.css").read_text(encoding="utf-8")
+    js = (root / "static/js/operator.js").read_text(encoding="utf-8")
+    template = (root / "templates/operator.html").read_text(encoding="utf-8")
+
+    assert ".op-lp-wordmark { font-size: 2.4rem;" in css
+    assert ".op-lp-input::placeholder" in css
+    assert "font: 500 calc(0.68rem * var(--chat-scale))/1.3" in css
+    assert "width: min(100%, 36rem); min-height: 42px" in css
+    assert 'id="op-lp-theme"' in template
+    assert "op-lp-collapsed" in css and "op-lp-collapsed" in js
+    assert "font-size: inherit;" in css
+    assert "flex-wrap: nowrap;" in css
+    assert "_LP_ROTATE_HOURS = 6, _LP_SHOW = 6" in js
+    assert "const _LP_PAGE = 6" in js
+    assert "renderGrid(true);" in js
+    launchpad = js[js.index("function _lpBuild()") : js.index("// one launchpad card")]
+    # examples paint SYNCHRONOUSLY at boot (right after the _opTasks init) —
+    # never gated behind the saved-tasks fetch resolving
+    _boot = launchpad.index("window._opTasks = window._opTasks ||")
+    assert 0 < launchpad.index("renderGrid(true);", _boot) - _boot < 200
+    assert launchpad.index("addBtn.addEventListener") < launchpad.rindex("ctl.refreshTasks();")
+    # the 2026-07-18 regression: a nonempty-log guard BEFORE control wiring left
+    # a painted, dead splash on restored sessions. Wiring is unconditional now;
+    # only syncVisibility may consult the log. The guard must never come back.
+    assert "if (log.children.length) return" not in launchpad
+    assert launchpad.index("function wireLaunchpadControls()") < launchpad.index("function initLaunchpad()")
+    assert "op-lp:not(.op-lp-tasks-open) .op-lp-grid" not in css
+    assert 'id="op-lp-add"' in template
+    assert '<span class="op-lp-title" id="op-lp-title">Things to do with Operator</span>' in template
+    for label in ("Browse", "Food", "Local", "Shop", "Travel", "Research", "Media", "Saved"):
+        assert f'>{label}</button>' in template
+    # Saved is a PERMANENT category : always visible, an empty
+    # list renders the minimal "No saved tasks" state instead of hiding the tab
+    assert 'id="op-lp-tasks-toggle" aria-pressed="false" title="show saved tasks">' in template
+    assert 'title="show saved tasks" hidden' not in template
+    actions = template[template.index('<div class="op-lp-actions">') : template.index('</div>', template.index('<div class="op-lp-actions">'))]
+    assert actions.index('id="op-lp-search"') < actions.index('id="op-lp-refresh"') < actions.index('id="op-lp-add"')
+    add = actions[actions.index('id="op-lp-add"') :]
+    assert '<svg class="op-lp-add-ico"' in add
+    assert "window._opRefreshLaunchpadTasks" in js
+    assert "tasksTgl.hidden = false" in js
+    assert "'No saved tasks'" in js
+    assert "op-lp-new" not in js
+    assert "Save a task';" not in js
+    launchpad_css = css[css.index("/* ── Launchpad (#1)") : css.index("/* ── Operator-style task group")]
+    assert "@keyframes op-lp-pop" not in launchpad_css
+    assert "translateY(-2px)" not in launchpad_css
+    assert "scale(1.04)" not in launchpad_css
+    assert ":has(.op-lp:not([hidden])) .op-agent-cursor" in launchpad_css
+    assert ":has(.op-lp:not([hidden])) .op-steer-cursor" in launchpad_css
+    # iOS composer treatment (settled 2026-07-19): the rail chatbox stays
+    # carved OUT of the coarse-pointer 16px force-up (compact size, URL-bar
+    # precedent). The splash paints compact via computed-16px + scale(.7) —
+    # legal ONLY in the block-context pill (flex-shrink defeated the widened
+    # box and centered margins swallowed growth when it lived in flex).
+    assert 'textarea:not(#op-input)' in css
+    ios_lp = css[css.index("Coarse-pointer WebKit:") : css.index(".op-lp-results {")]
+    assert "display: block; overflow: hidden;" in ios_lp
+    assert "width: 142.857%" in ios_lp
+    assert "transform: scale(.7)" in ios_lp
+
+
+def test_operator_full_bleed_does_not_strip_the_shared_header_gutter() -> None:
+    """The cockpit may span the viewport; host navigation may not."""
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/operator.css").read_text(encoding="utf-8")
+
+    assert "body.op-locked header.site" in css
+    assert "width: min(calc(100% - 3rem), 1100px);" in css
+    assert "margin-left: auto; margin-right: auto;" in css
+
+
+
+def test_example_library_is_large_varied_and_site_backed() -> None:
+    root = Path(__file__).resolve().parents[1]
+    js = (root / "static/js/operator.js").read_text(encoding="utf-8")
+    pool = js[js.index("const _LP_EXAMPLE_POOL") : js.index("function _lpBuild")]
+    labels = js[js.index("const _SITE_LABELS") : js.index("const _LP_ROTATE_HOURS")]
+
+    names = re.findall(r"\{ name: '([^']+)'", pool)
+    sites = re.findall(r"sites: \['([^']+)'\]", pool)
+    categories = re.findall(r"category: '(delivery|local|shopping|travel)'", pool)
+
+    assert 80 <= len(names) <= 90
+    assert len(names) == len(set(names))
+    assert len(sites) == len(names)
+    assert len(sites) == len(set(sites))
+    assert all(f"'{site}':" in labels for site in sites)
+    assert all(categories.count(category) >= 6 for category in ("delivery", "local", "shopping", "travel"))
+    assert "return 'research';" in js
+    assert "return 'media';" in js
+    assert "google.com/s2/favicons?domain=" in js
 
 
 def _build_app(demo: bool):
@@ -481,6 +642,26 @@ def test_steer_accepts_form_encoded_body(live, monkeypatch):
     assert fs.actions[0]["value"] == "hi"
 
 
+def test_extensions_action_reaches_private_browser(live, monkeypatch):
+    live_client, live_mod = live
+    live_streamer = FakeStreamer()
+    _patch_streamer(monkeypatch, live_mod, live_streamer)
+    live_resp = live_client.post("/operator/steer", json={"kind": "extensions"})
+
+    assert live_resp.status_code == 200
+    assert live_streamer.actions[0]["kind"] == "extensions"
+
+
+def test_extensions_action_is_blocked_in_demo(demo, monkeypatch):
+    demo_client, demo_mod = demo
+    demo_streamer = FakeStreamer()
+    _patch_streamer(monkeypatch, demo_mod, demo_streamer)
+    demo_resp = demo_client.post("/operator/steer", json={"kind": "extensions"})
+
+    assert demo_resp.status_code == 403
+    assert demo_streamer.actions == []
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. /operator/status + /operator/tasks — happy path + missing-state resilience
 # ═══════════════════════════════════════════════════════════════════════════
@@ -736,6 +917,8 @@ def test_operator_page_renders_and_is_no_store(live):
     resp = client.get("/operator")
     assert resp.status_code == 200
     assert "no-store" in resp.headers.get("Cache-Control", "")
+    assert 'data-kind="extensions"' in resp.get_data(as_text=True)
+
 
 
 if __name__ == "__main__":

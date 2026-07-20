@@ -6,7 +6,7 @@
 (function () {
   const op = document.getElementById('op');
   // Double-tap/click on the chat rail was selecting the last word of the nearest
-  // message bubble (the owner: "double-tap highlights the last word in the chat box").
+  // message bubble .
   // Swallow the native word-select EXCEPT inside a real input/textarea, where
   // double-click-to-select-word is expected. Drag-select (mousedown+drag) for
   // copying an agent reply is unaffected — this only cancels the dblclick gesture.
@@ -34,7 +34,7 @@
   function stickToBottom(){ if (nearBottom()) log.scrollTop = log.scrollHeight; updateJump(); }
   function updateJump(){
     // show the pill only after scrolling up a fair bit (not the 60px auto-scroll threshold)
-    const up = (log.scrollHeight - log.scrollTop - log.clientHeight) > 2080;
+    const up = (log.scrollHeight - log.scrollTop - log.clientHeight) > 900;
     if (jumpBtn) jumpBtn.classList.toggle('show', up);
   }
   if (jumpBtn) jumpBtn.addEventListener('click', ()=>{
@@ -180,6 +180,38 @@
   // ALL page JS (poll/agent/steer dead, feed stuck 'Connecting'). Declare them up top.
   let _inFlight = false;
   var _queue = [];
+  // launchpad controller singleton — built once by wireLaunchpadControls().
+  // Declared in this early-hoist zone so any early caller sees a defined
+  // binding instead of a TDZ crash (the 2026-06-26 class).
+  let _lpCtl = null;
+
+  // ── smart viewport follow: report the stage's CSS size so the server can
+  // match the remote viewport to it (frame fills the stage, no letterbox).
+  // Server-side gated (demo always, prod via OPERATOR_VIEWPORT_FOLLOW) and
+  // frozen during live runs, so this beacon is fire-and-forget. Only touches
+  // STEER (declared above) — no forward references (TDZ rule). ──
+  (() => {
+    const st = document.getElementById('op-stage');
+    if (!st) return;
+    let _t = null, _last = '';
+    const send = async () => {
+      const r = st.getBoundingClientRect();
+      const v = Math.round(r.width) + 'x' + Math.round(r.height);
+      if (!r.width || !r.height || v === _last) return;
+      try {
+        const res = await fetch(STEER, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'stage_size', value: v }) });
+        const j = await res.json();
+        if (j && j.ok && Array.isArray(j.view)) {
+          _last = v;
+        }
+      } catch (_) {}
+    };
+    const queue = () => { clearTimeout(_t); _t = setTimeout(send, 180); };
+    window.addEventListener('resize', queue);
+    if (window.ResizeObserver) new ResizeObserver(queue).observe(st);
+    setTimeout(send, 1200);   // after first layout settles
+  })();
 
   // ── full-window toggle (hides host-app header) ──
   // ── drag-to-resize the chat rail (desktop). Current width is the floor; drag
@@ -222,7 +254,7 @@
     const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
     function vh(){ return window.innerHeight; }
     // Snap targets: peek / the FIT notch / full. The middle stop is computed,
-    // not fixed (2026-07-12): it's the height where the sheet's top edge
+    // not fixed : it's the height where the sheet's top edge
     // sits exactly at the bottom of the full-width feed — .op-browser is
     // (100dvh - sheet - header) tall and the contain-fit frame fills the phone's
     // width when that equals vw × frame aspect. Release there = whole page
@@ -331,7 +363,12 @@
   document.body.classList.add('op-locked');
   // enable disclaimer-info (and similar) reveal transitions only after first paint,
   // so a refresh doesn't flash the hover message open→closed.
-  requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById('op')?.classList.add('op-ready')));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const opBoot = document.getElementById('op');
+    if (!opBoot) return;
+    opBoot.classList.remove('op-booting');
+    opBoot.classList.add('op-ready');
+  }));
   // keep the fixed mobile browser pane below the host-app header so its URL bar is
   // visible (not tucked under the header). Track header height live.
   (function(){
@@ -362,28 +399,20 @@
     window.addEventListener('orientationchange', () => setTimeout(setHdr, 60));
     document.getElementById('op-full')?.addEventListener('click', () => setTimeout(setHdr, 50));
   })();
-  // stop iOS Safari's zoom-on-focus of the small chat input (keeps the compact font
-  // We do NOT set user-scalable=no — the owner wants native pinch-zoom on the
-  // Operator page on mobile. (Previously we locked it to stop iOS focus-zoom on the
-  // small chat input, but blocking pinch-zoom entirely was worse; the compact-font
-  // tradeoff is accepted.) Leave the base viewport (width=device-width, initial-scale=1)
-  // untouched so pinch-zoom works.
-  const _vp = document.querySelector('meta[name="viewport"]');
-  const _vpPrev = _vp ? _vp.getAttribute('content') : null;
-  // iOS zooms the page when you focus a sub-16px input. Rather than bump the font
-  // (makes it big), briefly lock zoom on focus and restore on blur — message box never
-  // focus-zooms, but pinch-zoom works the rest of the time.
-  (function(){
-    const inp = document.getElementById('op-input'); if (!inp || !_vp) return;
-    const LOCK = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
-    const FREE = _vpPrev || 'width=device-width, initial-scale=1';
-    inp.addEventListener('focus', () => _vp.setAttribute('content', LOCK));
-    inp.addEventListener('blur',  () => _vp.setAttribute('content', FREE));
-  })();
+  // Keep the base viewport untouched. Temporarily installing a scalability lock while
+  // the compact chat input was focused could strand iOS in the locked state when
+  // focus changed during a gesture or navigation. Native page zoom is the higher-
+  // priority contract; accepting Safari's small-input focus zoom is the tradeoff.
+  // (2026-07-17) A pinch-zoom-out drift "snap to origin" listener lived here
+  // for ~2 hours and was REVERTED: visualViewport scroll events also fire on
+  // NORMAL page scrolling, so on the host-app mount (where window scroll is
+  // legitimate) it force-reset every scroll and fought pinch gestures crossing
+  // scale 1 — "can't zoom out of host-app or operator". A future fix needs
+  // gesture-END detection (touchend + settle delay) gated to the truly-fixed
+  // fullscreen cockpit only. Do not re-add the naive version.
   window.addEventListener('pagehide', () => {
     document.documentElement.classList.remove('op-locked');
     document.body.classList.remove('op-locked');
-    if (_vp && _vpPrev !== null) _vp.setAttribute('content', _vpPrev);
   });
   (function(){
     const FULL_KEY = 'operator-fullscreen-v1';
@@ -1270,8 +1299,11 @@
       if (typeof _seenMsg!=='undefined') _seenMsg.clear();
       setFollowUp();
       _clearBtn.dataset.busy='0';
-      // back to a fresh idle stage → bring the launchpad (examples) back
-      try { initLaunchpad(); } catch(_){}
+      // back to a fresh idle stage → bring the launchpad back as the SOLID
+      // splash .
+      try { initLaunchpad(); } catch(e){ console.error('operator: launchpad init failed', e); }
+      try { const _lp = document.getElementById('op-lp');
+        if (_lp) { _lp.classList.remove('op-lp-over'); _lp.hidden = false; } } catch(_){}
       // push the CLEARED state to the shared session (1.0.11) — without this
       // the server kept the old chat and the next boot-adopt resurrected it
       // ("trash not working", the owner 2026-07-11).
@@ -1352,7 +1384,7 @@
     const lp = document.getElementById('op-lp');
     if (lp) {
       if (_isGameSurface()) lp.hidden = true;
-      else if (!log.children.length) { try { initLaunchpad(); } catch(_){} }
+      else if (!log.children.length) { try { initLaunchpad(); } catch(e){ console.error('operator: launchpad init failed', e); } }
     }
     refreshPanic();
   }
@@ -1661,6 +1693,11 @@
   // SESSION-ONLY by design — never seeded from storage, always false on load. A refresh
   // or a manual MAN flip must NOT resurrect Finish-up (it's not a real pending hand-off).
   let _handedToUser = false;
+  // The welcome surface must be interactive even if driver/model discovery is
+  // slow or unavailable. Defer only until this script's constants initialize;
+  // never put its event wiring behind a backend request — and never swallow an
+  // init failure silently (an inert painted splash is a total lockout in AUTO).
+  setTimeout(() => { try { initLaunchpad(); } catch(e){ console.error('operator: launchpad init failed', e); } }, 0);
   (async () => {
     try { const d = await (await fetch(DRIVERS_URL)).json();
       (d.drivers||[]).forEach(b => { const o=document.createElement('option');
@@ -1673,7 +1710,6 @@
     await loadModels(selectedBot());
     initSlashTasks();
     initNewTaskModal();
-    initLaunchpad();
   })();
   // ── Launchpad (#1): saved-task cards on the idle stage, OpenAI-Operator
   // homepage style. Fresh sessions only — the overlay vanishes for good the
@@ -1706,6 +1742,23 @@
     'rottentomatoes.com':'Rotten Tomatoes', 'bandcamp.com':'Bandcamp',
     'vivino.com':'Vivino', 'strava.com':'Strava', 'fandango.com':'Fandango',
     'offerup.com':'OfferUp', 'bookshop.org':'Bookshop.org',
+    'amazon.ca':'Amazon', 'ebay.com':'eBay', 'walmart.ca':'Walmart',
+    'bestbuy.ca':'Best Buy', 'tool.com':'Interactive Brokers', 'gmail.com':'Gmail',
+    'docs.google.com':'Google Docs', 'expedia.ca':'Expedia', 'x.com':'X',
+    'netflix.com':'Netflix', 'weather.com':'Weather.com',
+    'dominos.com':'Domino’s', 'toasttab.com':'Toast', 'gopuff.com':'Gopuff',
+    'freshdirect.com':'FreshDirect', 'seamless.com':'Seamless', 'goldbelly.com':'Goldbelly',
+    'taskrabbit.com':'Taskrabbit', 'thumbtack.com':'Thumbtack', 'zocdoc.com':'Zocdoc',
+    'classpass.com':'ClassPass', 'eventbrite.com':'Eventbrite', 'recreation.gov':'Recreation.gov',
+    'mindbodyonline.com':'Mindbody', 'rover.com':'Rover', 'rei.com':'REI',
+    'wayfair.com':'Wayfair', 'newegg.com':'Newegg', 'bhphotovideo.com':'B&H Photo',
+    'sephora.com':'Sephora', 'nordstrom.com':'Nordstrom', 'backmarket.com':'Back Market',
+    'lowes.com':'Lowe’s', 'vrbo.com':'Vrbo', 'hotels.com':'Hotels.com',
+    'rome2rio.com':'Rome2Rio', 'thetrainline.com':'Trainline', 'hostelworld.com':'Hostelworld',
+    'skyscanner.com':'Skyscanner', 'lonelyplanet.com':'Lonely Planet', 'wanderlog.com':'Wanderlog',
+    'pubmed.ncbi.nlm.nih.gov':'PubMed', 'docs.python.org':'Python Docs',
+    'consumerreports.org':'Consumer Reports', 'nasa.gov':'NASA', 'loc.gov':'Library of Congress',
+    'justwatch.com':'JustWatch', 'glassdoor.com':'Glassdoor',
   };
 
   // Deterministic rotating pick of N examples from the pool. The "which N"
@@ -1713,7 +1766,7 @@
   // button advances the bucket by one — no storage, same for everyone, stable
   // within a window. A tiny seeded PRNG (mulberry32) + Fisher–Yates gives a
   // clean shuffle from an integer seed.
-  const _LP_ROTATE_HOURS = 6, _LP_SHOW = 8;
+  const _LP_ROTATE_HOURS = 6, _LP_SHOW = 6;
   function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
   function _pickExamples(offset){
     const bucket = Math.floor(Date.now()/(_LP_ROTATE_HOURS*3600*1000)) + (offset|0);
@@ -1724,8 +1777,8 @@
   }
   const _siteLabel = (dom) => _SITE_LABELS[dom.replace(/^www\./,'')] || dom;
 
-  // Example-task POOL — shown only when the user has none saved. 48 tasks, each
-  // on a UNIQUE site; a rotating 8 are surfaced at a time (see _pickExamples).
+  // Example-task pool — 86 varied tasks, each on a unique site. A rotating six
+  // are surfaced at a time; category views draw from the full pool.
   // Specific, descriptive titles; clicking one loads it into the composer to
   // tweak (and connect the site) rather than running blind. isExample → "Go".
   const _LP_EXAMPLE_POOL = [
@@ -1777,16 +1830,68 @@
     { name: 'Check movie showtimes for tonight', prompt: 'On Fandango, find what’s playing at theaters near me tonight after 7pm, and list three options with showtimes.', sites: ['fandango.com'], isExample: true },
     { name: 'Hunt for a used desk locally', prompt: 'On OfferUp, find three well-priced used standing or writing desks near me under $150, and summarize condition and pickup location.', sites: ['offerup.com'], isExample: true },
     { name: 'Order books from an indie shop', prompt: 'On Bookshop.org, build a cart of three acclaimed recent novels that support local bookstores — stop before checkout so I can review.', sites: ['bookshop.org'], isExample: true },
+    { name: 'Set up pizza pickup for game night', prompt: 'On Domino’s, build a pickup order with two large pizzas, one vegetarian and one with pepperoni, plus garlic bread. Stop before placing it so I can review.', sites: ['dominos.com'], category: 'delivery', isExample: true },
+    { name: 'Order lunch from a nearby cafe', prompt: 'On Toast, find a nearby cafe offering online ordering, choose a well-reviewed sandwich and side under $20, and stop before submitting the order.', sites: ['toasttab.com'], category: 'delivery', isExample: true },
+    { name: 'Build a late-night essentials basket', prompt: 'On Gopuff, add sparkling water, popcorn, ice cream, pain reliever, and phone charging cables to a basket, then show me the total before checkout.', sites: ['gopuff.com'], category: 'delivery', isExample: true },
+    { name: 'Make a seasonal produce order', prompt: 'On FreshDirect, build a one-week produce order for two people using seasonal fruit, salad greens, and roasting vegetables. Keep it under $55 and stop before checkout.', sites: ['freshdirect.com'], category: 'delivery', isExample: true },
+    { name: 'Compare delivery costs for pad thai', prompt: 'On Seamless, compare the delivered price and arrival estimate for pad thai from three well-rated nearby restaurants, including fees before tip.', sites: ['seamless.com'], category: 'delivery', isExample: true },
+    { name: 'Send a regional food gift', prompt: 'On Goldbelly, find three regional food gifts that serve at least four people, ship within a week, and cost under $90. Summarize what makes each distinctive.', sites: ['goldbelly.com'], category: 'delivery', isExample: true },
+    { name: 'Find help assembling a bookcase', prompt: 'On Taskrabbit, find three available furniture assemblers near me for a two-hour bookcase job this weekend, and compare rates, ratings, and earliest availability.', sites: ['taskrabbit.com'], category: 'local', isExample: true },
+    { name: 'Get quotes for a deep clean', prompt: 'On Thumbtack, find three highly-rated home cleaners near me for a one-time deep clean, and summarize estimated price, availability, and what is included.', sites: ['thumbtack.com'], category: 'local', isExample: true },
+    { name: 'Find a dentist accepting new patients', prompt: 'On Zocdoc, find three well-reviewed dentists near me who accept new patients and have an appointment next week. Show times and ratings without booking.', sites: ['zocdoc.com'], category: 'local', isExample: true },
+    { name: 'Choose a beginner yoga class', prompt: 'On ClassPass, find three beginner-friendly yoga classes near me on Saturday morning and compare distance, start time, and class style.', sites: ['classpass.com'], category: 'local', isExample: true },
+    { name: 'Find an interesting workshop this weekend', prompt: 'On Eventbrite, find three in-person workshops near me this weekend covering cooking, art, or practical skills, and summarize price and schedule.', sites: ['eventbrite.com'], category: 'local', isExample: true },
+    { name: 'Reserve a campsite for a quiet weekend', prompt: 'On Recreation.gov, find three available campsites within a three-hour drive for a two-night weekend next month, prioritizing shade, water access, and quiet.', sites: ['recreation.gov'], category: 'local', isExample: true },
+    { name: 'Book a recovery massage', prompt: 'On Mindbody, find three 60-minute massage appointments near me after 5pm this week and compare price, therapist rating, and cancellation policy.', sites: ['mindbodyonline.com'], category: 'local', isExample: true },
+    { name: 'Shortlist a dog sitter for the weekend', prompt: 'On Rover, find three highly-rated sitters near me available this weekend for one medium dog, and compare price, repeat-client count, and home setup.', sites: ['rover.com'], category: 'local', isExample: true },
+    { name: 'Build a lightweight hiking kit', prompt: 'On REI, choose a daypack, rain shell, headlamp, and water filter for beginner weekend hikes, keeping the total under $350 and explaining each pick.', sites: ['rei.com'], category: 'shopping', isExample: true },
+    { name: 'Furnish a compact guest room', prompt: 'On Wayfair, assemble a guest-room set with a full bed frame, two nightstands, and a lamp for under $700, using items rated at least four stars.', sites: ['wayfair.com'], category: 'shopping', isExample: true },
+    { name: 'Spec a quiet home-office computer', prompt: 'On Newegg, choose compatible parts for a quiet productivity PC with 32GB of memory and 2TB of storage under $1,100, then show the parts and total.', sites: ['newegg.com'], category: 'shopping', isExample: true },
+    { name: 'Compare lenses for indoor portraits', prompt: 'On B&H Photo, compare three lenses suitable for indoor portraits on a full-frame mirrorless camera, focusing on price, aperture, weight, and autofocus reviews.', sites: ['bhphotovideo.com'], category: 'shopping', isExample: true },
+    { name: 'Create a simple sensitive-skin routine', prompt: 'On Sephora, build a fragrance-free cleanser, moisturizer, and sunscreen routine for sensitive skin under $100, using products with strong reviews.', sites: ['sephora.com'], category: 'shopping', isExample: true },
+    { name: 'Put together a summer wedding outfit', prompt: 'On Nordstrom, assemble a semi-formal summer wedding outfit with shoes for under $450, prioritizing breathable fabrics and pieces available in common sizes.', sites: ['nordstrom.com'], category: 'shopping', isExample: true },
+    { name: 'Compare refurbished phones under $500', prompt: 'On Back Market, compare three unlocked refurbished phones under $500 with at least 128GB storage, including condition, warranty, battery notes, and seller rating.', sites: ['backmarket.com'], category: 'shopping', isExample: true },
+    { name: 'Choose a quiet dishwasher', prompt: 'On Lowe’s, compare three stainless dishwashers under $900 with strong drying performance and noise ratings below 48 dB, including installation cost if shown.', sites: ['lowes.com'], category: 'shopping', isExample: true },
+    { name: 'Find a lake cabin for six', prompt: 'On Vrbo, find three lakefront cabins for six people for a long weekend next month, with a dock or beach access and a total stay under $1,800.', sites: ['vrbo.com'], category: 'travel', isExample: true },
+    { name: 'Find an accessible downtown hotel', prompt: 'On Hotels.com, find three central hotels for two nights next month with step-free access, roll-in showers, and recent accessibility reviews. Compare full stay prices.', sites: ['hotels.com'], category: 'travel', isExample: true },
+    { name: 'Plan the easiest route between two cities', prompt: 'On Rome2Rio, compare train, bus, flight, and driving options between two cities I specify, including total time, transfers, and estimated cost.', sites: ['rome2rio.com'], category: 'travel', isExample: true },
+    { name: 'Price a scenic rail weekend', prompt: 'On Trainline, find round-trip rail options for a scenic weekend destination next month, leaving Friday evening and returning Sunday, with fare and transfer details.', sites: ['thetrainline.com'], category: 'travel', isExample: true },
+    { name: 'Choose a social hostel for a solo trip', prompt: 'On Hostelworld, find three highly-rated hostels in a city I choose with privacy curtains, secure lockers, and lively common spaces, then compare location and price.', sites: ['hostelworld.com'], category: 'travel', isExample: true },
+    { name: 'Find a cheap surprise weekend away', prompt: 'On Skyscanner, search everywhere for the cheapest nonstop weekend trips next month from my nearest airport and show five appealing options with fare times.', sites: ['skyscanner.com'], category: 'travel', isExample: true },
+    { name: 'Pick the best neighborhood to stay in', prompt: 'On Lonely Planet, compare the main neighborhoods in a city I choose for food, nightlife, transit, and quiet, then recommend the best fit for a first visit.', sites: ['lonelyplanet.com'], category: 'travel', isExample: true },
+    { name: 'Draft a seven-day road trip', prompt: 'On Wanderlog, build a seven-day road-trip outline between two cities I specify, balancing scenic stops, short hikes, food, and no more than four hours driving per day.', sites: ['wanderlog.com'], category: 'travel', isExample: true },
+    { name: 'Review evidence on magnesium and sleep', prompt: 'On PubMed, find three recent human studies or reviews on magnesium supplements and sleep, and summarize the population, design, and findings without overstating conclusions.', sites: ['pubmed.ncbi.nlm.nih.gov'], isExample: true },
+    { name: 'Understand changes in a software release', prompt: 'On GitHub, open the latest release notes for a repository I specify and summarize breaking changes, important fixes, and any migration steps.', sites: ['github.com'], isExample: true },
+    { name: 'Learn the Python argparse basics', prompt: 'In the official Python documentation, find the argparse tutorial and turn it into a minimal example with positional arguments, flags, help text, and common mistakes.', sites: ['docs.python.org'], isExample: true },
+    { name: 'Compare appliance reliability', prompt: 'On Consumer Reports, compare reliability and owner satisfaction for three major dishwasher brands, noting what information is available without a subscription.', sites: ['consumerreports.org'], isExample: true },
+    { name: 'Check the upcoming launch calendar', prompt: 'On NASA, list the next five scheduled launches or major mission events, with dates, mission goals, and where to watch when available.', sites: ['nasa.gov'], isExample: true },
+    { name: 'Find historic photos of a neighborhood', prompt: 'In the Library of Congress digital collections, find five historic photographs related to a city or neighborhood I specify and summarize their dates and context.', sites: ['loc.gov'], isExample: true },
+    { name: 'Find where a film is streaming', prompt: 'On JustWatch, check where a movie I name is currently available to stream, rent, or buy, and compare prices and subscription options.', sites: ['justwatch.com'], isExample: true },
+    { name: 'Prepare for an interview at a company', prompt: 'On Glassdoor, review recent interview reports for a company and role I specify, then summarize the process, recurring question types, and reported difficulty.', sites: ['glassdoor.com'], isExample: true },
   ];
 
-  function initLaunchpad(){
+  // ── launchpad lifecycle: three separate jobs (2026-07-18) ─────────────────
+  // The old initializer conflated them and bailed on `if (log.children.length)
+  // return` BEFORE any wiring — a device restoring a nonempty session painted
+  // the splash with ZERO live listeners (cards, pills, X, HOME, theme, composer
+  // all dead) and never fetched /operator/tasks. Desktop escaped only because
+  // a cached MAN mode CSS-hides the splash; a cached AUTO mode (the iPad) sat
+  // on a fully-drawn, fully-inert welcome screen with the cockpit CSS-hidden
+  // underneath. The split:
+  //   wireLaunchpadControls()   one-time controller build + event wiring —
+  //                             always runs when the DOM exists, regardless of
+  //                             log/session state or backend availability
+  //   ctl.showDefault()         reset to the examples view (Browse, page 0)
+  //   ctl.syncVisibility()      the ONLY layer that lets log/surface state
+  //                             decide whether the splash is on screen
+  //   ctl.refreshTasks()        saved-task hydration (the fetch that marks a
+  //                             COMPLETED init — keep it last)
+  // initLaunchpad() orchestrates all four and stays the entry point for boot,
+  // trash-clear, and the return-to-browser surface switch.
+  function _lpBuild(){
     const lp = document.getElementById('op-lp');
     const grid = document.getElementById('op-lp-grid');
-    if (!lp || !grid) return;
-    // Saved tasks are a browser-surface concept — they carry site connectors and
-    // steer a web page. Don't show the launchpad on sandbox/computer surfaces.
-    if (typeof _isGameSurface === 'function' && _isGameSurface()) { lp.hidden = true; return; }
-    if (log.children.length) return;             // conversation already going
+    if (!lp || !grid) return null;
     const TASKS_URL = OP_URLS.tasks;
     const refreshBtn = document.getElementById('op-lp-refresh');
     const searchBtn  = document.getElementById('op-lp-search');
@@ -1794,12 +1899,23 @@
     const searchIn   = document.getElementById('op-lp-searchinput');
     const searchClr  = document.getElementById('op-lp-searchclear');
     const emptyEl    = document.getElementById('op-lp-empty');
-    const emptyQEl   = document.getElementById('op-lp-empty-q');
+    const heroInput  = document.getElementById('op-lp-input');
+    const heroSend   = document.getElementById('op-lp-send');
+    const lpTitle    = document.getElementById('op-lp-title');
+    const addBtn     = document.getElementById('op-lp-add');
+    const tasksTgl   = document.getElementById('op-lp-tasks-toggle');
+    const themeBtn   = document.getElementById('op-lp-theme');
+    const catBtns    = Array.from(document.querySelectorAll('.op-lp-cat'))
+      .filter(b => b.id !== 'op-lp-tasks-toggle');   // Saved tasks switches sources; the others filter examples
     let exOffset = 0;   // ↻ advances the example rotation bucket
     let searchQ  = '';  // live task filter (empty = default view)
-    let _lpEmpty = true; // current launchpad state: true = examples, false = saved tasks
-    let savedPage = 0;  // which window of 8 saved tasks is showing (auto-cycle pages through)
-    const _LP_PAGE = 8; // cards per launchpad page
+    let activeCat = 'all';
+    let _lpExamples = true; // examples are the welcome default; Saved tasks is an explicit source switch
+    let savedPage = 0;  // which window of 6 saved tasks is showing (auto-cycle pages through)
+    // true only while the splash was deliberately reopened (HOME) over a live
+    // conversation — the log-growth watchdog must not yank THAT splash away.
+    let _userOpened = false;
+    const _LP_PAGE = 6; // three desktop columns × two rows
 
     // Match a task against the query across name + prompt + site connectors, so
     // "amazon" finds a task whose only amazon signal is a site pill.
@@ -1809,72 +1925,162 @@
       return q.split(/\s+/).every(w => hay.includes(w));   // AND across words
     }
 
+    // The old Operator homepage grouped its starters by intent. Keep the data
+    // model lean: connectors already tell us enough to classify cards without
+    // persisting another field in every saved task.
+    function _taskCategory(t){
+      if (t.category) return t.category;
+      const sites = (t.sites || []).join(' ').toLowerCase();
+      if (/(ubereats|doordash|instacart|grubhub)/.test(sites)) return 'delivery';
+      if (/(kayak|booking|airbnb|expedia|tripadvisor|flights\.google)/.test(sites)) return 'travel';
+      if (/(wikipedia|arxiv|stackoverflow|wolframalpha|coursera|wikihow|nih\.gov|investopedia|khanacademy|pubmed|docs\.python|consumerreports|nasa\.gov|loc\.gov|glassdoor)/.test(sites)) return 'research';
+      if (/(spotify|imdb|goodreads|espn|nytimes|reddit|rottentomatoes|bandcamp|fandango|bookshop|justwatch|seatgeek|ticketmaster)/.test(sites)) return 'media';
+      if (/(amazon|bestbuy|target|costco|etsy|ikea|homedepot|chewy|petco|bookshop)/.test(sites)) return 'shopping';
+      if (/(yelp|opentable|resy|alltrails|yellowpages|sfmoma|fandango|offerup)/.test(sites)) return 'local';
+      return 'all';
+    }
+
     // (Re)render the grid. 🔍 search works in BOTH states: it filters the
-    // rotating examples when you have none saved, and your saved tasks when you
-    // do (across ALL of them, not just the first 8). With no active query, the
-    // saved-tasks view stays capped at 8 so it doesn't sprawl. ↻ shuffles and is
+    // rotating examples and saved tasks. Every view is capped at six so the
+    // desktop grid remains exactly two rows. ↻ shuffles and is
     // examples-only; 🔍 is always available whenever the launchpad is open.
-    function renderGrid(isEmpty){
-      _lpEmpty = isEmpty;   // remember which set we're showing (handlers re-render this state)
-      const source = isEmpty ? _pickExamples(exOffset) : window._opTasks;
+    function renderGrid(showExamples){
+      _lpExamples = showExamples;
+      let source = showExamples ? _pickExamples(exOffset) : window._opTasks;
+      if (activeCat !== 'all') {
+        // Category views search the full example pool, not only the current
+        // rotation bucket, or a perfectly valid category could appear empty.
+        source = (showExamples ? _LP_EXAMPLE_POOL : window._opTasks)
+          .filter(t => _taskCategory(t) === activeCat).slice(0, _LP_SHOW);
+      }
       let items, filtering = false;
       if (searchQ) {
         filtering = true;
-        items = source.filter(t => _taskMatches(t, searchQ));   // all matches, uncapped
-      } else if (isEmpty) {
-        items = source;                                          // examples: _pickExamples already caps at 8
+        items = source.filter(t => _taskMatches(t, searchQ)).slice(0, _LP_PAGE);
+      } else if (showExamples) {
+        items = source;                                          // examples: _pickExamples already caps at 6
       } else {
-        // saved tasks: show one page of 8; auto-cycle pages through the rest.
+        // saved tasks: show one two-row page; auto-cycle pages through the rest.
         const pages = Math.max(1, Math.ceil(source.length / _LP_PAGE));
         savedPage = ((savedPage % pages) + pages) % pages;       // wrap + guard against shrink
         items = source.slice(savedPage * _LP_PAGE, savedPage * _LP_PAGE + _LP_PAGE);
       }
       grid.textContent = '';
-      grid.classList.toggle('op-lp-examples', isEmpty);
+      grid.classList.toggle('op-lp-examples', showExamples);
       items.forEach(t => grid.appendChild(buildLpCard(t, lp)));
-      // "Save a task" tile is a create affordance, not a result — drop it while filtering
-      if (!filtering) {
-        const add = document.createElement('button'); add.type = 'button'; add.className = 'op-lp-card op-lp-new';
-        add.textContent = '＋ Save a task';
-        add.addEventListener('click', () => { if (window._opOpenSaveModal) window._opOpenSaveModal(); });
-        grid.appendChild(add);
-      }
+      // Heading follows the active category  — expanded copy,
+      // not the pill's terse label; Browse keeps the classic line.
+      const _CAT_TITLES = {
+        delivery: 'Order food and groceries',
+        local:    'Explore places nearby',
+        shopping: 'Shop for anything',
+        travel:   'Plan trips and getaways',
+        research: 'Research and learn',
+        media:    'Music, movies, and more',
+      };
+      if (lpTitle) lpTitle.textContent = !showExamples ? 'Saved tasks'
+        : (_CAT_TITLES[activeCat] || 'Things to do with Operator');
       if (emptyEl) {
-        const noHits = filtering && !items.length;
-        emptyEl.hidden = !noHits;
-        if (noHits && emptyQEl) emptyQEl.textContent = searchQ;
+        const noHits = (filtering || activeCat !== 'all') && !items.length;
+        const noSaved = !showExamples && !items.length && !noHits;   // empty Saved view, no filter
+        emptyEl.hidden = !(noHits || noSaved);
+        if (noSaved) {
+          emptyEl.textContent = 'No saved tasks';
+        } else if (noHits) {
+          emptyEl.textContent = '';
+          const q = document.createElement('span');
+          q.id = 'op-lp-empty-q';
+          q.textContent = searchQ || activeCat;
+          emptyEl.append('No tasks match “', q, '”');
+        }
       }
       // ↻ shuffles examples (examples-state only); 🔍 is always shown so search is
       // reachable whether you're looking at your saved tasks or the examples.
-      if (refreshBtn) refreshBtn.hidden = !isEmpty;
+      if (refreshBtn) refreshBtn.hidden = !showExamples;
       if (searchBtn)  searchBtn.hidden  = false;
     }
 
-    (async () => {
-      let tasks = [];
-      try { const d = await (await fetch(TASKS_URL)).json(); tasks = d.ok ? (d.tasks || []) : []; } catch {}
-      if (log.children.length) return;           // something started while fetching
-      window._opTasks = tasks;
-      const isEmpty = !tasks.length;
-      renderGrid(isEmpty);
+    // One transition path for every discrete splash-state change. Search stays
+    // immediate while typing; categories, shuffle, saved/examples, and cycling
+    // cross-fade the fixed grid without moving its geometry.
+    let _gridSwapTimer = null, _gridSwapSeq = 0;
+    function swapGrid(showExamples){
+      const seq = ++_gridSwapSeq;
+      clearTimeout(_gridSwapTimer);
+      grid.classList.add('op-lp-fading');
+      _gridSwapTimer = setTimeout(() => {
+        if (seq !== _gridSwapSeq) return;
+        renderGrid(showExamples);
+        requestAnimationFrame(() => grid.classList.remove('op-lp-fading'));
+      }, 210);
+    }
+
+    function showBrowseSource(){
+      activeCat = 'all'; savedPage = 0;
+      catBtns.forEach((b, i) => {
+        b.classList.toggle('active', i === 0);
+        b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+      });
+      if (tasksTgl) {
+        tasksTgl.classList.remove('active');
+        tasksTgl.setAttribute('aria-pressed', 'false');
+      }
+    }
+
+    function syncSavedToggle(){
+      // Saved is a PERMANENT category  — an empty list shows
+      // a minimal "No saved tasks" state instead of hiding the tab. If tasks
+      // vanish while the saved view is open, repaint in place (no jarring
+      // bounce back to Browse).
+      if (tasksTgl) tasksTgl.hidden = false;
+      if (!(window._opTasks || []).length && !_lpExamples) {
+        renderGrid(false);
+        grid.classList.remove('op-lp-fading');
+      }
+    }
+
+    async function refreshLaunchpadTasks(){
+      try {
+        const d = await (await fetch(TASKS_URL)).json();
+        window._opTasks = d.ok ? (d.tasks || []) : [];
+      } catch {
+        window._opTasks = [];
+      }
+      syncSavedToggle();
+      if (!_lpExamples && !log.children.length && window._opTasks.length) swapGrid(false);
+    }
+    window._opRefreshLaunchpadTasks = refreshLaunchpadTasks;
+
+    // Examples are local data: paint them immediately instead of leaving the
+    // welcome screen blank while the saved-tasks request is in flight.
+    window._opTasks = window._opTasks || [];
+    syncSavedToggle();
+    renderGrid(true);
+    // factory scope (not inside the searchBtn wiring): showDefault() also
+    // needs to close the search row when the splash resets.
+    const setSearchOpen = (open) => {
+      if (!searchRow || !searchIn) return;
+      searchRow.hidden = !open;
+      if (searchBtn) {
+        searchBtn.setAttribute('aria-pressed', open ? 'true' : 'false');
+        searchBtn.classList.toggle('op-lp-search-on', open);
+      }
+      searchIn.placeholder = _lpExamples ? 'Search examples…' : 'Search saved tasks…';
+      if (open) { searchIn.focus(); searchIn.select(); }
+      else { searchQ = ''; searchIn.value = ''; if (searchClr) searchClr.hidden = true; renderGrid(_lpExamples); }
+    };
+    // ── control wiring: unconditional, once (this factory runs once) ──
+    {
       if (refreshBtn && !refreshBtn._wired) { refreshBtn._wired = true;
         refreshBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           exOffset++;                       // next rotation bucket
-          renderGrid(true);                 // ↻ only exists in the empty state
+          swapGrid(true);                   // ↻ only exists in the examples state
           refreshBtn.classList.remove('op-spin'); void refreshBtn.offsetWidth;  // restart the spin
           refreshBtn.classList.add('op-spin');
         });
       }
       if (searchBtn && !searchBtn._wired) { searchBtn._wired = true;
-        const setSearchOpen = (open) => {
-          searchRow.hidden = !open;
-          searchBtn.setAttribute('aria-pressed', open ? 'true' : 'false');
-          searchBtn.classList.toggle('op-lp-search-on', open);
-          searchIn.placeholder = _lpEmpty ? 'Search examples…' : 'Search saved tasks…';
-          if (open) { searchIn.focus(); searchIn.select(); }
-          else { searchQ = ''; searchIn.value = ''; if (searchClr) searchClr.hidden = true; renderGrid(_lpEmpty); }
-        };
         searchBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           setSearchOpen(searchRow.hidden);   // toggle
@@ -1882,25 +2088,157 @@
         searchIn.addEventListener('input', () => {
           searchQ = searchIn.value.trim().toLowerCase();
           if (searchClr) searchClr.hidden = !searchIn.value;
-          renderGrid(_lpEmpty);
+          renderGrid(_lpExamples);
         });
         searchIn.addEventListener('keydown', (e) => {
           if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSearchOpen(false); searchBtn.focus(); }
         });
         if (searchClr) searchClr.addEventListener('click', (e) => {
           e.stopPropagation(); searchIn.value = ''; searchQ = ''; searchClr.hidden = true;
-          renderGrid(_lpEmpty); searchIn.focus();
+          renderGrid(_lpExamples); searchIn.focus();
         });
       }
+      if (heroInput && !heroInput._wired) { heroInput._wired = true;
+        const heroComposer = heroInput.closest('.op-lp-composer');
+        if (heroComposer && !heroComposer._focusWired) {
+          heroComposer._focusWired = true;
+          heroComposer.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            heroInput.focus();
+          });
+        }
+        // Scale-aware measure-and-set. On coarse-pointer WebKit the input is
+        // computed-16px painted at 0.7x (see the .op-lp-input @supports note),
+        // so the LAYOUT box runs 1/0.7 tall/wide of what's painted: cap and
+        // pill growth are figured in PAINTED pixels, and the phantom 30% of
+        // layout height is trimmed with a negative bottom margin — clean in
+        // the composer's block flow (it fought flex centering, 2026-07-18).
+        // Everywhere else paintScale is 1 and this is the rail's plain grow.
+        let heroGrowFrame = 0;
+        const HERO_VISUAL_CAP = 140;   // ~9 painted lines, rail parity — then scroll
+        const autoGrowHero = () => {
+          cancelAnimationFrame(heroGrowFrame);
+          heroGrowFrame = requestAnimationFrame(() => {
+            if (!heroInput.offsetWidth) return;   // splash display:none — nothing to measure
+            heroInput.style.height = 'auto';
+            heroInput.style.marginBottom = '0px';
+            const paintScale = Math.max(0.1,
+              heroInput.getBoundingClientRect().width / heroInput.offsetWidth);
+            const layoutCap = HERO_VISUAL_CAP / paintScale;
+            const fullHeight = heroInput.scrollHeight;
+            const layoutHeight = Math.min(fullHeight, layoutCap);
+            heroInput.style.height = layoutHeight + 'px';
+            heroInput.style.marginBottom = -(layoutHeight * (1 - paintScale)) + 'px';
+            heroInput.style.overflowY = fullHeight > layoutCap + 1 ? 'auto' : 'hidden';
+          });
+        };
+        heroInput.addEventListener('input', autoGrowHero);
+        autoGrowHero();
+        const runHero = () => {
+          const txt = heroInput.value.trim();
+          if (!txt) { heroInput.focus(); return; }
+          input.value = txt;
+          heroInput.value = '';
+          autoGrowHero();
+          lp.hidden = true; _userOpened = false;
+          submit();
+        };
+        heroInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runHero(); }
+        });
+        if (heroSend) heroSend.addEventListener('click', runHero);
+      }
+      catBtns.forEach(btn => { if (!btn._wired) { btn._wired = true;
+        btn.addEventListener('click', () => {
+          lp.classList.remove('op-lp-collapsed');
+          activeCat = btn.dataset.category || 'all';
+          catBtns.forEach(b => {
+            const on = b === btn;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+          });
+          if (tasksTgl) { tasksTgl.classList.remove('active'); tasksTgl.setAttribute('aria-pressed', 'false'); }
+          swapGrid(true);
+        });
+      } });
       const xBtn = document.getElementById('op-lp-x');
       if (xBtn && !xBtn._wired) { xBtn._wired = true;
-        xBtn.addEventListener('click', (e) => { e.stopPropagation(); lp.hidden = true; }); }
-      // the X is the ONLY dismiss — a stray backdrop tap must not drop the
-      // launchpad 
+        xBtn.addEventListener('click', (e) => { e.stopPropagation();
+          lp.hidden = true; _userOpened = false;
+          lp.classList.remove('op-lp-over');   // next open starts from the clean splash
+        }); }
+      // return-to-splash: the header HOME button reopens the solid splash at
+      // any point, mid-conversation included (tasks minimized, no blur —
+      // the trash's over-the-feed presentation is separate). Forerunner of
+      // the sessions sidebar's "new task" entry.
+      const openBtn = document.getElementById('op-lp-open');
+      if (openBtn && !openBtn._wired) { openBtn._wired = true;
+        openBtn.addEventListener('click', (e) => { e.stopPropagation();
+          lp.classList.remove('op-lp-over');
+          lp.classList.remove('op-lp-collapsed');
+          showBrowseSource();
+          renderGrid(true);
+          _userOpened = true;              // deliberate reopen — watchdog hands off
+          lp.hidden = false; }); }
+      // Saved tasks is a data-source pill, not a visibility prerequisite.
+      if (tasksTgl && !tasksTgl._wired) { tasksTgl._wired = true;
+        tasksTgl.addEventListener('click', (e) => { e.stopPropagation();
+          lp.classList.remove('op-lp-collapsed');
+          activeCat = 'all'; savedPage = 0;
+          catBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
+          tasksTgl.classList.add('active'); tasksTgl.setAttribute('aria-pressed', 'true');
+          swapGrid(false); }); }
+      if (addBtn && !addBtn._wired) { addBtn._wired = true;
+        addBtn.addEventListener('click', (e) => { e.stopPropagation();
+          if (window._opOpenSaveModal) window._opOpenSaveModal(); }); }
+      if (themeBtn && !themeBtn._wired) { themeBtn._wired = true;
+        const syncThemeButton = () => {
+          const light = document.documentElement.getAttribute('data-theme') === 'light';
+          const label = light ? 'use dark mode' : 'use light mode';
+          themeBtn.setAttribute('aria-label', label); themeBtn.title = label;
+        };
+        themeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const light = document.documentElement.getAttribute('data-theme') === 'light';
+          const next = light ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', next);
+          try { localStorage.setItem('op_theme', next); } catch (_) {}
+          syncThemeButton();
+        });
+        new MutationObserver(syncThemeButton).observe(document.documentElement,
+          {attributes: true, attributeFilter: ['data-theme']});
+        syncThemeButton();
+      }
+      if (!lp._collapseWired) { lp._collapseWired = true;
+        lp.addEventListener('click', (e) => {
+          // The central assembly owns a compact 24px interaction halo. Using
+          // e.target alone made the viewport-wide results wrapper swallow huge
+          // empty regions; requiring the literal backdrop made collapse feel
+          // arbitrarily far away. Geometry keeps the hitbox stable regardless
+          // of which layout wrapper happens to receive the click.
+          const hit = [lp.querySelector('.op-lp-hero'), lp.querySelector('.op-lp-results')]
+            .filter(Boolean).map(el => el.getBoundingClientRect());
+          const pad = 24;
+          const inside = hit.length && e.clientX >= Math.min(...hit.map(r => r.left)) - pad
+            && e.clientX <= Math.max(...hit.map(r => r.right)) + pad
+            && e.clientY >= Math.min(...hit.map(r => r.top)) - pad
+            && e.clientY <= Math.max(...hit.map(r => r.bottom)) + pad;
+          if (inside) return;
+          lp.classList.add('op-lp-collapsed');
+          activeCat = 'all';
+          catBtns.forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-pressed', 'false');
+          });
+          if (tasksTgl) {
+            tasksTgl.classList.remove('active');
+            tasksTgl.setAttribute('aria-pressed', 'false');
+          }
+        }); }
 
       // ── Auto-cycle (#1): rotate the visible cards every 15s with a smooth
       // cross-fade. Examples advance the shuffle bucket; saved tasks page through
-      // in windows of 8. Frozen while the user is searching or hovering a card, or
+      // in windows of 6. Frozen while the user is searching or hovering a card, or
       // when the tab is backgrounded — never yank a card out from under a click. ──
       const CYCLE_MS = 15000;
       let _hovered = false;
@@ -1912,32 +2250,65 @@
         if (_hovered) return;                                    // about to click a card
         if (document.hidden) return;                             // backgrounded tab
         // Only cycle when there's more than one page/bucket to show.
-        if (!_lpEmpty) {
+        if (!_lpExamples) {
           const pages = Math.ceil((window._opTasks || []).length / _LP_PAGE);
-          if (pages <= 1) return;                                // ≤8 saved tasks: nothing to rotate
+          if (pages <= 1) return;                                // ≤6 saved tasks: nothing to rotate
           savedPage++;
         } else {
           exOffset++;                                            // next example bucket
         }
-        // cross-fade: fade the grid out, swap contents, fade back in (staggered
-        // per-card pop re-fires on the fresh cards for a lively re-entry).
-        grid.classList.add('op-lp-fading');
-        setTimeout(() => {
-          renderGrid(_lpEmpty);
-          grid.classList.remove('op-lp-fading');
-        }, 240);                                                 // matches --op-lp-fade in CSS
+        swapGrid(_lpExamples);
       }
       if (!grid._cycle) grid._cycle = setInterval(_cycleTick, CYCLE_MS);
+    }
 
-      lp.hidden = false;
-      new MutationObserver((m, obs) => {
-        if (log.children.length) {
-          lp.hidden = true;
-          if (grid._cycle) { clearInterval(grid._cycle); grid._cycle = null; }   // no leaked timer
-          obs.disconnect();
-        }
-      }).observe(log, { childList: true });
-    })();
+    // Conversation-starts watchdog: a log that gains children while the splash
+    // sits in its boot presentation hides it — that's how the fresh-device
+    // server-session adoption swap yields to the restored chat. A splash the
+    // user deliberately reopened (HOME) stays put; _cycleTick no-ops while
+    // hidden, so the 15s timer idling on is harmless (not a leak).
+    new MutationObserver(() => {
+      if (log.children.length && !_userOpened) lp.hidden = true;
+    }).observe(log, { childList: true });
+
+    return {
+      // reset to the examples default: Browse source, page 0, search closed —
+      // the presentation boot/trash/surface-return expect.
+      showDefault(){
+        _userOpened = false;
+        activeCat = 'all'; savedPage = 0;
+        if (searchRow && !searchRow.hidden) setSearchOpen(false);
+        else { searchQ = ''; if (searchIn) searchIn.value = ''; if (searchClr) searchClr.hidden = true; }
+        showBrowseSource();
+        renderGrid(true);
+        grid.classList.remove('op-lp-fading');
+        // Default is the COLLAPSED assembly — wordmark + composer + pills, no
+        // example grid (the same state click-away produces; the owner 2026-07-19).
+        // Any pill/search interaction expands it, as already wired.
+        lp.classList.add('op-lp-collapsed');
+      },
+      // the ONLY place session/surface state decides splash visibility
+      syncVisibility(){
+        lp.hidden = (typeof _isGameSurface === 'function' && _isGameSurface())
+          || !!log.children.length;
+        if (lp.hidden) _userOpened = false;
+      },
+      refreshTasks: refreshLaunchpadTasks,
+    };
+  }
+  function wireLaunchpadControls(){
+    if (!_lpCtl) _lpCtl = _lpBuild();
+    return _lpCtl;
+  }
+  function initLaunchpad(){
+    const ctl = wireLaunchpadControls();
+    if (!ctl) return;
+    ctl.showDefault();
+    ctl.syncVisibility();
+    // Saved tasks hydrate in the background, LAST — local examples and every
+    // control are usable immediately, even on a slow request. This fetch is
+    // also the completed-init marker the production probe watches for.
+    ctl.refreshTasks();
   }
 
   // one launchpad card — shared by saved tasks and the example set.
@@ -2002,6 +2373,8 @@
     // another card just swaps the draft . Never auto-fires. Go/Edit stopPropagation.
     c.addEventListener('click', () => {
       input.value = t.prompt || '';
+      const heroInput = document.getElementById('op-lp-input');
+      if (heroInput) { heroInput.value = t.prompt || ''; heroInput.focus(); }
       if (typeof autoGrow === 'function') autoGrow();
       if (typeof refreshSendButton === 'function') refreshSendButton();
     });
@@ -2099,7 +2472,11 @@
       const pill = document.createElement('span'); pill.className = 'op-nt-pill'; pill.dataset.v = val;
       if (meta.tool || /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(val) || meta.ico)
         pill.appendChild(pillIcon(meta.tool ? meta : {v: val, ico: meta.ico}));
-      const tx = document.createElement('span'); tx.textContent = val; pill.appendChild(tx);
+      const tx = document.createElement('span');
+      const dom = val.split('/')[0];
+      tx.textContent = meta.tool ? val : _siteLabel(dom);
+      if (!meta.tool && tx.textContent !== val) pill.title = val;
+      pill.appendChild(tx);
       const x = document.createElement('span'); x.className = 'op-nt-pill-x';
       x.innerHTML = '<svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"></path></svg>';
       x.addEventListener('click', () => { _pills = _pills.filter(p => p.v !== val); pill.remove(); renderSug(); });
@@ -2116,7 +2493,10 @@
       rows.forEach(c => {
         const r = document.createElement('div'); r.className = 'op-nt-sug-row';
         r.appendChild(pillIcon(c));
-        const t = document.createElement('span'); t.textContent = c.v; r.appendChild(t);
+        const t = document.createElement('span');
+        t.textContent = c.tool ? c.v : _siteLabel(c.v.split('/')[0]);
+        if (!c.tool && t.textContent !== c.v) r.title = c.v;
+        r.appendChild(t);
         if (c.tool) { const k = document.createElement('span'); k.className = 'op-nt-sug-kind'; k.textContent = 'MCP'; r.appendChild(k); }
         const plus = document.createElement('span'); plus.className = 'op-nt-sug-add'; plus.textContent = '＋';
         r.appendChild(plus);
@@ -2175,7 +2555,7 @@
     }
     function schedHuman(){
       const rep = repSel.value, {m} = _timeParts();
-      if (!rep) return '';   // "Manual only" is self-explanatory — no helper line
+      if (!rep) return '';   // "None" is self-explanatory — no helper line
       if (rep === 'hourly')   return 'Runs every hour at :' + String(m).padStart(2, '0') + '.';
       if (rep === 'daily')    return 'Runs every day at ' + _fmtTime() + '.';
       if (rep === 'weekdays') return 'Runs Mon–Fri at ' + _fmtTime() + '.';
@@ -2250,7 +2630,10 @@
       try {
         const r = await fetch(TASKS_URL + '/' + encodeURIComponent(_editSlug), { method: 'DELETE' });
         const d = await r.json().catch(() => ({}));
-        if (d.ok) { logRes('deleted', true); closeModal(); if (typeof initLaunchpad === 'function') { try { initLaunchpad(); } catch(_){} } }
+        if (d.ok) {
+          logRes('deleted', true); closeModal();
+          if (window._opRefreshLaunchpadTasks) await window._opRefreshLaunchpadTasks();
+        }
         else logRes(d.error || 'delete failed', false);
       } catch { logRes('delete failed', false); }
     }
@@ -2269,7 +2652,15 @@
       if (_editSlug) body.slug = _editSlug;   // update in place
       try { const d = await (await fetch(TASKS_URL, { method:'POST',
           headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
-        if (d.ok) { logRes('saved “' + n + '”', true); closeModal(); }
+        if (d.ok) {
+          const launchpad = document.getElementById('op-lp');
+          // Saving from the homepage is launchpad state, not a conversation
+          // event. Logging it would add the first chat row and dismiss the
+          // entire splash just as its new Saved pill becomes available.
+          if (!launchpad || launchpad.hidden) logRes('saved “' + n + '”', true);
+          closeModal();
+          if (window._opRefreshLaunchpadTasks) await window._opRefreshLaunchpadTasks();
+        }
         else logRes(d.error || 'save failed', false); }
       catch { logRes('save failed', false); }
     }
@@ -2391,7 +2782,11 @@
       if (_armedDel !== slug) { _armedDel = slug; render(); return; }
       _armedDel = '';
       try { const d = await (await fetch(DEL_URL.replace('__S__', encodeURIComponent(slug)), { method: 'DELETE' })).json();
-        if (d.ok) { await refresh(); logRes('deleted', true); } } catch {}
+        if (d.ok) {
+          await refresh();
+          if (window._opRefreshLaunchpadTasks) await window._opRefreshLaunchpadTasks();
+          logRes('deleted', true);
+        } } catch {}
       render();
     }
 
@@ -2441,7 +2836,11 @@
                      bot: last.bot || '', model: last.model || '', effort: last.effort || '' };
       try { const d = await (await fetch(TASKS_URL, { method: 'POST',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-        if (d.ok) { await refresh(); logRes('saved “' + name + '”', true); }
+        if (d.ok) {
+          await refresh();
+          if (window._opRefreshLaunchpadTasks) await window._opRefreshLaunchpadTasks();
+          logRes('saved “' + name + '”', true);
+        }
         else logRes(d.error || 'save failed', false); }
       catch { logRes('save failed', false); }
       input.value = ''; autoGrow(); refreshSendButton(); close(); input.focus();
@@ -3503,17 +3902,17 @@
     } catch { logRes('failed to start agent', false); settleAction(false); }
   }
   async function submit(){
-    const txt = input.value.trim(); if(!txt) return; input.value=''; input.style.height='auto'; if(typeof refreshSendButton==='function') refreshSendButton();
+    const txt = input.value.trim(); if(!txt) return; input.value=''; autoGrow(); if(typeof refreshSendButton==='function') refreshSendButton();
     if (MODE === 'auto') {
       logUser(txt);
       if (_inFlight) {
-        // INTERRUPT-STEER (restored 2026-07-12): a mid-run message stops
+        // INTERRUPT-STEER (restored 2026-07-12, the owner): a mid-run message stops
         // the current turn and immediately redirects the bot — barge-in, not a
         // polite queue. The 1.0.12 soft-steer ("lands at the agent's next step",
-        // delivered via SAY_URL) read as sluggish; the old stop+re-dispatch
-        // "worked well enough." This is intentional steering, NOT an error —
-        // close the current turn quietly as "Steered" (no Interrupted/error UI,
-        // no extra message). Stop (■) is unchanged.
+        // delivered via SAY_URL) was never asked for and read as sluggish; the
+        // old stop+re-dispatch "worked well enough." This is intentional
+        // steering, NOT an error — close the current turn quietly as "Steered"
+        // (no Interrupted/error UI, no extra message). Stop (■) is unchanged.
         _interrupting = true; _steering = true;   // hard-suppress terminal handling until the new run is RUNNING
         try { await fetch(STOP_URL, {method:'POST'}); } catch(_){}
         if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
@@ -3581,20 +3980,18 @@
   send.addEventListener('click', () => {
     if (_inFlight && !input.value.trim()) stopAgent(); else submit();
   });
-  // The naive version (height='auto' write, then scrollHeight read) forced a
-  // full re-layout of the container-query rail — chat log included — on EVERY
-  // keystroke, on top of the layout the typed character already costs. On
-  // iPhone that doubled per-key work and read as input lag (2026-07-12).
-  // Cheap path: plain reads on clean layout; the dirty auto-dance runs only
-  // when content grew past the box or shrank (deletion).
-  let _growLastLen = 0;
+  // Batch textarea measurement into one animation frame. The former 84px hard
+  // cap made ordinary multiline drafts scroll while they still had ample rail
+  // room, and its clean-layout shortcut could miss wrapped-line growth.
+  let _growFrame = 0;
   function autoGrow(){
-    const len = input.value.length;
-    const shrunk = len < _growLastLen;
-    _growLastLen = len;
-    if (!shrunk && input.scrollHeight <= input.clientHeight) return;   // fits — nothing to grow
-    if (!shrunk && input.clientHeight >= 80) return;                   // already at the 84px cap — growth can't show
-    input.style.height='auto'; input.style.height=Math.min(input.scrollHeight, 84)+'px';
+    cancelAnimationFrame(_growFrame);
+    _growFrame = requestAnimationFrame(() => {
+      input.style.height = 'auto';
+      const fullHeight = input.scrollHeight;
+      input.style.height = Math.min(fullHeight, 140) + 'px';
+      input.style.overflowY = fullHeight > 140 ? 'auto' : 'hidden';
+    });
   }
   input.addEventListener('input', () => { autoGrow(); refreshSendButton(); });
   input.addEventListener('keydown', e => {
@@ -3662,8 +4059,10 @@
   stage.addEventListener('pointercancel', e => { try{stage.releasePointerCapture(e.pointerId);}catch(_){} if(_holdTimer){clearTimeout(_holdTimer);_holdTimer=null;} _holding=false; _dragging=false; _down=null; });
 
   // ── native TOUCH handlers (iPad/iOS): Pointer Events for touch are unreliable on
-  //    a non-button <div>, so drive touch directly. touchstart preventDefault stops
-  //    Safari's scroll/zoom/callout from hijacking the gesture. A >220ms stationary
+  //    a non-button <div>, so drive touch directly. CSS touch-action:pinch-zoom
+  //    blocks one-finger page panning while leaving two-finger page zoom native.
+  //    Do not cancel touchstart: doing so also cancels a pinch whose second finger
+  //    lands after the first. A >220ms stationary
   //    press becomes a real page mousedown→…→mouseup (captcha "hold to verify"); a
   //    quick tap fires a single click. We fully own touch here — the synthetic click
   //    that iOS emits after touchend is swallowed by _touchHandled. ──
@@ -3688,7 +4087,6 @@
     }
     const t = e.touches[0];
     const n = viewToNorm(t.clientX, t.clientY); if (!n) return;
-    e.preventDefault();
     _tN = n; _tStart = {n, cx:t.clientX, cy:t.clientY};
     _tHolding = false; _tDragging = false; _touchHandled = true;
     stage.focus();
@@ -3820,13 +4218,14 @@
   // key_up on release) so holding an arrow gives smooth continuous movement in the bot
   // browser (native key-repeat) instead of laggy per-repeat HTTP round-trips.
   const _heldKeys = new Set();
-  stage.addEventListener('keydown', e => { if(e.metaKey||e.ctrlKey||e.altKey) return;
+  stage.addEventListener('keydown', e => { if(e.target!==stage || e.metaKey||e.ctrlKey||e.altKey) return;
     if(e.key.length===1){ e.preventDefault(); act({kind:'type',value:e.key}, null, true); }
     else if(PASS[e.key]){ e.preventDefault();
       if(e.repeat) return;                       // ignore OS auto-repeat — bot Chrome repeats the held key
       _heldKeys.add(PASS[e.key]);
       act({kind:'key_down',value:PASS[e.key]}, null, true); } });
   stage.addEventListener('keyup', e => {
+    if(e.target!==stage) return;
     if(PASS[e.key] && _heldKeys.has(PASS[e.key])){ e.preventDefault();
       _heldKeys.delete(PASS[e.key]);
       act({kind:'key_up',value:PASS[e.key]}, null, true); } });
