@@ -38,6 +38,7 @@ _JPEG_B64 = base64.b64encode(OV._PLACEHOLDER_JPEG).decode()
 class FakeSess:
     def __init__(self):
         self.sent = []
+        self.detached = 0
 
     async def send(self, method, params=None):
         self.sent.append((method, params))
@@ -48,16 +49,19 @@ class FakeSess:
         return {}
 
     async def detach(self):
-        pass
+        self.detached += 1
 
 
 class FakePage:
     def __init__(self, ctx):
         self._ctx = ctx
         self.url = "about:blank"
+        self.evaluated = []
+        self._closed = False
+        self.fronted = 0
 
     def is_closed(self):
-        return False
+        return self._closed
 
     @property
     def context(self):
@@ -68,6 +72,7 @@ class FakePage:
         return {"width": 1280, "height": 800}
 
     async def evaluate(self, expr, *args):
+        self.evaluated.append((expr, args))
         if "innerWidth" in expr:
             return {"w": 1280, "h": 800}
         if "visibilityState" in expr:
@@ -75,7 +80,10 @@ class FakePage:
         return None
 
     async def bring_to_front(self):
-        pass
+        self.fronted += 1
+
+    async def close(self):
+        self._closed = True
 
     async def title(self):
         return "fake"
@@ -250,6 +258,52 @@ def test_attach_fallback_page_leaves_about_blank(monkeypatch, streamer):
     assert streamer.status == "live"
 
 
+def test_attach_forces_desktop_identity(monkeypatch, streamer):
+    ctx = FakeCtx(n_pages=1)
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+
+    asyncio.run(streamer._attach())
+
+    calls = [p for m, p in ctx.sess.sent if m == "Emulation.setUserAgentOverride"]
+    assert calls
+    assert "Windows NT 10.0; Win64; x64" in calls[0]["userAgent"]
+    assert calls[0]["platform"] == "Win32"
+    assert calls[0]["userAgentMetadata"]["mobile"] is False
+    assert calls[0]["userAgentMetadata"]["platform"] == "Windows"
+    assert any(m == "Emulation.clearDeviceMetricsOverride" for m, _ in ctx.sess.sent)
+    assert any(m == "Emulation.setTouchEmulationEnabled" and p == {"enabled": False}
+               for m, p in ctx.sess.sent)
+
+
+def test_attach_forces_phone_legible_view_width(monkeypatch, streamer):
+    # Attach must reflow the shared Chrome to view_w via device metrics — this is
+    # what fixes "everything miniscule" (the layout canvas was stuck ~1349px).
+    ctx = FakeCtx(n_pages=1)
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+
+    asyncio.run(streamer._attach())
+
+    metrics = [params for method, params in ctx.sess.sent
+               if method == "Emulation.setDeviceMetricsOverride"]
+    assert metrics, "attach must apply a device-metrics viewport override"
+    assert metrics[-1]["width"] == streamer.view_w
+    assert metrics[-1]["mobile"] is False  # desktop layout, just narrower
+
+
+def test_attach_applies_persisted_nondefault_zoom_to_current_page(monkeypatch, streamer):
+    streamer.zoom = 0.7  # non-default → must be re-applied on attach
+    ctx = FakeCtx(n_pages=1)
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+
+    asyncio.run(streamer._attach())
+
+    assert any("document.documentElement.style.zoom" in expr and args == (0.7,)
+               for expr, args in ctx.pages[0].evaluated)
+
+
 def test_teardown_preserves_error_status(streamer):
     streamer.status, streamer.detail = "error", "Chrome wedged"
     asyncio.run(streamer._teardown())
@@ -287,6 +341,148 @@ def test_clear_emulation_without_browser_is_safe(streamer):
     streamer._browser = None
     res = asyncio.run(streamer._clear_emulation())
     assert res["ok"] is False and res["cleared"] == 0
+
+
+def test_clear_emulation_keeps_active_metrics_session_attached(streamer):
+    ctx = FakeCtx(n_pages=1)
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+
+    res = asyncio.run(streamer._clear_emulation())
+
+    assert res["ok"] is True
+    assert streamer._metric_sessions[streamer._page] is ctx.sess
+    assert ctx.sess.detached == 0
+    assert any(method == "Emulation.setDeviceMetricsOverride"
+               for method, _ in ctx.sess.sent)
+
+
+def test_capture_and_metrics_share_the_same_persistent_target_session(streamer):
+    class MultiSessionCtx(FakeCtx):
+        def __init__(self):
+            super().__init__(n_pages=1)
+            self.sessions = []
+
+        async def new_cdp_session(self, page):
+            sess = FakeSess()
+            self.sessions.append(sess)
+            return sess
+
+    ctx = MultiSessionCtx()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+
+    async def bind_sessions():
+        await streamer._force_desktop_page(streamer._page)
+        return (await streamer._metric_session(streamer._page),
+                await streamer._cdp_session(streamer._page))
+
+    metrics, capture = asyncio.run(bind_sessions())
+
+    assert capture is metrics
+    assert len(ctx.sessions) == 1
+    assert any(method == "Emulation.setDeviceMetricsOverride"
+               for method, _ in capture.sent)
+
+
+def test_switch_tab_reapplies_desktop_metrics(streamer):
+    ctx = FakeCtx(n_pages=2)
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+
+    res = asyncio.run(streamer._switch_tab(1))
+
+    assert res["ok"] is True
+    assert streamer._page is ctx.pages[1]
+    assert any(method == "Emulation.setDeviceMetricsOverride"
+               for method, _ in ctx.sess.sent)
+
+
+def test_closing_active_tab_rebinds_survivor_at_desktop_width(streamer):
+    """Open tab 2, close it, and tab 1 must never inherit phone metrics."""
+    class PerPageCtx(FakeCtx):
+        def __init__(self):
+            super().__init__(n_pages=2)
+            self.by_page = {page: FakeSess() for page in self.pages}
+
+        async def new_cdp_session(self, page):
+            return self.by_page[page]
+
+    ctx = PerPageCtx()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[1]
+
+    result = asyncio.run(streamer._close_tab(1))
+
+    survivor = ctx.pages[0]
+    calls = [params for method, params in ctx.by_page[survivor].sent
+             if method == "Emulation.setDeviceMetricsOverride"]
+    assert result["ok"] is True
+    assert streamer._page is survivor and survivor.fronted == 1
+    assert calls and calls[-1]["width"] >= 1024
+    assert calls[-1]["mobile"] is False
+    assert any(method == "Page.captureScreenshot"
+               for method, _ in ctx.by_page[survivor].sent)
+
+
+def test_capture_repairs_collapsed_viewport(streamer):
+    class CollapsedSess(FakeSess):
+        def __init__(self):
+            super().__init__()
+            self.repaired = False
+
+        async def send(self, method, params=None):
+            self.sent.append((method, params))
+            if method == "Emulation.setDeviceMetricsOverride":
+                self.repaired = True
+                return {}
+            if method == "Page.getLayoutMetrics":
+                width = 1024 if self.repaired else 720
+                return {"layoutViewport": {"clientWidth": width,
+                                            "clientHeight": 690}}
+            if method == "Page.captureScreenshot":
+                return {"data": _JPEG_B64}
+            return {}
+
+    ctx = FakeCtx(n_pages=1)
+    ctx.sess = CollapsedSess()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer._cdp = ctx.sess
+    streamer._cdp_for = streamer._page
+
+    frame = asyncio.run(streamer._grab(streamer._page))
+
+    assert frame
+    assert streamer.vw >= 320
+    assert any(method == "Emulation.setDeviceMetricsOverride"
+               for method, _ in ctx.sess.sent)
+
+
+def test_idle_stage_resize_publishes_a_fresh_frame_before_return(monkeypatch, streamer):
+    """A completed resize action must not leave the old-layout frame buffered."""
+    ctx = FakeCtx(n_pages=1)
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer.frame = b"old"
+    monkeypatch.setattr(OV, "_VIEW_FOLLOW", True)
+    monkeypatch.setattr(OV.operator_agent.runner, "is_running", lambda: False)
+
+    async def apply_metrics(page, sess=None):
+        streamer.vw, streamer.vh = streamer.view_w, streamer.view_h
+
+    async def grab(page):
+        return b"fresh"
+
+    monkeypatch.setattr(streamer, "_apply_view_metrics", apply_metrics)
+    monkeypatch.setattr(streamer, "_grab", grab)
+
+    result = asyncio.run(streamer._do_action(
+        {"kind": "stage_size", "value": "960x640"}))
+
+    assert result["ok"] is True and result["view"] == [1280, 852]
+    assert streamer.frame == b"fresh"
+    assert streamer.frame_ts > 0
 
 
 def test_agent_run_falling_edge_triggers_one_sweep(monkeypatch, streamer):

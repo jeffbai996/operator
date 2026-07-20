@@ -18,6 +18,11 @@ _spec.loader.exec_module(sb)
 SOI, EOI = b"\xff\xd8", b"\xff\xd9"
 
 
+def test_sandbox_geometry_is_compact_five_by_four():
+    assert (sb.SCREEN_W, sb.SCREEN_H) == (960, 768)
+    assert sb.GEOMETRY == "960x768x24"
+
+
 def jpg(body: bytes = b"x") -> bytes:
     return SOI + body + EOI
 

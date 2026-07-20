@@ -139,6 +139,11 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     # SCREEN on sandbox runs and _tools() withheld the `computer` tool — gpt
     # had eyes on the browser and no hands at all. Pass the run context
     # explicitly via the per-server env config (dotted -c override).
+    if not spec.demo and spec.surface == "browser":
+        # loud-failure contract (see build_claude_cmd): codex scrubs the env
+        # it hands MCP servers, so it must ride the per-server env config.
+        _pw = "mcp_servers.playwright.env."
+        cmd += ["-c", _pw + 'OPERATOR_REQUIRE_CDP="1"']
     if not spec.demo:
         _ctl = "mcp_servers.operator-control.env."
         cmd += ["-c", _ctl + 'OPERATOR_SURFACE="' + spec.surface + '"']
@@ -161,6 +166,10 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     there is no per-run --mcp-config flag — so we wire the playwright server
     in there idempotently and non-destructively (preserve other servers)."""
     env = {"GEMINI_CLI_CONFIG_DIR": spec.config_dir}  # informational; agy uses ~/.gemini
+    if not spec.demo:
+        # loud-failure contract (see build_claude_cmd): agy spawns stdio MCPs
+        # with an inherited env, so the process-level var reaches the launcher.
+        env["OPERATOR_REQUIRE_CDP"] = "1"
     mcp_path = os.path.join(spec.config_dir, "config", "mcp_config.json")
     agy_mcp_dir = ""
     try:
@@ -243,6 +252,11 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
                          **({"OPERATOR_REAL_OK": "1"} if spec.real_ok else {})}}
     _pw_entry = {"command": "bash",
                  "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}
+    if not spec.demo:
+        # REQUIRE_CDP kills the silent headless fallback for cockpit runs: an
+        # unreachable Chrome must fail the MCP loudly, not browse invisibly in
+        # a window the live feed never shows. Demo keeps OPERATOR_DEMO_CDP.
+        _pw_entry["env"] = {"OPERATOR_REQUIRE_CDP": "1"}
     if spec.demo:
         servers = {"playwright": _pw_entry}
     elif spec.surface == "browser":

@@ -94,6 +94,35 @@ def test_strict_waits_instead_of_locking_onto_a_prior_run(tmp_path):
     assert AGY.find_trajectory(bd, before) is not None   # final flush may fall back
 
 
+def test_strict_resume_accepts_the_existing_trajectory_that_advanced(tmp_path):
+    """Agy --conversation appends to the prior brain transcript. Live polling
+    must lock onto that touched file when the runner knows this is a resume."""
+    now = time.time()
+    bd = _brain(tmp_path, ("resumed-conv", now - 100))
+    before = AGY.snapshot_trajectories(bd)
+    _brain(tmp_path, ("resumed-conv", now))
+    got = AGY.find_trajectory(bd, before, strict=True, allow_touched=True)
+    assert got and "resumed-conv" in got
+
+
+def test_resumed_parser_starts_at_the_prelaunch_byte_offset(tmp_path):
+    """Re-reading an appended transcript must emit only this turn, not replay
+    the previous browser turn into the sandbox trace."""
+    path = tmp_path / "transcript_full.jsonl"
+    old = {"source": "MODEL", "type": "PLANNER_RESPONSE", "step_index": 3,
+           "thinking": "old browser reasoning"}
+    path.write_text(json.dumps(old) + "\n")
+    offsets = AGY.snapshot_offsets({str(path): path.stat().st_mtime})
+    new = {"source": "MODEL", "type": "PLANNER_RESPONSE", "step_index": 5,
+           "thinking": "new sandbox reasoning"}
+    path.write_text(json.dumps(old) + "\n" + json.dumps(new) + "\n")
+    sink = _Sink()
+    sink._agy_offsets = offsets
+    AGY.parse_trajectory(str(path), sink)
+    texts = [m["text"] for m in sink.messages]
+    assert texts == ["new sandbox reasoning"]
+
+
 def test_find_on_missing_brain_dir_is_none():
     assert AGY.find_trajectory("/nonexistent/brain", {}) is None
     assert AGY.snapshot_trajectories("") == {}

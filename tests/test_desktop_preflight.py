@@ -42,7 +42,10 @@ def _fake_wb(size):
     def screen_size(_target=None):
         wb.calls.append("screen_size")
         return size
+    def ensure_input():
+        wb.calls.append("ensure_input")
     wb.screen_size = screen_size
+    wb.ensure_input = ensure_input
     return wb
 
 
@@ -80,7 +83,7 @@ def test_desktop_real_passes_on_real_geometry(monkeypatch, started):
                                      "surface": "desktop-real", "real_ok": True})
     assert r.status_code == 200 and r.get_json()["ok"] is True
     assert len(started) == 1
-    assert wb.calls == ["screen_size"]
+    assert wb.calls == ["ensure_input", "screen_size"]
 
 
 def test_browser_dispatch_skips_probe(monkeypatch, started):
