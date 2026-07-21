@@ -1,13 +1,13 @@
 """operator_agent.py — run a headless Claude Code agent that drives the browser.
 
-Option 1 : the operator IS the agent. We spawn `claude -p` in a
+Option 1 (2026-06-26): the operator IS the agent. We spawn `claude -p` in a
 background thread, as the chosen persona, with the Playwright MCP pointed at the
 SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTION
 (claude reads ~/.claude/.credentials.json), zero metered API spend. We parse its
 stream-json output live: assistant text → the operator chat, browser tool calls
 → the action trail. No Discord, no live-session dependency, no spam.
 
-Only the host personas that can drive: claude-a + claude-b.
+Only host personas that can drive: claude-a + claude-b.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ from operator_prompts import (
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
 def _squad_boot_context(bot: str = "gpt") -> str:
-    """Slim the app context for Operator runs (browser tasks don't need the full digest).
+    """Slim app context for Operator runs (browser tasks don't need the full digest).
 
     Loads:
     - SQUAD.md rulebook (behavioral rules, ~5.7k tokens)
@@ -107,29 +107,29 @@ AGENT_BOTS = {
     "claude-a": {"label": "claude-a", "runtime": "claude",
                "config_dir": os.path.expanduser("~/.claude"),
                "cwd": os.path.expanduser("~/.operator-sessions/claude-a"),
-               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
+               "persona": "You are claude-a — direct, dry." + _BROWSER_MANDATE},
     "claude-b": {"label": "claude-b", "runtime": "claude",
-              "config_dir": os.path.expanduser("~/.config/claude-b"),
+              "config_dir": os.path.expanduser("~/.config-b"),
               "cwd": os.path.expanduser("~/.operator-sessions/claude-b"),
-              "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
+              "persona": "You are claude-b — bilingual, efficient." + _BROWSER_MANDATE},
     # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
     # ~/.codex-operator/config.toml wires playwright (Operator-only home); the
     # Unlike the Claude bots, codex has no CLAUDE.md / SessionStart hook loading
-    # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
+    # host-app, so we hand gpt its app self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
             "config_dir": os.path.expanduser("~/.codex-operator"),  # Operator-only CODEX_HOME: has playwright; the interactive gpt Discord bot uses ~/.codex (no playwright) — clean platform separation
             "cwd": os.path.expanduser("~/.operator-sessions/gpt"),
-            "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
-    # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
+            "persona": ("You are GPT — concise, capable." + _GPT_SELF + _BROWSER_MANDATE)},
+    # gemma drives via agy (Google Antigravity CLI) on the owner's flat Google sub —
     # the agy analog of the codex/ChatGPT-sub path. agy `-p` returns PLAIN TEXT
     # (no JSON event stream), so the live action-trace is unavailable; we surface
     # the final text only. Like gpt/codex, agy has no CLAUDE.md / SessionStart
-    # hook, so gemma gets its the app self-context inline (host-app digest if
+    # hook, so gemma gets its app self-context inline (host-app digest if
     # reachable, else _GEMMA_SELF).
     "gemma": {"label": "gemma", "runtime": "agy",
               "config_dir": os.path.expanduser("~/.gemini"),
               "cwd": os.path.expanduser("~/.operator-sessions/gemma"),
-              "persona": ("You are a helpful, capable computer-using assistant." + _GEMMA_SELF + _BROWSER_MANDATE)},
+              "persona": ("You are Gemma — concise, capable, decisive." + _GEMMA_SELF + _BROWSER_MANDATE)},
 }
 
 # Operator's headless agent runs use dedicated cwds (above) so their sessions don't
@@ -267,7 +267,7 @@ def _resolve_claude() -> str | None:
 
 
 def _resolve_agy() -> str | None:
-    """Google Antigravity CLI (`agy`). Drives the browser on the owner flat Google
+    """Google Antigravity CLI (`agy`). Drives the browser on the owner's flat Google
     sub (no metered API key) — the agy analog of the codex/ChatGPT-sub path."""
     from shutil import which
     a = which("agy")
@@ -509,14 +509,14 @@ class AgentRunner:
         self.ended_ts = 0.0
         self._gate_fired = False   # §3.3: one gate/replan follow-up per start()
         self.model, self.effort = (model or '').strip(), (effort or '').strip()
-        self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
+        self.demo = bool(demo)   # demo=True → sandboxed: no app context/identity
         # default the claude runtime to Sonnet 5 / medium when nothing was picked
         # (empty model would otherwise drop the flag and use the CLI's own default).
         if b.get("runtime") == "claude":
             if not self.model:  self.model = "claude-sonnet-5"
             if not self.effort: self.effort = "medium"
         elif b.get("runtime") == "codex":
-            # gpt/codex default: 5.6 Sol / low , matching the UI
+            # gpt/codex default: 5.6 Sol / low (2026-07-09), matching the UI
             # picker default. Without the effort default, an unset effort drops the
             # -c flag and codex falls back to its config.toml default (xhigh) —
             # needless token burn for browser tasks.
@@ -591,7 +591,7 @@ class AgentRunner:
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
         self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
                                           # tool_calls, no content) — the "overthink loop"
-                                          # counter 
+                                          # counter (2026-06-30, #40)
         self._agy_loop_warned = False    # one-shot stuck-in-a-loop warning per run
         # §2.1 runtime-agnostic repeat-action guard (per-run counters)
         self._last_action_key = ""
@@ -625,7 +625,7 @@ class AgentRunner:
         _surface = getattr(self, "surface", "browser")
         task = _prompts.wrap_task(task, _surface, getattr(self, "demo", False))
         env = dict(os.environ)
-        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["SQUAD_STORE_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["OPERATOR_SURFACE"] = _surface        # control MCP reads the surface
         if getattr(self, "_real_ok", False):
             env["OPERATOR_REAL_OK"] = "1"         # per-session desktop-real confirm
@@ -668,7 +668,7 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=(os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_WORKSPACE", "~/.operator-sandbox/workspace")) if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
+                cmd, cwd=(os.path.expanduser("~/local-projects/operator-demo/workspace") if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             self._gate_pending = False   # §3.3: the follow-up turn is live now
@@ -865,7 +865,7 @@ class AgentRunner:
     # again" signature) trips a one-shot trace warning + arms a consume-once
     # nudge for the NEXT turn. Every runtime can loop like this, not just agy;
     # the same pattern kills game grinds (re-clicking a dead target forever).
-    # Never auto-kills the run (same policy as the agy guard, the owner 2026-06-30).
+    # Never auto-kills the run (same policy as the agy guard, 2026-06-30).
     _REPEAT_ACTION_STREAK = 3
 
     # §3.3 evidence ledger — name fragments that classify a tool call. VISUAL

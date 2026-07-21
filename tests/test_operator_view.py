@@ -37,7 +37,7 @@ _STUB_BASE = ("<!doctype html><title>{% block title %}{% endblock %}</title>"
 
 
 def test_streamer_defaults_to_soft_zoom_and_desktop_width() -> None:
-    # zoom default is 0.8 — two notches under neutral . The
+    # zoom default is 0.8 — two notches under neutral (2026-07-19). The
     # real "fits the screen" lever is view_w, which reflows the layout without
     # crossing responsive mobile breakpoints; zoom fine-tunes on top.
     s = OV._Streamer()
@@ -47,10 +47,48 @@ def test_streamer_defaults_to_soft_zoom_and_desktop_width() -> None:
 
 
 def test_model_picker_preserves_selected_label_width_for_caret_position() -> None:
-    css = (Path(__file__).resolve().parents[1] / "static/operator.css").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/operator.css").read_text(encoding="utf-8")
+    js = (root / "static/js/operator.js").read_text(encoding="utf-8")
 
-    assert "#op-model { flex: 0 1 auto; min-width: 0; }" in css
-    assert "#op-effort { flex: 0 1 auto; min-width: 0; max-width: 38%; }" in css
+    # dynamic caret: fitMini sizes #op-model to the selected name and pins that
+    # width (flex:0 0 auto + min-width) so the name is never ellipsized; the CSS
+    # no longer forces flex-shrink on it (which clipped "Sonnet 5" -> "Sonne…")
+    assert "#op-model { min-width: 0; }" in css
+    assert "#op-effort { flex: 0 1 auto; min-width: 0; max-width: 42%; }" in css
+    assert "sel.style.flex = '0 0 auto';" in js
+    assert "sel.style.minWidth = px;" in js
+
+
+def test_native_select_click_uses_in_page_overlay() -> None:
+    # native <select> popups are OS-drawn and unreachable over CDP; a click on
+    # one renders an in-page, CDP-clickable option overlay instead (the owner
+    # 2026-07-21, regressed when clicks moved to raw Input.dispatchMouseEvent).
+    src = (Path(__file__).resolve().parents[1] / "operator_view.py").read_text(encoding="utf-8")
+    assert "_SELECT_SHIM_JS" in src
+    assert "async def _maybe_open_select" in src
+    # only fires for click_at (not dblclick/rclick) and short-circuits the raw click
+    assert 'if kind == "click_at" and await self._maybe_open_select(p, x, y):' in src
+    # the overlay sets the value + fires change, and closes itself
+    assert "sel.selectedIndex = i;" in src
+    assert "new Event('change', {bubbles:true})" in src
+
+
+def test_code_block_scroll_forwards_to_chat_log() -> None:
+    # code blocks stole wheel/touch scroll ("sticks on a code block", the owner
+    # 2026-07-21). The fix wires each <pre> directly (capture phase) + a
+    # MutationObserver for future ones, forwarding vertical deltas to the log
+    # unless the pre has its OWN scroll. Bubbling-delegate approach is gone —
+    # it missed when the event never reached the log.
+    js = (Path(__file__).resolve().parents[1] / "static/js/operator.js").read_text(encoding="utf-8")
+    assert "function _wirePre(pre)" in js
+    assert "capture: true" in js
+    assert "new MutationObserver(_wireAllPres)" in js
+    # both axes handled on the pre itself
+    assert "pre.addEventListener('wheel'" in js
+    assert "pre.addEventListener('touchmove'" in js
+    # forwards to the log, not the pre
+    assert "log.scrollTop += e.deltaY" in js
 
 
 def test_ios_page_zoom_remains_available_over_operator_stage_and_input() -> None:
@@ -94,6 +132,8 @@ def test_splash_is_the_initial_html_boot_surface() -> None:
     assert "hidden" not in splash_open
     # the COLLAPSED assembly ships in the markup (1.0.26): initLaunchpad() runs
     # post-paint, so an expanded first paint flashed the tabs/grid on refresh.
+    demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
+    assert '<div class="op-lp op-lp-collapsed" id="op-lp"' in demo
     assert ".op.op-booting .op-lp { display: flex !important; }" in css
     assert ".op.op-booting .op-urlbar" in css
     assert "classList.remove('op-booting')" in js
@@ -132,7 +172,7 @@ def test_welcome_launchpad_defaults_to_two_rows_and_standalone_add() -> None:
     assert '<span class="op-lp-title" id="op-lp-title">Things to do with Operator</span>' in template
     for label in ("Browse", "Food", "Local", "Shop", "Travel", "Research", "Media", "Saved"):
         assert f'>{label}</button>' in template
-    # Saved is a PERMANENT category : always visible, an empty
+    # Saved is a PERMANENT category (2026-07-19): always visible, an empty
     # list renders the minimal "No saved tasks" state instead of hiding the tab
     assert 'id="op-lp-tasks-toggle" aria-pressed="false" title="show saved tasks">' in template
     assert 'title="show saved tasks" hidden' not in template
@@ -172,6 +212,28 @@ def test_operator_full_bleed_does_not_strip_the_shared_header_gutter() -> None:
     assert "width: min(calc(100% - 3rem), 1100px);" in css
     assert "margin-left: auto; margin-right: auto;" in css
 
+
+def test_release_version_and_demo_placeholder_stay_in_sync() -> None:
+    root = Path(__file__).resolve().parents[1]
+    live = (root / "templates/operator.html").read_text(encoding="utf-8")
+    demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
+
+    assert '<span class="op-ver">1.0.28</span>' in live
+    assert '<span class="op-ver">1.0.28 demo</span>' in demo
+    assert "operator.css') }}?rev=v1033" in live
+    assert "js/operator.js') }}?rev=v1033" in live
+    assert "js/operator.js') }}?rev=v1033" in demo
+    assert readme.count("| v1.0.23 |") == 1
+    assert readme.count("| v1.0.25 |") == 1
+    assert readme.count("| v1.0.26 |") == 1
+    assert "the agent drives the browser you're watching" in readme
+    assert 'schedule picker\'s empty state reads "None"' in readme
+    assert "original 10px fullscreen panel margin without zoom drift" in readme
+    assert "controls initialize independently from model discovery" in readme
+    assert "Both splash and rail composers expand" in readme
+    assert "separates into wiring, rendering, and visibility layers" in readme
+    assert "Live demo — contact the administrator for access." in demo
 
 
 def test_example_library_is_large_varied_and_site_backed() -> None:
@@ -337,7 +399,7 @@ def _patch_streamer(monkeypatch, mod, fs):
 # 1. DEMO-mode gating — the public-demo / live-cockpit security boundary
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Saved-task routes are live in BOTH flavors  — the demo runs
+# Saved-task routes are live in BOTH flavors (2026-07-09) — the demo runs
 # them against a demo-scoped store (OPERATOR_TASKS_PATH) and fails closed (404)
 # if that env is missing, so a visitor can never reach the owner's store.
 TASK_ROUTES = [
@@ -350,7 +412,7 @@ TASK_ROUTES = [
 
 @pytest.mark.parametrize("method,path", TASK_ROUTES)
 def test_saved_task_routes_reachable_in_demo(demo, fake_runner, monkeypatch, method, path):
-    # the owner 2026-07-09: the demo gets saved tasks too — against a demo-scoped
+    # 2026-07-09: the demo gets saved tasks too — against a demo-scoped
     # store (OPERATOR_TASKS_PATH), never the owner's. Reachable = no flat gate.
     client, mod = demo
     _patch_streamer(monkeypatch, mod, FakeStreamer())
@@ -444,7 +506,7 @@ def test_unseen_is_zero_in_demo(demo):
 def test_drivers_generic_in_demo(demo):
     client, _ = demo
     dj = client.get("/operator/drivers").get_json()
-    assert dj == {"drivers": [{"key": "bot", "label": "bot"}]}   # no the app names leak
+    assert dj == {"drivers": [{"key": "bot", "label": "bot"}]}   # no app names leak
 
 
 def test_drivers_named_in_live(live):
@@ -454,7 +516,7 @@ def test_drivers_named_in_live(live):
 
 
 def test_models_locked_to_two_model_choice_in_demo(demo):
-    # the owner 2026-07-09: Flash 3.5 Low default (first = picker default) + Sonnet
+    # 2026-07-09: Flash 3.5 Low default (first = picker default) + Sonnet
     # 4.6 as the only alt; tier baked into the value, effort control hidden.
     client, _ = demo
     assert client.get("/operator/models").get_json()["models"] == [
@@ -501,7 +563,7 @@ def test_dispatch_demo_forces_gemma_and_default_model_and_demo_true(demo, fake_r
     assert call["bot"] == "gemma"                          # forced, client bot ignored
     assert call["model"] == "Gemini 3.5 Flash (Low)"       # off-list model → default
     assert call["effort"] == ""                            # lock owns effort (tier in model string)
-    assert call["demo"] is True                            # strips the app context
+    assert call["demo"] is True                            # strips app context
 
 
 def test_dispatch_demo_honors_sonnet_alt(demo, fake_runner, monkeypatch):
@@ -520,7 +582,7 @@ def test_dispatch_demo_honors_sonnet_alt(demo, fake_runner, monkeypatch):
 
 
 def test_dispatch_demo_sandbox_surface_forces_sonnet(demo, fake_runner, monkeypatch):
-    # Flash has no computer-use tools : a demo sandbox run
+    # Flash has no computer-use tools (2026-07-09): a demo sandbox run
     # always gets Sonnet, even when the visitor picked (or defaulted to) Flash.
     client, mod = demo
     _patch_streamer(monkeypatch, mod, FakeStreamer())
@@ -860,7 +922,7 @@ def test_current_driver_masks_bot_name_in_demo(demo, monkeypatch):
     monkeypatch.setattr(mod, "_recent_events",
                         lambda n=8: [{"bot": "claude-a", "action": "click", "ts": now}])
     drv = mod._current_driver()
-    assert drv["bot"] == "assistant"        # never leak the real the app bot name
+    assert drv["bot"] == "assistant"        # never leak the real app bot name
 
 
 def test_assistant_text_extracts_from_content_blocks(live):
@@ -919,6 +981,12 @@ def test_operator_page_renders_and_is_no_store(live):
     assert "no-store" in resp.headers.get("Cache-Control", "")
     assert 'data-kind="extensions"' in resp.get_data(as_text=True)
 
+
+def test_demo_page_does_not_expose_extensions_launcher(demo):
+    client, _ = demo
+    resp = client.get("/operator")
+    assert resp.status_code == 200
+    assert 'data-kind="extensions"' not in resp.get_data(as_text=True)
 
 
 if __name__ == "__main__":

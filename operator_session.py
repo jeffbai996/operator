@@ -2,7 +2,7 @@
 
 The chat log / mode / picker state used to live only in each browser's
 localStorage, so every device had its own unrelated history. The live cockpit
-is a single-user, single-session product : whoever opens it,
+is a single-user, single-session product (2026-07-11): whoever opens it,
 on whatever device, should see the same conversation. This module owns that
 state: a small JSON file with a monotonic revision counter the client uses to
 decide whether the server copy supersedes its local cache.
