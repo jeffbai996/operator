@@ -26,7 +26,7 @@ class RunSpec:
     bot: str
     task: str           # fully wrapped (transcript inject + nudges + directive)
     persona: str        # demo/surface-aware, already built
-    boot_context: str   # the app boot text; '' on resume/demo/claude
+    boot_context: str   # app boot text; '' on resume/demo/claude
     model: str
     effort: str
     surface: str
@@ -70,10 +70,10 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     Its CODEX_HOME config.toml already wires the playwright MCP, so we just
     exec it. `codex exec resume <thread_id>` threads context."""
     env: dict = {}
-    # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no owner-tool/
+    # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no ibkr/search/
     # plugins) -> browser is the agent's only tool, satisfying the sandbox spec.
     if spec.demo:
-        env["CODEX_HOME"] = os.path.expanduser(os.environ.get("OPERATOR_DEMO_CODEX_HOME", "~/.operator-sandbox/codex"))
+        env["CODEX_HOME"] = os.path.expanduser("~/local-projects/operator-demo/codex")
     else:
         env["CODEX_HOME"] = spec.config_dir
         _ensure_codex_control_mcp(spec.config_dir)   # driver parity
@@ -98,7 +98,7 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
             "attempting one of those calls first.")
     # PARITY: boot context only on the first turn of a thread (resumes already
     # carry it). Kept full, not compressed: ~92% cached after turn 1, and the
-    # shared-memory awareness is worth the one-time cold cost.
+    # app/search/store awareness is worth the one-time cold cost.
     # the bridge note goes right before the task (recency: 20k+ chars of boot
     # context otherwise sit between the note and the ask the model acts on)
     prompt = (spec.persona
@@ -107,13 +107,13 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
               + _bridge
               + "\n\nTask: " + spec.task)
     # DEMO: run codex INSIDE a bwrap FS sandbox (sandbox.sh) — tmpfs over
-    # $HOME hides ~/repos, ~/.claude, ~/.codex, the app data; only the empty
+    # $HOME hides ~/repos, ~/.claude, ~/.codex, app data; only the empty
     # workspace + auth + browse module are bound. codex's built-in shell/file
-    # tools physically cannot reach owner/the app files. Non-demo keeps the
+    # tools physically cannot reach owner/app files. Non-demo keeps the
     # bypass (it's the owner's trusted local cockpit). The browser MCP runs
     # as a separate subprocess and still reaches the isolated Chrome.
     if spec.demo:
-        _sandbox = os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_SCRIPT", "~/.operator-sandbox/sandbox.sh"))
+        _sandbox = os.path.expanduser("~/local-projects/operator-demo/sandbox.sh")
         cmd = ["bash", _sandbox, spec.binpath, "exec", "--json",
                "--skip-git-repo-check",
                "--dangerously-bypass-approvals-and-sandbox"]
@@ -133,22 +133,23 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     if not spec.demo and spec.surface != "browser":
         cmd += ["-c", "mcp_servers.playwright.enabled=false"]
     # codex >= 0.144 spawns MCP servers with a SCRUBBED env — the parent's
-    # OPERATOR_SURFACE / OPERATOR_REAL_OK / OPERATOR_BOT never reached the
+    # OPERATOR_SURFACE / OPERATOR_REAL_OK / SQUAD_STORE_BOT never reached the
     # control server (verified 2026-07-12 with an env-dump stub server), so it
     # silently defaulted to the browser surface: perceive watched the WRONG
     # SCREEN on sandbox runs and _tools() withheld the `computer` tool — gpt
     # had eyes on the browser and no hands at all. Pass the run context
     # explicitly via the per-server env config (dotted -c override).
     if not spec.demo and spec.surface == "browser":
-        # loud-failure contract (see build_claude_cmd): codex scrubs the env
-        # it hands MCP servers, so it must ride the per-server env config.
+        # cockpit browser pin (see build_claude_cmd): the scrubbed MCP env means
+        # the :9222 override must ride the per-server env config too.
         _pw = "mcp_servers.playwright.env."
-        cmd += ["-c", _pw + 'OPERATOR_REQUIRE_CDP="1"']
+        cmd += ["-c", _pw + 'BROWSE_CHROME_PORT="9222"',
+                "-c", _pw + 'OPERATOR_REQUIRE_CDP="1"']
     if not spec.demo:
         _ctl = "mcp_servers.operator-control.env."
         cmd += ["-c", _ctl + 'OPERATOR_SURFACE="' + spec.surface + '"']
         if spec.bot:
-            cmd += ["-c", _ctl + 'OPERATOR_BOT="' + spec.bot + '"']
+            cmd += ["-c", _ctl + 'SQUAD_STORE_BOT="' + spec.bot + '"']
         if spec.real_ok:
             cmd += ["-c", _ctl + 'OPERATOR_REAL_OK="1"']
     if spec.resume_id:
@@ -167,8 +168,11 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     in there idempotently and non-destructively (preserve other servers)."""
     env = {"GEMINI_CLI_CONFIG_DIR": spec.config_dir}  # informational; agy uses ~/.gemini
     if not spec.demo:
-        # loud-failure contract (see build_claude_cmd): agy spawns stdio MCPs
-        # with an inherited env, so the process-level var reaches the launcher.
+        # cockpit browser pin (see build_claude_cmd). agy spawns stdio MCPs with
+        # an inherited env, so the process-level var reaches playwright-mcp.sh —
+        # and stays OUT of the shared ~/.gemini mcp_config.json, which plain
+        # gemma bot sessions also read (those must keep the :9224 default).
+        env["BROWSE_CHROME_PORT"] = "9222"
         env["OPERATOR_REQUIRE_CDP"] = "1"
     mcp_path = os.path.join(spec.config_dir, "config", "mcp_config.json")
     agy_mcp_dir = ""
@@ -192,7 +196,7 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
             "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}
         # driver parity: gemma gets the control MCP (computer/perceive/
         # game_macro) whenever a run actually drives a desktop surface. The
-        # demo IS allowed the control MCP  — its sandbox
+        # demo IS allowed the control MCP (2026-07-09) — its sandbox
         # surface routes every action through `docker exec` into the isolated
         # container, so the agent drives the container, never the host.
         if spec.surface != "browser":
@@ -213,7 +217,7 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     except OSError:
         pass
     # agy has no --append-system-prompt (a claude flag) — FOLD persona +
-    # the app self-context + task into the -p prompt (like the codex adapter),
+    # app self-context + task into the -p prompt (like the codex adapter),
     # plus the agy-only stepwise directive (Flash one-shots its whole plan
     # otherwise and the live trace lands in a burst instead of streaming).
     prompt = (spec.persona
@@ -248,15 +252,19 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
     _op_entry = {"command": "bash",
                  "args": [os.path.join(_CONTROL, "operator-mcp.sh")],
                  "env": {"OPERATOR_SURFACE": spec.surface,
-                         "OPERATOR_BOT": spec.bot,
+                         "SQUAD_STORE_BOT": spec.bot,
                          **({"OPERATOR_REAL_OK": "1"} if spec.real_ok else {})}}
     _pw_entry = {"command": "bash",
                  "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}
     if not spec.demo:
-        # REQUIRE_CDP kills the silent headless fallback for cockpit runs: an
-        # unreachable Chrome must fail the MCP loudly, not browse invisibly in
-        # a window the live feed never shows. Demo keeps OPERATOR_DEMO_CDP.
-        _pw_entry["env"] = {"OPERATOR_REQUIRE_CDP": "1"}
+        # The bot-Chrome split (218e807) flipped playwright-mcp.sh's default to
+        # :9224 (the app bots' browser) — without this override the operator
+        # agent drove a browser the cockpit feed (:9222) never shows, so the
+        # visible browser "didn't respond" (2026-07-20). REQUIRE_CDP kills
+        # the silent headless fallback for cockpit runs: an unreachable Chrome
+        # must fail loudly, not browse invisibly. Demo keeps OPERATOR_DEMO_CDP.
+        _pw_entry["env"] = {"BROWSE_CHROME_PORT": "9222",
+                            "OPERATOR_REQUIRE_CDP": "1"}
     if spec.demo:
         servers = {"playwright": _pw_entry}
     elif spec.surface == "browser":

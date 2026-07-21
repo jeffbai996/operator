@@ -25,7 +25,7 @@ def shot_dirs() -> list[str]:
         or os.environ.get("PLAYWRIGHT_OUTPUT_DIR")
         or "~/.cache/computer-use"))] + [
         os.path.realpath(os.path.expanduser("~/.operator-sessions/" + b))
-        for b in ("claude-a", "claude-b", "gpt", "gemma")]
+        for b in ("claude-a", "jiabanya", "gpt", "gemma")]
 
 
 # Map a Playwright MCP tool call -> ("present-tense action label", "short detail")
@@ -107,13 +107,13 @@ _NONBROWSER_LABELS = {
     "multiedit": "Editing file", "notebookedit": "Editing notebook",
     "ls": "Listing files", "cat": "Reading file",
     # memory / recall (host-app, search)
-    "recall": "Recalling", "memory": "Checking data", "search": "Searching",
-    "get_corpus": "Searching", "list_corpora": "Checking data",
-    # markets (tool)
-    "get_quote": "Checking data", "quote": "Checking data",
-    "get_positions": "Checking data", "tool_quote": "Checking data",
-    "tool_get_positions": "Checking data", "tool_get_account_summary": "Checking data",
-    "tool_margin": "Checking data", "tool_get_historical_bars": "Pulling data",
+    "recall": "Recalling", "memory": "Checking memory", "search": "Searching memory",
+    "get_corpus": "Searching memory", "list_corpora": "Checking memory",
+    # markets (ibkr)
+    "get_quote": "Checking quote", "quote": "Checking quote",
+    "get_positions": "Checking portfolio", "ibkr_quote": "Checking quote",
+    "ibkr_get_positions": "Checking portfolio", "ibkr_get_account_summary": "Checking account",
+    "ibkr_margin": "Checking margin", "ibkr_get_historical_bars": "Pulling chart data",
     # docs / misc
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
@@ -168,7 +168,8 @@ _SKIP_TOOLS = {"toolsearch", "tooldispatch"}
 
 
 def mcp_resource_label(name: str) -> str:
-    """Map generic MCP resource/listing ops to a clean verb . Returns '' if nothing fits."""
+    """Map generic MCP resource/listing ops to a clean verb (the owner: 'Listing
+    resources' etc. is fine; map when we can). Returns '' if nothing fits."""
     n = (name or "").lower().rsplit("__", 1)[-1]
     if any(k in n for k in ("list_resources", "listresources", "resources/list", "list_dir",
                             "listdir", "list_directory", "readdir")):
@@ -412,7 +413,7 @@ def clean_gemma_text(text: str) -> str:
     t = _re.sub(r'!\[[^\]]*\]\((?!https?://|/?operator/shot/)[^)]*\)', '', t)
     # [label](file:///...) plain (non-image) link -> a browser can't load file:// either;
     # keep just the label text so a self-narrated checklist ("see [trace.json](file:///...)")
-    # doesn't leave a dead link in the reply .
+    # doesn't leave a dead link in the reply (2026-06-30, #37: agy work-summary leak).
     t = _re.sub(r'(?<!!)\[([^\]]*)\]\(file://[^)]*\)', lambda m: m.group(1) or '', t)
     # strip a trailing files=[...] literal (single or multi-line)
     t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)

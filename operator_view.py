@@ -1,9 +1,10 @@
 """Browser operator — live view + full remote control of the logged-in Chrome.
 
 One self-contained surface (full-screen on an iPad over Tailscale) that shows the
-real Chrome the app computer-use drives and lets you take the wheel live —
+real Chrome the app's computer-use drives and lets you take the wheel live —
 click, type, navigate — interleaving freely with whatever a bot is doing in the
-same browser (shared mouse; last action wins). "See it, steer it." 
+same browser (shared mouse; last action wins). "See it, steer it." (the owner
+2026-06-25; refined for click/keyboard control + more controls 2026-06-26.)
 
 Zero new deps — playwright + aiohttp are already in the host-app venv:
   - VIEW: a background thread holds a Playwright connect_over_cdp() attach to the
@@ -28,7 +29,7 @@ import operator_tasks as operator_tasks_store  # saved-task store (#30)
 import os as _os_cfg
 # DEMO isolation the public demo: a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
-# unset for the owner live cockpit (-> no behavior change); set only by demo_server.py.
+# unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
 DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
 # Match the remote browser to the visible stage by default. The desktop CSS
 # floor below prevents responsive mobile layouts while matching the aspect
@@ -40,10 +41,10 @@ _VIEW_FOLLOW = _os_cfg.environ.get("OPERATOR_VIEWPORT_FOLLOW", "1") != "0"
 # WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
 CDP_URL = _os_cfg.environ.get("OPERATOR_DEMO_CDP") or "http://127.0.0.1:9222"
 if DEMO:
-    # the demo may view/drive the SANDBOX surface, but never the owner container —
+    # the demo may view/drive the SANDBOX surface, but never the owner's container —
     # scope it to its own (sandbox_container.py reads this at load).
     _os_cfg.environ.setdefault("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox-demo")
-FRAME_INTERVAL = 0.066     # ~15fps 
+FRAME_INTERVAL = 0.066     # ~15fps (the owner's pick)
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
 # F1 adaptive frame tier — ?tier=lo (narrow viewport / Save-Data clients) gets
@@ -107,7 +108,7 @@ class _Streamer:
     # zoom is CSS document zoom — fine-tuning ON TOP of the layout width below.
     # It does NOT change innerWidth (proven live 2026-07-16), so it can never
     # make a desktop-width layout fit a phone; view_w is the lever that reflows.
-    # 0.8 = two 0.1 notches under neutral . The old 0.5 was a
+    # 0.8 = two 0.1 notches under neutral (2026-07-19). The old 0.5 was a
     # band-aid that shrank content INSIDE the giant pre-view_w canvas.
     zoom: float = 0.8
     # view_w — the CSS layout width Operator forces via CDP. Keep it at or above
@@ -130,7 +131,7 @@ class _Streamer:
     _cdp = None
     _metric_sessions: dict = field(default_factory=dict)
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
-    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch 
+    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch (the owner)
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
     # F1: frame tier, set by the feed routes (last-viewer-wins on the shared
     # frame buffer — single-user cockpit; per-viewer buffers are a 1.0.10 idea)
@@ -190,10 +191,10 @@ class _Streamer:
     @staticmethod
     def _chrome_attach_script() -> str:
         """Path to the (re)launcher for the active mode — the demo's isolated
-        headless Chrome under DEMO, the owner logged-in GUI Chrome otherwise."""
+        headless Chrome under DEMO, the owner's logged-in GUI Chrome otherwise."""
         import os
         if DEMO:
-            return os.path.expanduser(os.environ.get("OPERATOR_DEMO_CHROME_SCRIPT", "~/.operator-sandbox/op-demo-chrome.sh"))
+            return os.path.expanduser("~/local-projects/operator-demo/op-demo-chrome.sh")
         return os.path.expanduser("~/agents/browse/chrome-attach.sh")
 
     def _ensure_chrome_alive(self) -> None:
@@ -481,7 +482,7 @@ class _Streamer:
             # whose device scale ≠ 1 (Windows display scaling — here 1.25),
             # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
             # the FULL device viewport so coverage is complete (no right/bottom
-            # crop — the owner "right edge cut off").
+            # crop — the owner's "right edge cut off").
             #
             # OUTPUT AT DEVICE RESOLUTION (scale=1.0), not CSS width. Click
             # accuracy does NOT depend on frame size — the frontend sends
@@ -607,7 +608,7 @@ class _Streamer:
         not just the newest one. _refresh_active_page only switches when the tab COUNT
         changes (and always to the last tab), so an agent that flips between already-
         open tabs (clicks a link that activates an existing tab, or switches back to
-        tab 1) left the view frozen on the stale tab . Here we poll
+        tab 1) left the view frozen on the stale tab (2026-06-30). Here we poll
         each open page's document.visibilityState — only the foreground tab reports
         'visible' — and follow it. Throttled (every ~0.8s) + bounded per check so it
         never stalls the grab loop, and only does work when there's >1 tab."""
@@ -620,7 +621,8 @@ class _Streamer:
             live = [p for p in ctx.pages if not p.is_closed()]
             if len(live) < 2:
                 return  # single tab → nothing to follow
-            # ACTIVITY BEATS VISIBILITY : agents drive
+            # ACTIVITY BEATS VISIBILITY (2026-07-08: "the view doesn't track
+            # the tab the bot is using — some bots, not others"): agents drive
             # pages over CDP, which never foregrounds them — the MCP picks its
             # current tab at connect independent of Chrome's focus, and navigate/
             # click never activate a target (only the explicit tab tools do). So
@@ -630,7 +632,7 @@ class _Streamer:
             # ONLY while an agent run is live: outside a run, "URL activity" is
             # SPA churn in idle tabs (Google Travel pushStates on its own), and
             # yanking focus then kills in-page popups the USER is working with
-            # (a password manager's inline menu dies on blur) — and in manual mode a view
+            # (1Password's inline menu dies on blur) — and in manual mode a view
             # switch would re-aim the user's steer clicks at the wrong page.
             urls = {pg: pg.url for pg in live}
             prev = getattr(self, "_tab_urls", {})
@@ -927,7 +929,7 @@ class _Streamer:
         session is bound to one target, so after a page swap a stale cache
         dispatched clicks/keys into the old (background/closed) tab while the
         capture showed the new one — taps rippled, steers returned ok, and the
-        visible page never reacted . Most
+        visible page never reacted (2026-07-12, after a tab close). Most
         _page-swap sites null the cache manually; this identity check is the
         backstop so no future swap site can reintroduce the class."""
         sess = getattr(self, "_cdp", None)
@@ -1062,12 +1064,75 @@ class _Streamer:
         except Exception:
             pass
 
+    # in-page overlay JS: if the element at (x,y) is a native <select>, replace
+    # its unreachable OS popup with a DOM list the CDP click CAN hit. Toggles:
+    # a second click on the same select closes it. Returns true iff it acted on
+    # a select. Self-contained; leaves no trace on non-selects.
+    _SELECT_SHIM_JS = r"""
+    (function(px, py){
+      var OVID = '__opSelectOverlay';
+      var old = document.getElementById(OVID);
+      var el = document.elementFromPoint(px, py);
+      // a click ON the overlay is handled by its own listeners — report handled
+      if (el && el.closest && el.closest('#'+OVID)) return true;
+      // close any open overlay when clicking elsewhere / re-clicking the select
+      if (old) { old.remove(); }
+      var sel = el && el.closest ? el.closest('select') : null;
+      if (!sel || sel.disabled || sel.multiple) return false;
+      var r = sel.getBoundingClientRect();
+      var ov = document.createElement('div');
+      ov.id = OVID;
+      ov.style.cssText = 'position:fixed;z-index:2147483647;left:'+r.left+'px;top:'+
+        (r.bottom)+'px;min-width:'+r.width+'px;max-height:60vh;overflow:auto;'+
+        'background:#fff;color:#111;border:1px solid rgba(0,0,0,.25);'+
+        'border-radius:6px;box-shadow:0 6px 24px -6px rgba(0,0,0,.5);'+
+        'font:14px/1.4 system-ui,sans-serif;padding:4px 0;';
+      // keep it on-screen if the select is low in the viewport
+      if (r.bottom + 200 > window.innerHeight && r.top > window.innerHeight/2) {
+        ov.style.top = ''; ov.style.bottom = (window.innerHeight - r.top)+'px';
+      }
+      Array.prototype.forEach.call(sel.options, function(opt, i){
+        var row = document.createElement('div');
+        row.textContent = opt.textContent;
+        row.style.cssText = 'padding:6px 14px;cursor:pointer;white-space:nowrap;'+
+          (i === sel.selectedIndex ? 'background:#e8f0fe;font-weight:600;' : '');
+        row.addEventListener('mouseenter', function(){ row.style.background = '#eef1f5'; });
+        row.addEventListener('mouseleave', function(){ row.style.background = (i===sel.selectedIndex?'#e8f0fe':''); });
+        row.addEventListener('mousedown', function(ev){
+          ev.preventDefault(); ev.stopPropagation();
+          if (sel.selectedIndex !== i) {
+            sel.selectedIndex = i;
+            sel.dispatchEvent(new Event('input', {bubbles:true}));
+            sel.dispatchEvent(new Event('change', {bubbles:true}));
+          }
+          ov.remove();
+        }, true);
+        ov.appendChild(row);
+      });
+      document.documentElement.appendChild(ov);
+      return true;
+    })
+    """
+
+    async def _maybe_open_select(self, p, x: float, y: float) -> bool:
+        """If (x,y) is over a native <select>, show an in-page clickable option
+        overlay (the OS popup is unreachable over CDP) and return True. Returns
+        False for anything else so the normal click path runs."""
+        try:
+            sess = await self._cdp_session(p)
+            res = await asyncio.wait_for(sess.send("Runtime.evaluate", {
+                "expression": f"({self._SELECT_SHIM_JS})({float(x)},{float(y)})",
+                "returnByValue": True}), timeout=2.0)
+            return bool((res.get("result") or {}).get("value"))
+        except Exception:
+            return False
+
     async def _cdp_scroll(self, p, dx: float, dy: float) -> None:
         """Scroll via raw CDP Input.dispatchMouseEvent(type=mouseWheel), NOT
         Playwright's page.mouse.wheel(). Same reason clicks use raw CDP: on a
         connect_over_cdp handle the high-level page.mouse.wheel() SILENTLY
         NO-OPS — it returns without error but dispatches nothing, so the page
-        never moves ("scroll up/down randomly broke", the owner 2026-07-12; verified:
+        never moves ("scroll up/down randomly broke", 2026-07-12; verified:
         p.mouse.wheel left scrollY at 0, a raw mouseWheel at the same delta
         moved it). Wheel events need a position → dispatch at the viewport
         centre, which is where a real trackpad/wheel gesture over the page
@@ -1153,6 +1218,20 @@ class _Streamer:
                 # 2 double, 3 triple → sentence/paragraph select). Sent per physical
                 # click, so dispatch it incrementally (ramp=False). The agent's
                 # dblclick_at carries no count and keeps the full ramped sequence.
+                # NATIVE <select> shim (2026-07-21): a real click on a
+                # <select> opens an OS-drawn popup that raw CDP mouse events
+                # can't reach — the option list isn't in the page, so the
+                # follow-up option-click hits nothing and the value never
+                # changes. (Regressed when clicks moved from Playwright's
+                # high-level page.mouse — which drove selects via the a11y tree
+                # — to raw Input.dispatchMouseEvent for the connect_over_cdp
+                # wedge fix.) On-demand only: if THIS click lands on a select,
+                # render an in-page, CDP-clickable option overlay instead of
+                # firing the dead native popup. Non-selects are untouched.
+                if kind == "click_at" and await self._maybe_open_select(p, x, y):
+                    _u = self._safe_url(p); self.cur_url = _u or self.cur_url
+                    return {"ok": True, "url": _u, "px": [round(x), round(y)],
+                            "select": True}
                 cnt = action.get("count")
                 try:
                     cnt = max(1, min(4, int(cnt))) if cnt is not None else None
@@ -1218,7 +1297,7 @@ class _Streamer:
                 # wait_until="commit" returns as soon as the navigation COMMITS (not
                 # full load), so we don't hold the io-lock for up to 15s while the page
                 # loads — that lock starves the grab loop and froze/broke the feed on
-                # back/forward . The feed then streams the new page as it loads.
+                # back/forward (the owner). The feed then streams the new page as it loads.
                 await p.go_back(wait_until="commit", timeout=8000)
             elif kind == "forward":
                 await p.go_forward(wait_until="commit", timeout=8000)
@@ -1632,9 +1711,9 @@ threading.Thread(target=_launch_chrome_on_boot, daemon=True, name="operator-chro
 @bp.route("/operator")
 def operator_page():
     from flask import make_response
-    # demo: serve the standalone, de-PII'd template (no the app chrome/nav, no owner
+    # demo: serve the standalone, de-PII'd template (no app chrome/nav, no owner
     # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
-    _tmpl = "operator.html"   # public build: no demo template fork
+    _tmpl = "operator_demo.html" if DEMO else "operator.html"
     resp = make_response(render_template(_tmpl))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -2016,7 +2095,7 @@ def operator_steer():
               # _do_action always fell through to the keyword branch with val=="" (the
               # wheel handler never sends `value`) → amt defaulted to 600 (down) no
               # matter which way the wheel actually moved. That's why wheel-up did
-              # nothing while wheel-down "worked" .
+              # nothing while wheel-down "worked" (2026-06-30).
               "dx": data.get("dx"), "dy": data.get("dy"),
               # drag endpoints (kind=="drag") — were silently dropped by this
               # whitelist (same class as the dx/dy bug above), so a user drag
@@ -2035,8 +2114,8 @@ def operator_steer():
     return jsonify(_streamer.run_action(action))
 
 
-# ── Live-session driving  ──────────────────────────────────
-# Dispatch a task to one of the the host bots' real Discord sessions; the bot
+# ── Live-session driving (2026-06-26) ──────────────────────────────────
+# Dispatch a task to one of the host bots' real Discord sessions; the bot
 # runs it on the SAME shared Chrome the operator views. The browser actions are
 # surfaced via the MCP action-tap (operator-events.ndjson) which every bot's
 # playwright-mcp wrapper writes to — so the operator shows "🤖 <bot> · Clicking…"
@@ -2044,7 +2123,7 @@ def operator_steer():
 import json as _json
 import os as _os
 
-# The 5 drivers: the host bots that can take the wheel. home_channel = where the
+# The 5 drivers: host bots that can take the wheel. home_channel = where the
 # operator posts the task (the running bot picks it up as a prompt). `key` is the
 # bot name the action-tap stamps events with (must match detect_bot()).
 DRIVERS = [
@@ -2083,7 +2162,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
         return None
     last = evs[-1]
     if time.time() - last.get("ts", 0) <= window_s:
-        # demo: never leak the app bot names to a public visitor -> generic label.
+        # demo: never leak app bot names to a public visitor -> generic label.
         _b = "assistant" if DEMO else last.get("bot")
         return {"bot": _b, "action": last.get("action"),
                 "detail": last.get("detail", "")}
@@ -2093,7 +2172,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
 @bp.route("/operator/drivers")
 def operator_drivers():
     """The pickable drivers — the operator runs them headless. In demo mode this is
-    a single generic 'gpt' driver (never leak the app bot names to a public visitor)."""
+    a single generic 'gpt' driver (never leak app bot names to a public visitor)."""
     if DEMO:
         return jsonify(drivers=[{"key": "bot", "label": "bot"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
@@ -2321,12 +2400,12 @@ def operator_dispatch():
         # public demo: gemma/agy runtime, model locked to the 2-entry demo list
         # (off-list → Flash 3.5 Low default). The tier lives in the model string
         # ("(Thinking)"/"(Low)"), so client-sent effort is discarded — the lock
-        # owns effort. demo=True strips the app context/identity/tools.
+        # owns effort. demo=True strips app context/identity/tools.
         bot = "gemma"
         if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
             model = OPERATOR_MODELS_DEMO[0]["value"]
         if surface == "desktop-sandbox":
-            # Flash has no computer-use tools  — a sandbox run
+            # Flash has no computer-use tools (2026-07-09) — a sandbox run
             # would just shell around. Desktop runs force Sonnet.
             model = "Claude Sonnet 4.6 (Thinking)"
         effort = ""
@@ -2344,8 +2423,8 @@ def operator_dispatch():
 # preferred-sites is a prompt HINT not a hard sandbox (both deferred — see the
 # handoff spec). Persistence + slug logic live in operator_tasks.py; these routes
 # are thin wrappers that, on /run, do exactly what /operator/dispatch does.
-# DEMO : available, but against a demo-scoped store — the demo
-# instance MUST set OPERATOR_TASKS_PATH so visitors never see the app tasks.
+# DEMO (2026-07-09): available, but against a demo-scoped store — the demo
+# instance MUST set OPERATOR_TASKS_PATH so visitors never see the app's tasks.
 # Demo saves strip bot/schedule (forced at run / scheduler never runs in demo),
 # the store is capped, and /run applies the same lock as /operator/dispatch.
 
@@ -2478,7 +2557,7 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict
     if DEMO:
         # same lock as /operator/dispatch: forced runtime, model allowlist,
         # no client effort. Saved-task runs are browser-surface, so no
-        # sandbox model force needed here. demo=True strips the app identity.
+        # sandbox model force needed here. demo=True strips app identity.
         bot = "gemma"
         if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
             model = OPERATOR_MODELS_DEMO[0]["value"]
@@ -2555,14 +2634,14 @@ def operator_driver_status():
         since = 0.0
     reasoning = []
     bot = (request.args.get("bot") or (drv or {}).get("bot") or "").strip()
-    # in demo mode the agent has no the app transcript to tail (and we must not read
-    # any the app bot's transcript) -> the live trace comes from the agent runner only.
+    # in demo mode the agent has no app transcript to tail (and we must not read
+    # any app bot's transcript) -> the live trace comes from the agent runner only.
     if bot and not DEMO:
         reasoning = _tail_reasoning(bot, since)
     return jsonify(driver=drv, events=_recent_events(30), reasoning=reasoning)
 
 
-# ── Stage 2: reasoning relay  ──────────────────────────────
+# ── Stage 2: reasoning relay (2026-06-26) ──────────────────────────────
 # Tail the driving bot's live session transcript JSONL → surface its assistant
 # text (its reasoning/replies) so the operator chat shows thinking, not just
 # clicks. Per-bot transcript dir = <config_dir>/projects/<cwd-slug>/; we take the
@@ -2571,10 +2650,10 @@ import glob as _glob
 
 # bot → (config_dir, cwd) used to locate its transcript project dir.
 _BOT_PROJECT = {
-    "claude-a":     ("~/.claude",            "~/agents/claude-a"),
-    "claude-a":  ("~/.claude",            "~/agents/claude-a"),
-    "claude-a": ("~/.claude",            "~/agents/claude-a"),
-    "claude-b":      ("~/.config/claude-b",        "~"),
+    "claude-a":     ("~/.config-a",           "~/agents/claude-a"),
+    "claude-c":  ("~/.config-a",           "~/agents/claude-c"),
+    "claude-d": ("~/.config-a",           "~/agents/claude-d"),
+    "claude-b":      ("~/.config-b",           "~"),
     "gpt":        (None, None),  # different arch; no claude transcript
 }
 
@@ -2664,10 +2743,10 @@ import subprocess as _sp
 # claude-b runs from ~ so match its CLAUDE_CONFIG_DIR in the environ instead.
 _BOT_LIVE_CWD = {
     "claude-a": "/claude-agents/claude-a",
-    "claude-a": "/claude-agents/claude-a",
-    "claude-a": "/claude-agents/claude-a",
+    "claude-c": "/claude-agents/claude-c",
+    "claude-d": "/claude-agents/claude-d",
 }
-_BOT_LIVE_ENV = {"claude-b": ".config/claude-b"}
+_BOT_LIVE_ENV = {"claude-b": ".config-b"}
 
 
 def _live_bots() -> set:
@@ -2698,7 +2777,7 @@ def _live_bots() -> set:
     except Exception:
         pass
     # gpt is a service bot (always-on if its unit is active) — but it can't drive
-    # reliably (one MCP slot, a broker), so we don't mark it live for driving.
+    # reliably (one MCP slot), so we don't mark it live for driving.
     return live
 
 
@@ -2721,7 +2800,7 @@ OPERATOR_MODELS_GPT = [
     {"value": "gpt-5.6-luna", "label": "GPT-5.6 Luna"},
     {"value": "gpt-5.5", "label": "GPT-5.5"},
 ]
-# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner
+# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner's
 # flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
 # ones have a fixed tier baked in (no effort). start() folds family+effort into the
 # agy --model display string, e.g. "Gemini 3.5 Flash (High)".
@@ -2733,7 +2812,7 @@ OPERATOR_MODELS_GEMMA = [
 ]
 
 
-# public demo: LOCKED 2-model choice on the gemma/agy runtime :
+# public demo: LOCKED 2-model choice on the gemma/agy runtime (2026-07-09):
 # Flash 3.5 Low default (first = picker default + server fallback), Sonnet 4.6
 # as the heavier alt. Tier is baked into each value — the effort control is
 # hidden in the demo UI, the lock owns effort.
