@@ -73,7 +73,7 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no ibkr/search/
     # plugins) -> browser is the agent's only tool, satisfying the sandbox spec.
     if spec.demo:
-        env["CODEX_HOME"] = os.path.expanduser("~/local-projects/operator-demo/codex")
+        env["CODEX_HOME"] = os.path.expanduser("~/local-projects/operator-sandbox/codex")
     else:
         env["CODEX_HOME"] = spec.config_dir
         _ensure_codex_control_mcp(spec.config_dir)   # driver parity
