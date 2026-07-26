@@ -1,5 +1,8 @@
-<h1>Operator</h1>
-<p><b>Computer-Using Agent</b></p>
+<h1>
+  <img src="docs/img/operator-mark.svg" height="34" alt="Operator mark" align="top">
+  Operator
+  <sup><sub>v1.0.28</sub></sup>
+</h1>
 
 <p>
   <img src="https://img.shields.io/badge/version-1.0.28-blue" alt="version">
