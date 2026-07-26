@@ -102,6 +102,11 @@ def test_hook_silent_when_empty(store):
 def _runner(monkeypatch, store):
     import operator_agent as OA
     monkeypatch.setattr(OA, "operator_steer", store, raising=False)
+    # start() resolves the runtime binary BEFORE it reaches the steer-queue
+    # clear; without this stub the whole start path silently early-returns on
+    # hosts with no claude install (CI), and the clear-stale-queue assert reads
+    # a queue nobody ever touched.
+    monkeypatch.setattr(OA, "_resolve_claude", lambda: "/fake/claude")
     r = OA.AgentRunner()
     # steer() calls _save_state — keep it off the real operator-state.json
     r._state_path = os.path.join(os.path.dirname(store.path()), "state.json")
