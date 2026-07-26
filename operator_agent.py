@@ -107,7 +107,7 @@ AGENT_BOTS = {
     "claude-a": {"label": "claude-a", "runtime": "claude",
                "config_dir": os.path.expanduser("~/.claude"),
                "cwd": os.path.expanduser("~/.operator-sessions/claude-a"),
-               "persona": "You are claude-a — direct, dry." + _BROWSER_MANDATE},
+               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     "claude-b": {"label": "claude-b", "runtime": "claude",
               "config_dir": os.path.expanduser("~/.config-b"),
               "cwd": os.path.expanduser("~/.operator-sessions/claude-b"),

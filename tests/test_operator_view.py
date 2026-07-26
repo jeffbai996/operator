@@ -224,14 +224,15 @@ def test_release_version_and_demo_placeholder_stay_in_sync() -> None:
     assert "operator.css') }}?rev=v1033" in live
     assert "js/operator.js') }}?rev=v1033" in live
     assert "js/operator.js') }}?rev=v1033" in demo
-    assert readme.count("| v1.0.23 |") == 1
-    assert readme.count("| v1.0.25 |") == 1
-    assert readme.count("| v1.0.26 |") == 1
+    # README changelog moved from a table to prose entries (2026-07-26 rework:
+    # About-lockup heading, collapsed changelog) — pin the entries + phrases in
+    # their current form.
+    assert readme.count("**v1.0.23**") == 1
+    assert readme.count("**v1.0.25**") == 1
+    assert readme.count("**v1.0.26**") == 1
     assert "the agent drives the browser you're watching" in readme
     assert 'schedule picker\'s empty state reads "None"' in readme
-    assert "original 10px fullscreen panel margin without zoom drift" in readme
     assert "controls initialize independently from model discovery" in readme
-    assert "Both splash and rail composers expand" in readme
     assert "separates into wiring, rendering, and visibility layers" in readme
     assert "Live demo — contact the administrator for access." in demo
 
