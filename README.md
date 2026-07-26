@@ -1,11 +1,12 @@
-<h1>
-  <img src="docs/img/operator-mark.svg" height="34" alt="Operator mark" align="top">
-  Operator
-  <sup><sub>v1.0.28</sub></sup>
-</h1>
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark.png">
+    <img src="docs/img/operator-lockup-light.png" height="64" alt="Operator v1.0.28">
+  </picture>
+</p>
+<p><b>General-purpose computer using agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.28-blue" alt="version">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
 </p>
