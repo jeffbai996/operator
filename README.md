@@ -2,8 +2,7 @@
 <p><b>Computer-Using Agent</b></p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.16-blue" alt="version">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
+  <img src="https://img.shields.io/badge/version-1.0.28-blue" alt="version">
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
 </p>
@@ -27,8 +26,6 @@
 A live **browser / computer-use agent cockpit**. Watch a real Chrome in real time, steer it manually, or hand control to a subscription-backed agent — Claude, GPT, or Gemini — that drives the browser and reports back.
 
 > **Inspired by OpenAI's Operator.** This project borrows the name and the spirit of a watch-the-agent-drive interface. It is an independent implementation, not affiliated with, endorsed by OpenAI, or derived from any OpenAI products.
-
-> **MIT licensed** — free to use, modify, and distribute. See [`LICENSE`](LICENSE).
 
 ---
 
@@ -64,11 +61,11 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.26** — highlights since v1.0.20: the full-viewport splash
-> homepage with a flash-free collapsed boot, restored-session wiring that can't
-> paint an inert cockpit, chat-style auto-resizing composers, viewport
-> self-repair, and a visible-browser contract — cockpit runs refuse the silent
-> headless fallback, so the agent always drives the browser the feed shows.
+> **Status:** **v1.0.28** — recent highlights: native `<select>` dropdowns work
+> under raw-input clicking via an in-page option overlay, the minimized status
+> card carries the live action emoji, mid-run steering can't leave an orphaned
+> run card, the full-viewport splash boots flash-free, and a visible-browser
+> contract means the agent always drives the browser the feed shows.
 
 ## What it does
 
@@ -145,6 +142,9 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 
 **v1.0.26** — **flash-free splash boot + the agent drives the browser you're watching**. The welcome splash now ships pre-collapsed in the markup itself, so a page refresh paints the calm wordmark-and-composer assembly directly instead of flashing the category tabs and card grid for the beat before the post-paint JS collapse landed. And a new cockpit contract kills the invisible-browsing failure mode: launch adapters set `OPERATOR_REQUIRE_CDP=1`, so when the feed's Chrome is unreachable the Playwright MCP fails loudly instead of silently falling back to a headless browser the live view never shows — the agent reports the browser down, which is the truth. The sandbox desktop also moves from XGA to a compact 960×768 (5:4) viewport that fits tall and high-zoom cockpit layouts better while keeping the coordinate scale the model's click grounding is calibrated for.
 
+<details>
+<summary><b>Earlier 1.0.x releases</b> (v1.0.0 – v1.0.25)</summary>
+
 **v1.0.25** — **restored-session wiring + composer auto-resize**. The launchpad lifecycle separates into wiring, rendering, and visibility layers: control wiring always runs, so a device restoring a cached conversation boots a live cockpit with a working HOME/reopen path instead of a painted, inert splash (the old nonempty-log guard returned before any listeners attached; init failures were also swallowed by blind catches — they surface on the console now). Both composers auto-resize like a chat, including a scale-aware pill on coarse-pointer WebKit that grows per painted line to a ~9-line cap before scrolling. Polish: the trash lands on the solid splash, category pills gain clearance from their scroll row's clip edge, fullscreen panel margins tighten, and the schedule picker's empty state reads "None".
 
 **v1.0.23** — **splash, viewport, and composer polish**. Separate top-right theme and close controls return, steering hints hide while the splash owns the screen, and light mode replaces gray blocks with white surfaces and softer card borders. The splash paints before session state restores, launchpad controls initialize independently from model discovery (a slow backend can't leave cards, pills, or close inert), click-away collapse uses a compact 24px halo around the card block, and both composers expand through useful multiline drafts before scrolling. Asset cache revisions are independent from the displayed release so long-lived tabs can't retain stale styling.
@@ -159,8 +159,6 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 
 **v1.0.0** — **full hands-off computer-use — perception, game_macro, desktop surfaces**. This fulfills the `v1.0.0` promise: the agent can now drive **three surfaces** — the logged-in browser (as before), an **isolated sandbox desktop** (Xvfb — nothing outside it can be touched), and the **real desktop** (gated: never the default, needs an explicit per-session confirm, panic-**STOP** always on screen). Switch from a popover on the brand mark; the live feed follows whichever surface is active, mid-session, no reconnect. **Local perception** (`vision/`): a `perceive` tool grounds the agent in labeled on-screen targets without a single extra model call — template + colour-blob matching, OCR text extraction, per-game region maps (Lichess, OpenRSC shipped), and an optional coordinate grid or region-crop overlay for when raw pixels are still the fastest read. **game_macro planner/controller split** (`control/`): instead of one LLM round-trip per click, the model emits a multi-step macro once — click-by-target-label, waits on local conditions, repeats — and a local controller executes and verifies it at machine speed with **zero mid-macro model calls**, bailing back to the planner only on completion or genuine surprise. **Trace integration**: every macro op and perception call streams into the same live action trace as browser tool calls, so a desktop run reads exactly like a browser one — thinking interleaved with what actually happened on screen.
 
-<details>
-<summary><b>Earlier 1.0.x releases</b> (v1.0.1 – v1.0.18)</summary>
 
 **v1.0.18** — **iOS keyboard geometry**. Visual-viewport tracking pins the input sheet above the software keyboard, removing the per-keystroke caret-pan fight.
 
@@ -270,3 +268,10 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **v0.1.0** — initial live browser stream (CDP MJPEG) + manual steering.
 
 </details>
+
+## License
+
+© 2026 Jeff Bai. All rights reserved.
+
+Source is published for reading and reference. No license is granted to use,
+copy, modify, or distribute this software. Not accepting issues or pull requests.
