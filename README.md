@@ -1,7 +1,7 @@
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark.png">
-    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.31">
+    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.32">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
@@ -9,6 +9,9 @@
 <p>
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
+  <img src="https://img.shields.io/badge/agents-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini-8a63d2" alt="agent runtimes">
+  <img src="https://img.shields.io/badge/auth-subscription%2C%20no%20API%20keys-2ea44f" alt="subscription auth">
+  <img src="https://img.shields.io/badge/license-source--available-lightgrey" alt="license">
 </p>
 
 <p>
@@ -24,10 +27,12 @@
 <p><sub><i>A live run — left: the interleaved thinking + action trace reasoning over what it sees; right: the actual Chrome it's driving, streamed frame-by-frame over CDP. Mid-run messages steer the agent without killing the turn.</i></sub></p>
 
 <p align="center">
-  <img src="docs/img/operator-tables.png" width="460" alt="The agent reports back — markdown tables render natively in the chat">
+  <img src="docs/img/operator-tables.png" width="430" alt="The agent reports back — markdown tables render natively in the chat">
+  &nbsp;&nbsp;
+  <img src="docs/img/operator-mobile.png" width="300" alt="The phone cockpit — full-viewport splash, category pills, saved-task cards">
 </p>
 
-<p><sub><i>The report-back — agent answers render as real markdown in the chat, tables included (new in v1.0.31): bordered, rounded, sideways-scrolling when they overflow the rail.</i></sub></p>
+<p><sub><i>Left: the report-back — agent answers render as real markdown in the chat, tables included: bordered, rounded, sideways-scrolling when they overflow the rail. Right: the phone cockpit — the same launchpad as a full-viewport takeover, pills summoning task cards, installable to the home screen as an app (PWA).</i></sub></p>
 
 ---
 
@@ -69,12 +74,12 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.31** — recent highlights: chat markdown grows real
-> pipe-table rendering (ASCII-art fences scroll instead of wrapping to soup),
-> the Operator mark becomes the favicon, the animated splash loader, and the
-> chat spinner, an About card rides the splash status ring, the phone cockpit
-> gets a ground-up splash refactor, and three viewport bugs — the resize
-> strobe, the letterbox chin, cross-device aspect fights — die at the root.
+> **Status:** **v1.0.32** — recent highlights: a full light-mode contrast
+> pass (down to theme-following scrollbars via `color-scheme`), a chat
+> renderer that survives malformed model output (stuttered/unterminated
+> fences, naked ASCII grids → real tables), frames that net the full stage
+> width (the scrollbar's viewport shave is measured and compensated in the
+> emulation override), and restart-free style deploys via template hot-reload.
 
 ## What it does
 
@@ -175,14 +180,16 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 
 ## Changelog
 
+**v1.0.32** — **the light-mode siege + a renderer that survives malformed model output**. A full contrast pass lands light mode for real: the missing surface token that rendered user bubbles dark-on-dark, a darkened muted text tier, the live trace verb re-set in the reading face, a truer attention-blinker yellow, scrollbars that follow the theme via `color-scheme`, and the fullscreen canvas finally following the theme instead of framing light mode in black. The chat renderer grows resilience for malformed model output: `+---+` ASCII grids render as real tables even *outside* code fences (some models stutter their fences and dump grids into prose), empty fences render nothing, and an unterminated trailing fence renders as text instead of swallowing the rest of the message. Frames net the full stage width now — the vertical scrollbar's ~15px viewport shave is measured in device units and compensated in the emulation override (the persistent left/right pillarbox) — and the emulated capture clips to the page's actual laid-out body, so body-min-width sites under a profile page zoom keep their right edge. The composer can't be mangled by deleting a multi-line draft in one go (inline grow styles reset outright — iPad Safari outlives the CSS clamp), and the model picker row is pinned to the painted input height so a three-line draft can't spill onto it. Style/template deploys are restart-free (template hot-reload) — every restart used to blank the live feed to a placeholder for a few seconds, which read as random black screens.
+
 **v1.0.31** — **bots can talk in tables + the shared viewport learns whose aspect it is**. Chat markdown grows real pipe-table rendering — bordered, rounded corners, sideways-scrolling when a table overflows the rail, host-page table styling neutralized inside bubbles — and tabular code fences (ASCII `+---+` art, box-drawing characters) render unwrapped with horizontal scroll while prose code keeps word-wrapping. The chat scroller tops out in an 18px fade so bubbles melt out under the status card instead of hard-clipping. Three viewport bugs die at the root: the per-navigation clear+apply pulse (force-desktop now overwrites stale metrics instead of clearing first — the visible resize strobe on display-scaled hosts), the letterbox chin (captures clip to whichever viewport actually rendered the frame — the CSS layout viewport under emulation, the device viewport native, detected per frame), and viewport ownership (the cockpit sends a per-tab client id, so a backgrounded phone tab can no longer re-aspect the shared browser out from under the active desktop viewer). Light mode reclaims the splash-ring hover card and the wordmark hover cue.
 
 **v1.0.30** — **the About card, the mobile refactor, and geometric state marks**. Clicking the splash status ring opens an About card — logo, wordmark, and version on one baseline, rights line, brand foot — animated open/close with a backdrop that no longer clicks through to the splash. The phone cockpit gets its real refactor: the splash is a fixed full-viewport takeover above the sheet (no more painting under it), the ring/theme/close controls pinned as one top row, the hero dead-centered until a pill tap animates it up, and saved-task cards hidden on entry until summoned. The chat's finished-state ✓/✕/⏹ become geometric masked glyphs matched to the flat UI, saved-task examples grow by six per category (every card on a unique site), resumed threads deliver their boot context exactly once, and web pages stay in dark mode through a run instead of strobing light.
 
-**v1.0.29** — **the canonical Operator mark: favicon + animated splash logo**. The PWA/tab icon becomes the Operator mark itself, generated reproducibly rather than hand-authored. The same mark lands on the launchpad as a status ring: a green arc sweeps while the feed connects, then closes into a full ring — the loader is the logo assembling, not a spinner that gets swapped for one — and thereafter the ring is a health readout: amber while connecting or hung, pulsing red when the browser backend is down, all driven off the cockpit's existing state machine. Hovering it plays a greet. The chat's per-task spinner becomes the mark too — a halted spin: a fast 360°, an inhale-exhale hold, another full turn — with its viewBox cropped to the glyph's own bounds and the box sized in em of the verb beside it, so it holds proportion at every chat scale. The status card's ring runs the same language. A pivot bug dies with it: a px `transform-origin` on an SVG child resolves against the viewport, not the element, so the mark orbited a corner and swung out of frame every turn.
-
 <details>
-<summary><b>Earlier 1.0.x releases</b> (v1.0.0 – v1.0.28)</summary>
+<summary><b>Earlier 1.0.x releases</b> (v1.0.0 – v1.0.29)</summary>
+
+**v1.0.29** — **the canonical Operator mark: favicon + animated splash logo**. The PWA/tab icon becomes the Operator mark itself, generated reproducibly rather than hand-authored. The same mark lands on the launchpad as a status ring: a green arc sweeps while the feed connects, then closes into a full ring — the loader is the logo assembling, not a spinner that gets swapped for one — and thereafter the ring is a health readout: amber while connecting or hung, pulsing red when the browser backend is down, all driven off the cockpit's existing state machine. Hovering it plays a greet. The chat's per-task spinner becomes the mark too — a halted spin: a fast 360°, an inhale-exhale hold, another full turn — with its viewBox cropped to the glyph's own bounds and the box sized in em of the verb beside it, so it holds proportion at every chat scale. The status card's ring runs the same language. A pivot bug dies with it: a px `transform-origin` on an SVG child resolves against the viewport, not the element, so the mark orbited a corner and swung out of frame every turn.
 
 **v1.0.28** — **native `<select>` dropdowns work again + a run of interface polish**. A click on a native `<select>` used to open the OS-drawn popup, whose option list lives outside the page — so the CDP-dispatched option click landed on nothing and the value never changed (a regression from moving clicks to raw input events for a connection-stability fix). Now a click on a select renders an in-page, clickable option overlay the input pipeline can actually hit, only for selects, leaving every other click untouched. Alongside it: the chat, status card, disclaimer, saved-tasks heading, and input placeholder move to the reading typeface while the step-trace verbs stay in the UI sans; the model picker sizes to its selected name and re-measures on zoom so the name never clips; the send button holds the input's bottom-right at a stable size as the draft grows, with even space above and below the placeholder; a scroll trap where the cursor landing on a code block froze the chat is gone (each block forwards wheel and touch scroll to the log); and the History menu item gets a stroked clock icon.
 
