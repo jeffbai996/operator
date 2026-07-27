@@ -1,7 +1,7 @@
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark.png">
-    <img src="docs/img/operator-lockup-light.png" height="64" alt="Operator v1.0.28">
+    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.31">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
@@ -12,18 +12,22 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-openrsc.png" alt="Operator playing a live canvas game">
+  <img src="docs/img/operator-launchpad.png" alt="The Operator launchpad — wordmark, composer, and saved-task cards">
 </p>
 
-<p><sub><i>Operator's agent playing RuneScape Classic (OpenRSC) live — left: the interleaved thinking + action trace (“We're fighting!” → Clicking → “Rat is dead!”) reasoning over what it sees on the canvas; right: the actual game it's driving, streamed frame-by-frame. The agent reads the canvas by screenshot and clicks by pixel coordinate — no DOM to rely on.</i></sub></p>
-
-<p align="center"><sub><i>More: <a href="docs/img/operator-geoguessr.jpeg">reasoning through a live GeoGuessr round</a>.</i></sub></p>
+<p><sub><i>The launchpad — a fresh session owns the full viewport: the wordmark, the composer, and category pills that summon saved-task cards, each pinned to the sites it uses. Hit <b>Go</b> and the prompt dispatches straight to the agent.</i></sub></p>
 
 <p>
-  <img src="docs/img/operator-launchpad.jpeg" alt="Saved-task launchpad">
+  <img src="docs/img/operator-run.png" alt="A live agent run — interleaved thinking + action trace beside the browser it is driving">
 </p>
 
-<p><sub><i>The saved-task launchpad — one-tap tasks on the idle stage, each pinned to the sites it uses. Hit <b>Go</b> and the prompt dispatches straight to the agent.</i></sub></p>
+<p><sub><i>A live run — left: the interleaved thinking + action trace reasoning over what it sees; right: the actual Chrome it's driving, streamed frame-by-frame over CDP. Mid-run messages steer the agent without killing the turn.</i></sub></p>
+
+<p align="center">
+  <img src="docs/img/operator-tables.png" width="460" alt="The agent reports back — markdown tables render natively in the chat">
+</p>
+
+<p><sub><i>The report-back — agent answers render as real markdown in the chat, tables included (new in v1.0.31): bordered, rounded, sideways-scrolling when they overflow the rail.</i></sub></p>
 
 ---
 
@@ -65,11 +69,12 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.28** — recent highlights: native `<select>` dropdowns work
-> under raw-input clicking via an in-page option overlay, the minimized status
-> card carries the live action emoji, mid-run steering can't leave an orphaned
-> run card, the full-viewport splash boots flash-free, and a visible-browser
-> contract means the agent always drives the browser the feed shows.
+> **Status:** **v1.0.31** — recent highlights: chat markdown grows real
+> pipe-table rendering (ASCII-art fences scroll instead of wrapping to soup),
+> the Operator mark becomes the favicon, the animated splash loader, and the
+> chat spinner, an About card rides the splash status ring, the phone cockpit
+> gets a ground-up splash refactor, and three viewport bugs — the resize
+> strobe, the letterbox chin, cross-device aspect fights — die at the root.
 
 ## What it does
 
@@ -78,7 +83,7 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 | **Live view** | Self-clocking frame pump of an attached Chrome via CDP `Page.captureScreenshot` — latency bounded at ~1 frame in flight on any device, with an adaptive `lo` tier (downscale + harder JPEG) for small screens and Save-Data connections. |
 | **Manual steer** | Click / type / scroll / press-hold / drag flow straight through to the page. |
 | **Agent drive** | `claude-a` + `claude-b` (Claude) and `gpt` (Codex), all on subscription auth — no metered API keys. Conversation is shared across bot switches and persisted across restarts. |
-| **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. |
+| **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. Agent answers render as real markdown — pipe tables included — and ASCII/box-drawing fences scroll sideways instead of wrapping to soup. |
 | **UX** | MAN/AUTO modes, drag-to-resize chat, live font controls, mobile layout, launchpad of saved tasks, a `/` slash palette, and a real scheduler (repeat/time/day → cron). |
 | **Reliability** | A serialized run state machine (a Stop can't be swallowed by a follow-up turn, a stall-kill can't mislabel a token-cap stop, a clean exit racing a stop is never "done"), a stall watchdog that ignores legitimate inter-turn gaps, a hardened stream parser that survives malformed runtime output, Chrome launched once at server boot, persisted scheduler dedupe, and an env-tunable token-cap governor. |
 | **Surfaces** | Browser (default), an isolated sandbox desktop (Xvfb), or the real desktop (gated — explicit per-session confirm, panic-STOP always on screen). Switch from a popover on the brand mark; the live feed follows. |
@@ -114,6 +119,36 @@ computer-use/             sandbox (Xvfb) + real-desktop (PowerShell/WSL) backend
 
 ---
 
+## How it's wired
+
+```mermaid
+flowchart LR
+  subgraph client["Cockpit client (operator.js)"]
+    UI["chat + trace + launchpad<br/>frame pump · manual steer"]
+  end
+  subgraph server["Flask blueprint"]
+    V["operator_view.py<br/>CDP streamer + routes"]
+    A["operator_agent.py<br/>run state machine"]
+    R["operator_runtimes.py<br/>launch adapters"]
+  end
+  C["Attached Chrome<br/>(your logged-in profile)"]
+  RT["claude / codex / gemini CLI<br/>(subscription auth)"]
+  UI -- "frame pulls · steer · dispatch" --> V
+  V -- "Page.captureScreenshot +<br/>Input.dispatch (CDP)" --> C
+  V --> A --> R --> RT
+  RT -- "Playwright MCP (CDP attach)" --> C
+  RT -- "event stream" --> A
+  A -- "live trace" --> UI
+```
+
+One Chrome, two drivers: the streamer screenshots and steers it over CDP for the
+human, the agent runtime attaches to the *same* browser through a Playwright MCP —
+so the feed can never show a browser the agent isn't actually driving. The runner
+is a serialized state machine (single-flight, deterministic terminal reasons), and
+the trace the client renders is the same event stream the runner consumed.
+
+---
+
 ## Run
 
 Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.0.0.1:5005`. It also still works as a Flask blueprint — register `operator_view.bp` on any host app and serve it behind a reverse proxy / tunnel.
@@ -140,14 +175,20 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 
 ## Changelog
 
+**v1.0.31** — **bots can talk in tables + the shared viewport learns whose aspect it is**. Chat markdown grows real pipe-table rendering — bordered, rounded corners, sideways-scrolling when a table overflows the rail, host-page table styling neutralized inside bubbles — and tabular code fences (ASCII `+---+` art, box-drawing characters) render unwrapped with horizontal scroll while prose code keeps word-wrapping. The chat scroller tops out in an 18px fade so bubbles melt out under the status card instead of hard-clipping. Three viewport bugs die at the root: the per-navigation clear+apply pulse (force-desktop now overwrites stale metrics instead of clearing first — the visible resize strobe on display-scaled hosts), the letterbox chin (captures clip to whichever viewport actually rendered the frame — the CSS layout viewport under emulation, the device viewport native, detected per frame), and viewport ownership (the cockpit sends a per-tab client id, so a backgrounded phone tab can no longer re-aspect the shared browser out from under the active desktop viewer). Light mode reclaims the splash-ring hover card and the wordmark hover cue.
+
+**v1.0.30** — **the About card, the mobile refactor, and geometric state marks**. Clicking the splash status ring opens an About card — logo, wordmark, and version on one baseline, rights line, brand foot — animated open/close with a backdrop that no longer clicks through to the splash. The phone cockpit gets its real refactor: the splash is a fixed full-viewport takeover above the sheet (no more painting under it), the ring/theme/close controls pinned as one top row, the hero dead-centered until a pill tap animates it up, and saved-task cards hidden on entry until summoned. The chat's finished-state ✓/✕/⏹ become geometric masked glyphs matched to the flat UI, saved-task examples grow by six per category (every card on a unique site), resumed threads deliver their boot context exactly once, and web pages stay in dark mode through a run instead of strobing light.
+
+**v1.0.29** — **the canonical Operator mark: favicon + animated splash logo**. The PWA/tab icon becomes the Operator mark itself, generated reproducibly rather than hand-authored. The same mark lands on the launchpad as a status ring: a green arc sweeps while the feed connects, then closes into a full ring — the loader is the logo assembling, not a spinner that gets swapped for one — and thereafter the ring is a health readout: amber while connecting or hung, pulsing red when the browser backend is down, all driven off the cockpit's existing state machine. Hovering it plays a greet. The chat's per-task spinner becomes the mark too — a halted spin: a fast 360°, an inhale-exhale hold, another full turn — with its viewBox cropped to the glyph's own bounds and the box sized in em of the verb beside it, so it holds proportion at every chat scale. The status card's ring runs the same language. A pivot bug dies with it: a px `transform-origin` on an SVG child resolves against the viewport, not the element, so the mark orbited a corner and swung out of frame every turn.
+
+<details>
+<summary><b>Earlier 1.0.x releases</b> (v1.0.0 – v1.0.28)</summary>
+
 **v1.0.28** — **native `<select>` dropdowns work again + a run of interface polish**. A click on a native `<select>` used to open the OS-drawn popup, whose option list lives outside the page — so the CDP-dispatched option click landed on nothing and the value never changed (a regression from moving clicks to raw input events for a connection-stability fix). Now a click on a select renders an in-page, clickable option overlay the input pipeline can actually hit, only for selects, leaving every other click untouched. Alongside it: the chat, status card, disclaimer, saved-tasks heading, and input placeholder move to the reading typeface while the step-trace verbs stay in the UI sans; the model picker sizes to its selected name and re-measures on zoom so the name never clips; the send button holds the input's bottom-right at a stable size as the draft grows, with even space above and below the placeholder; a scroll trap where the cursor landing on a code block froze the chat is gone (each block forwards wheel and touch scroll to the log); and the History menu item gets a stroked clock icon.
 
 **v1.0.27** — **minimized status card shows the live action + steer no longer leaves an orphan**. Collapse the status pill during a run and the current action's emoji now rides beside the spinner — the at-a-glance "what's it doing" the hidden label used to carry — animated the same way the expanded card cycles it. Barge-in steering also stops emitting a stray "Worked for 1s" card next to the real "Steered" one: the guard that swallows the killed run's trailing state now keys on the steer flag itself, which clears only when the replacement run actually starts, instead of a fixed timer that raced. Trace polish: the repeat-count badge on coalesced actions shrinks and drops to the sans face, and the inline coordinate detail beside a tool call matches it.
 
 **v1.0.26** — **flash-free splash boot + the agent drives the browser you're watching**. The welcome splash now ships pre-collapsed in the markup itself, so a page refresh paints the calm wordmark-and-composer assembly directly instead of flashing the category tabs and card grid for the beat before the post-paint JS collapse landed. And a new cockpit contract kills the invisible-browsing failure mode: launch adapters set `OPERATOR_REQUIRE_CDP=1`, so when the feed's Chrome is unreachable the Playwright MCP fails loudly instead of silently falling back to a headless browser the live view never shows — the agent reports the browser down, which is the truth. The sandbox desktop also moves from XGA to a compact 960×768 (5:4) viewport that fits tall and high-zoom cockpit layouts better while keeping the coordinate scale the model's click grounding is calibrated for.
-
-<details>
-<summary><b>Earlier 1.0.x releases</b> (v1.0.0 – v1.0.25)</summary>
 
 **v1.0.25** — **restored-session wiring + composer auto-resize**. The launchpad lifecycle separates into wiring, rendering, and visibility layers: control wiring always runs, so a device restoring a cached conversation boots a live cockpit with a working HOME/reopen path instead of a painted, inert splash (the old nonempty-log guard returned before any listeners attached; init failures were also swallowed by blind catches — they surface on the console now). Both composers auto-resize like a chat, including a scale-aware pill on coarse-pointer WebKit that grows per painted line to a ~9-line cap before scrolling. Polish: the trash lands on the solid splash, category pills gain clearance from their scroll row's clip edge, fullscreen panel margins tighten, and the schedule picker's empty state reads "None".
 
