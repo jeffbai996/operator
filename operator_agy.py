@@ -19,13 +19,14 @@ import os
 import time
 
 from operator_trace import (action_label, clean_gemma_text, extract_handoff,
+                            strip_plan_scaffold,
                             gerund_label, mcp_resource_label)
 
 # overthink-loop guard: a PLANNER_RESPONSE step with no tool_calls and no final
 # `content` is pure scratch reasoning (agy "thinking out loud" without acting).
 # A long unbroken run of these is the stuck-in-a-loop pattern (#40, e.g. Flash
 # 3.5 re-describing a PDF instead of scrolling it). Warn once when the streak
-# crosses this; never auto-kill the run (2026-06-30).
+# crosses this; never auto-kill the run .
 LOOP_WARN_STREAK = 6   # consecutive no-progress planner steps
 
 
@@ -137,6 +138,46 @@ def find_trajectory(brain_dir: str, before: dict, strict: bool = False,
     return None
 
 
+# How far back to look for the duplicated narration. Flash repeats it on the
+# very next planner step, so the copy sits just behind the actions that step
+# emitted — a few entries, not the whole run.
+_DUP_THINKING_LOOKBACK = 8
+
+
+def _drop_duplicate_thinking(r, raw_content: str, answer: str) -> None:
+    """Remove a `thinking` entry that says the same thing as the final answer.
+
+    Flash 3.6 rides its narration in `content`. On a step that also carries
+    tool_calls that's CoT and we tag it "thinking" — correct. But Flash then
+    repeats the SAME text on the final tool_call-less step, which becomes the
+    answer, so the identical paragraph rendered twice: last trace step AND
+    reply bubble .
+
+    Can't be prevented on the way in — the thinking copy is emitted live,
+    before we know an identical answer is coming — so it's dropped when the
+    answer arrives. Matches against BOTH the cleaned raw content and the
+    scaffold-stripped answer, since the two paths clean differently. Only an
+    exact match goes; narration that merely resembles the answer stays, because
+    differing CoT is the entire point of the trace.
+    """
+    candidates = {answer.strip()}
+    try:
+        candidates.add(clean_gemma_text((raw_content or "").strip()).strip())
+    except Exception:  # noqa: BLE001 — cleaning is best-effort here
+        pass
+    candidates.discard("")
+    if not candidates:
+        return
+    for i in range(len(r.messages) - 1,
+                   max(-1, len(r.messages) - 1 - _DUP_THINKING_LOOKBACK), -1):
+        m = r.messages[i]
+        if m.get("role") != "thinking":
+            continue
+        if (m.get("text") or "").strip() in candidates:
+            del r.messages[i]
+            return
+
+
 def parse_trajectory(path: str, r) -> bool:
     """Parse agy's structured trajectory (transcript_full.jsonl) into ordered
     thinking/action/answer messages — full parity with the codex/claude trace.
@@ -208,10 +249,25 @@ def parse_trajectory(path: str, r) -> bool:
                     # impossible for raw thinking/work-summary text — including any
                     # checklist + file:// links — to become the user-visible reply if
                     # the turn ends (or is cut off mid-loop) before a real `content`
-                    # answer ever arrives (2026-06-30, #37/#40).
+                    # answer ever arrives .
                     r.messages.append({"ts": time.time(), "role": "thinking",
                                           "text": _ck})
             _had_tool_calls = bool(o.get("tool_calls"))
+            ans = o.get("content")
+            _has_content = isinstance(ans, str) and bool(ans.strip())
+            if _has_content and _had_tool_calls:
+                # FLASH-3.5 SHAPE : Gemini Flash rides its
+                # per-step planning line in `content` WITH the step's
+                # tool_calls attached — other agy models put it in `thinking`
+                # and keep content empty until the final answer. Narration
+                # alongside actions is CoT, not an answer: tag it "thinking"
+                # (trace-visible, structurally barred from the reply bubble)
+                # and emit it BEFORE its actions so the trace reads top-down.
+                # A real final answer never carries tool_calls on its step.
+                _ck = clean_gemma_text(ans.strip())
+                if _ck:
+                    r.messages.append({"ts": time.time(), "role": "thinking",
+                                          "text": _ck})
             # tool_calls: list of {name, args} — same shape action_label wants.
             for tc in (o.get("tool_calls") or []):
                 if not isinstance(tc, dict):
@@ -292,13 +348,17 @@ def parse_trajectory(path: str, r) -> bool:
                 if label:
                     r.messages.append({"ts": time.time(), "role": "action",
                                           "text": label, "detail": detail})
-            ans = o.get("content")
             _had_answer = False
-            if isinstance(ans, str) and ans.strip():
-                txt, _reason = extract_handoff(clean_gemma_text(ans.strip()))
+            if _has_content and not _had_tool_calls:
+                # ANSWER path only: shed a leading Plan:/Status: scratchpad
+                # (Flash 3.6 dumps it into the final content, the owner 2026-07-28);
+                # the thinking path above keeps it — that's where it belongs.
+                txt, _reason = extract_handoff(
+                    strip_plan_scaffold(clean_gemma_text(ans.strip())))
                 if _reason is not None and not r.handoff:
                     r.handoff = {"reason": _reason, "ts": time.time()}
                 if txt:
+                    _drop_duplicate_thinking(r, ans, txt)
                     r.messages.append({"ts": time.time(), "role": "assistant", "text": txt})
                     got_answer = True
                     _had_answer = True

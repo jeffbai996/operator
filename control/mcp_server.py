@@ -35,13 +35,15 @@ import time
 import numpy as np
 from PIL import Image
 
+import emu_input as emu_input_mod
 import events
 import maps as maps_mod
 import overlay
 import perceive as perceive_mod
 from macro import (MacroController, frame_change_frac,  # noqa: F401 (validate re-exported)
                    validate_macro)
-from surfaces import SurfaceError, SurfaceStopped, get_surface
+from surfaces import (SurfaceError, SurfaceStopped, _load_cu_module,
+                      get_surface)
 
 PROTOCOL_FALLBACK = "2024-11-05"
 _MAX_TARGETS = 40
@@ -137,6 +139,11 @@ _COMPUTER_TOOL = {
             "action": {"type": "string"},
             "coordinate": {"type": "array", "items": {"type": "integer"}},
             "start_coordinate": {"type": "array", "items": {"type": "integer"}},
+            # flat aliases: Gemini/agy emits x/y instead of the coordinate
+            # array no matter what the schema says — declared here so its
+            # calls validate, handled server-side by _coord_of()
+            "x": {"type": "integer"}, "y": {"type": "integer"},
+            "start_x": {"type": "integer"}, "start_y": {"type": "integer"},
             "text": {"type": "string"},
             "duration": {"type": "number"},
             "scroll_direction": {"type": "string"},
@@ -146,11 +153,39 @@ _COMPUTER_TOOL = {
     },
 }
 
+_EMU_INPUT_TOOL = {
+    "name": "emu_input",
+    "description": (
+        "Press game controller buttons on the EmulatorJS game running in the "
+        "sandbox browser (Pokémon Emerald etc.). Use THIS, not the computer "
+        "key/click tools, to play an emulator game — the emulator ignores raw "
+        "desktop keys; this drives its input API directly. buttons: a, b, "
+        "start, select, up, down, left, right, l, r. Pass one `button` or a "
+        "`buttons` sequence. hold_ms is the press duration (default 90); for a "
+        "held direction (walking) use a larger hold_ms. Perceive the screen "
+        "between inputs to see the result — there is no click coordinate."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "button": {"type": "string"},
+            "buttons": {"type": "array", "items": {"type": "string"}},
+            "hold_ms": {"type": "integer"},
+            "gap_ms": {"type": "integer"},
+        },
+    },
+}
+
 
 def _cap_ws(ws: dict) -> dict:
-    """Bound the WorldState lists so a busy frame can't flood the context."""
+    """Bound the WorldState lists so a busy frame can't flood the context.
+    Static targets (map-declared grid cells, e.g. 64 chess squares) are exempt
+    from the detection cap — they're deliberate and compact, and capping them
+    silently amputated the board (40 of 64 squares, no e1/e2...)."""
     out = dict(ws)
-    out["targets"] = list(ws.get("targets", []))[:_MAX_TARGETS]
+    targets = list(ws.get("targets", []))
+    statics = [t for t in targets if t.get("kind") == "static"]
+    detected = [t for t in targets if t.get("kind") != "static"]
+    out["targets"] = detected[:_MAX_TARGETS] + statics
     out["text"] = list(ws.get("text", []))[:_MAX_TEXT]
     return out
 
@@ -174,6 +209,7 @@ class OperatorMCP:
         self.bot = bot or os.environ.get("OPERATOR_BOT", "") or "operator"
         self._factory = surface_factory
         self._surface = None
+        self._emu = None            # lazy EmuInput (sandbox game harness)
 
     # -- surface / perception ------------------------------------------------
     def _get_surface(self):
@@ -356,6 +392,32 @@ class OperatorMCP:
         except Exception:  # noqa: BLE001 — a failed look must not break the action
             return None, None
 
+    @staticmethod
+    def _coord_of(args: dict, key: str = "coordinate",
+                  xk: str = "x", yk: str = "y") -> list | None:
+        """Extract a click point from EITHER arg shape. The schema says
+        `coordinate: [x, y]` and Claude follows it — but Gemini (agy) emits
+        flat `x`/`y` integer fields instead, and the old
+        `args.get("coordinate") or [0, 0]` silently turned every gemma click
+        into (0, 0) ("can't use the sandbox", the owner 2026-07-21). Returns None
+        when neither shape is present so callers can fail LOUDLY."""
+        c = args.get(key)
+        if isinstance(c, (list, tuple)) and len(c) >= 2:
+            try:
+                return [int(c[0]), int(c[1])]
+            except (TypeError, ValueError):
+                return None
+        if xk in args and yk in args:
+            try:
+                return [int(args[xk]), int(args[yk])]
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    _COORD_ACTIONS = ("left_click", "right_click", "middle_click",
+                      "double_click", "triple_click", "mouse_move",
+                      "left_click_drag")
+
     def _tool_computer(self, args: dict) -> dict:
         if self.surface_name == "browser":
             raise SurfaceError(
@@ -363,7 +425,14 @@ class OperatorMCP:
                 "surface use your Playwright browser tools")
         surface = self._get_surface()
         action = args.get("action", "")
-        coord = args.get("coordinate") or [0, 0]
+        coord = self._coord_of(args)
+        if coord is None and action in self._COORD_ACTIONS:
+            # never fall back to (0, 0): a corner-click LOOKS like a dead
+            # sandbox and burns the whole run before anyone suspects the args
+            raise SurfaceError(
+                f"{action} needs coordinates — pass coordinate: [x, y]")
+        if coord is None:
+            coord = [0, 0]   # scroll may legitimately omit a position
         label, detail = "Acting", action
         pre_frame = None
         if (action in self._VERIFY_ACTIONS
@@ -394,7 +463,11 @@ class OperatorMCP:
             surface.move(int(coord[0]), int(coord[1]))
             label = "Moving"
         elif action == "left_click_drag":
-            start = args.get("start_coordinate") or [0, 0]
+            start = self._coord_of(args, key="start_coordinate",
+                                   xk="start_x", yk="start_y")
+            if start is None:
+                raise SurfaceError("left_click_drag needs start_coordinate: "
+                                   "[x, y] plus coordinate: [x, y] for the end")
             surface.drag(int(start[0]), int(start[1]),
                          int(coord[0]), int(coord[1]))
             label, detail = "Dragging", f"({start[0]}, {start[1]}) → ({coord[0]}, {coord[1]})"
@@ -450,11 +523,41 @@ class OperatorMCP:
                             "mimeType": "image/jpeg"})
         return {"content": content, "isError": False}
 
+    def _get_emu(self):
+        """Lazy EmuInput bound to the sandbox chromium's CDP (via the container
+        bridge). Sandbox surface only."""
+        if self._emu is None:
+            sb = _load_cu_module("sandbox_container.py")
+            sb.ensure()   # also arms the CDP bridge (idempotent)
+            self._emu = emu_input_mod.EmuInput(sb.sandbox_cdp_url())
+        return self._emu
+
+    def _tool_emu_input(self, args: dict) -> dict:
+        if self.surface_name != "desktop-sandbox":
+            raise SurfaceError("emu_input is for the desktop-sandbox game "
+                               "harness — no emulator on this surface")
+        emu = self._get_emu()
+        buttons = args.get("buttons")
+        hold = int(args.get("hold_ms", 90))
+        if buttons:
+            res = emu.press_seq([str(b) for b in buttons], hold_ms=hold,
+                                gap_ms=int(args.get("gap_ms", 120)))
+            events.record(self.bot, "emu_input", "Pressing",
+                          " ".join(res.get("pressed", [])))
+        else:
+            btn = str(args.get("button", ""))
+            res = emu.press(btn, hold_ms=hold)
+            events.record(self.bot, "emu_input", "Pressing", btn)
+        return {"content": [{"type": "text", "text": json.dumps(res)}],
+                "isError": False}
+
     # -- protocol ---------------------------------------------------------------
     def _tools(self) -> list:
         tools = [_PERCEIVE_TOOL, _GAME_MACRO_TOOL]
         if self.surface_name.startswith("desktop"):
             tools.append(_COMPUTER_TOOL)
+        if self.surface_name == "desktop-sandbox":
+            tools.append(_EMU_INPUT_TOOL)   # emulator games (Pokémon Emerald)
         return tools
 
     def handle(self, msg: dict):
@@ -480,7 +583,8 @@ class OperatorMCP:
             args = params.get("arguments") or {}
             handler = {"perceive": self._tool_perceive,
                        "game_macro": self._tool_game_macro,
-                       "computer": self._tool_computer}.get(name)
+                       "computer": self._tool_computer,
+                       "emu_input": self._tool_emu_input}.get(name)
             if handler is None:
                 result = {"content": [{"type": "text", "text": json.dumps(
                     {"error": f"unknown tool {name!r}"})}], "isError": True}
@@ -488,7 +592,7 @@ class OperatorMCP:
                 try:
                     result = handler(args)
                 except (SurfaceError, SurfaceStopped, maps_mod.MapError,
-                        ValueError, OSError) as e:
+                        emu_input_mod.EmuInputError, ValueError, OSError) as e:
                     result = {"content": [{"type": "text", "text": json.dumps(
                         {"error": str(e)})}], "isError": True}
                 except Exception as e:  # noqa: BLE001 — server must answer, not die

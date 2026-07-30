@@ -1,7 +1,7 @@
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark.png">
-    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.32">
+    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.33">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
@@ -74,12 +74,13 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.32** — recent highlights: a full light-mode contrast
-> pass (down to theme-following scrollbars via `color-scheme`), a chat
-> renderer that survives malformed model output (stuttered/unterminated
-> fences, naked ASCII grids → real tables), frames that net the full stage
-> width (the scrollbar's viewport shave is measured and compensated in the
-> emulation override), and restart-free style deploys via template hot-reload.
+> **Status:** **v1.0.33** — recent highlights: the letterbox root-caused in
+> two places (re-entry to a backgrounded tab now resyncs the stage size, and a
+> viewport that flips between healthy and collapsed finally repairs instead of
+> resetting a consecutive-miss counter forever), plus a full light-mode
+> contrast pass, a chat renderer that survives malformed model output
+> (stuttered/unterminated fences, naked ASCII grids → real tables), and
+> restart-free style deploys via template hot-reload.
 
 ## What it does
 
@@ -179,6 +180,8 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.33** — **the letterbox, root-caused**. Two long-standing viewport complaints turn out to be one mechanism failing in two places, both found in the viewport flight recorder rather than reasoned about. **Re-entry:** returning to a backgrounded cockpit tab fires `visibilitychange`, not `resize`, so nothing re-beaconed the stage size — and the remote target does drift while you are away, because a force-desktop on navigation re-applies the stored target, which before any beacon has landed is `WIDTHx0` (auto height = the window's native height); `object-fit: contain` renders that as a letterbox. Re-entry now resyncs, and clears the send's no-op guard first — the stage size is normally *unchanged* across the away period, which is exactly why the old code swallowed the re-send. **Collapse:** the repair for a collapsed layout viewport required N *consecutive* gate misses, and any healthy read zeroed the counter — so a viewport flipping between healthy and collapsed (ten such flips in one recorded session) never reached the threshold, and the captured frame kept changing size under the viewer. The collapsed band now scores instead of counting: a collapsed read outweighs a healthy one, so a flip-flop converges on a repair while a lone navigation transient still decays to nothing and never reflows the real window. Also: the version line under the wordmark moves to the chat face.
 
 **v1.0.32** — **the light-mode siege + a renderer that survives malformed model output**. A full contrast pass lands light mode for real: the missing surface token that rendered user bubbles dark-on-dark, a darkened muted text tier, the live trace verb re-set in the reading face, a truer attention-blinker yellow, scrollbars that follow the theme via `color-scheme`, and the fullscreen canvas finally following the theme instead of framing light mode in black. The chat renderer grows resilience for malformed model output: `+---+` ASCII grids render as real tables even *outside* code fences (some models stutter their fences and dump grids into prose), empty fences render nothing, and an unterminated trailing fence renders as text instead of swallowing the rest of the message. Frames net the full stage width now — the vertical scrollbar's ~15px viewport shave is measured in device units and compensated in the emulation override (the persistent left/right pillarbox) — and the emulated capture clips to the page's actual laid-out body, so body-min-width sites under a profile page zoom keep their right edge. The composer can't be mangled by deleting a multi-line draft in one go (inline grow styles reset outright — iPad Safari outlives the CSS clamp), and the model picker row is pinned to the painted input height so a three-line draft can't spill onto it. Style/template deploys are restart-free (template hot-reload) — every restart used to blank the live feed to a placeholder for a few seconds, which read as random black screens.
 

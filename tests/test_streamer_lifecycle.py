@@ -24,6 +24,7 @@ import base64
 import sys
 import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -180,6 +181,51 @@ def test_driver_stopped_when_connect_fails(monkeypatch, streamer):
     assert not streamer._running
 
 
+def test_first_viewer_demand_starts_closed_chrome(monkeypatch):
+    """A cold Operator attach launches Chrome once, then attaches normally."""
+    s = OV._Streamer()
+    probes = iter([False, True])
+    launches = []
+    monkeypatch.setattr(s, "_cdp_alive", lambda: next(probes))
+    monkeypatch.setattr(
+        s, "_launch_chrome",
+        lambda: launches.append(OV._Streamer._chrome_attach_script()),
+    )
+
+    s._ensure_chrome_alive()
+
+    assert launches == [OV._Streamer._chrome_attach_script()]
+    assert s._user_closed is False
+
+
+def test_closed_chrome_stays_closed_without_operator_demand(monkeypatch):
+    """Constructing the module streamer/server must not eagerly launch Chrome."""
+    launches = []
+    monkeypatch.setattr(OV._Streamer, "_launch_chrome",
+                        lambda self: launches.append("launched"))
+
+    OV._Streamer()
+
+    assert launches == []
+    source = Path(OV.__file__).read_text(encoding="utf-8")
+    assert "_launch_chrome_on_boot" not in source
+    assert "operator-chrome-boot" not in source
+
+
+def test_failed_demand_start_aborts_before_playwright(monkeypatch):
+    """If the launcher cannot restore CDP, fail clearly instead of leaking a
+    Playwright driver that can never attach."""
+    s = OV._Streamer()
+    monkeypatch.setattr(s, "_cdp_alive", lambda: False)
+    monkeypatch.setattr(s, "_launch_chrome", lambda: None)
+
+    with pytest.raises(ConnectionError, match="could not start"):
+        s._ensure_chrome_alive()
+
+    assert s.status == "error"
+    assert s._user_closed is True
+
+
 def test_no_driver_leak_across_repeated_failed_runs(monkeypatch, streamer):
     pws = [FakePW(connect_exc=ConnectionError("down")) for _ in range(3)]
     created = _install(monkeypatch, pws)
@@ -271,7 +317,10 @@ def test_attach_forces_desktop_identity(monkeypatch, streamer):
     assert calls[0]["platform"] == "Win32"
     assert calls[0]["userAgentMetadata"]["mobile"] is False
     assert calls[0]["userAgentMetadata"]["platform"] == "Windows"
-    assert any(m == "Emulation.clearDeviceMetricsOverride" for m, _ in ctx.sess.sent)
+    # force-desktop now OVERWRITES stale metrics (no clear-first — the
+    # clear+apply pair was one visible size pulse per nav, the 2026-07-26
+    # strobe); the apply itself is the desktop-identity marker.
+    assert any(m == "Emulation.setDeviceMetricsOverride" for m, _ in ctx.sess.sent)
     assert any(m == "Emulation.setTouchEmulationEnabled" and p == {"enabled": False}
                for m, p in ctx.sess.sent)
 
@@ -451,7 +500,12 @@ def test_capture_repairs_collapsed_viewport(streamer):
     streamer._cdp = ctx.sess
     streamer._cdp_for = streamer._page
 
-    frame = asyncio.run(streamer._grab(streamer._page))
+    # The persistence gate (REPAIR_AFTER_MISSES) means a single failing frame
+    # never repairs — a genuinely collapsed viewport fails every frame, so it
+    # crosses the threshold and repairs within REPAIR_AFTER_MISSES grabs.
+    frame = None
+    for _ in range(OV.REPAIR_AFTER_MISSES):
+        frame = asyncio.run(streamer._grab(streamer._page))
 
     assert frame
     assert streamer.vw >= 320
@@ -528,3 +582,195 @@ def test_reset_view_steer_action(streamer):
     res = asyncio.run(streamer._do_action({"kind": "reset_view"}))
     assert res["ok"] is True and res["cleared"] == 2
     assert any(m == "Emulation.clearDeviceMetricsOverride" for m, _ in ctx.sess.sent)
+
+
+def test_ineffective_repairs_drop_session_then_go_dormant(streamer):
+    """The 2026-07-23 'zooms in then back out, viewport static' pulse: the
+    cached metric session was bound to a pre-navigation (frozen) target, so
+    every repair's clear+apply perturbed the REAL page without ever changing
+    the reading — a visible pulse every backoff period, forever. Now each dud
+    repair drops the cached session (rebuild against the current target), and
+    after 3 duds repairs go DORMANT until the gate recovers or the url flips."""
+
+    class WedgedSess(FakeSess):
+        async def send(self, method, params=None):
+            self.sent.append((method, params))
+            if method == "Page.captureScreenshot":
+                return {"data": _JPEG_B64}
+            if method == "Page.getLayoutMetrics":
+                # under the floor, and NOTHING the repair does changes it
+                return {"layoutViewport": {"clientWidth": 708,
+                                           "clientHeight": 634}}
+            return {}
+
+    ctx = FakeCtx(n_pages=1)
+    ctx.sess = WedgedSess()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer._cdp = ctx.sess
+    streamer._cdp_for = streamer._page
+    streamer._repair_backoff = 0.0          # no waiting between repairs in test
+
+    def repairs():
+        # a repair reasserts metrics by OVERWRITE (clear-first was the strobe)
+        return sum(1 for m, _ in ctx.sess.sent
+                   if m == "Emulation.setDeviceMetricsOverride")
+
+    # 3 dud repair rounds: each needs REPAIR_AFTER_MISSES misses to trigger
+    for _ in range(3 * OV.REPAIR_AFTER_MISSES + 2):
+        asyncio.run(streamer._grab(streamer._page))
+        streamer._repair_ts = 0.0           # collapse the throttle window
+    n_at_dormancy = repairs()
+    assert n_at_dormancy == 3               # exactly the dud budget
+    assert streamer._repair_dormant is True
+    # every dud dropped + detached the cached session (the next _grab
+    # legitimately rebuilds one — the drop forces a FRESH attach, that's the
+    # point — so assert the detaches, not an empty map)
+    assert ctx.sess.detached >= 3
+
+    # dormant: more failing frames, ZERO further repairs (the pulse is gone)
+    for _ in range(2 * OV.REPAIR_AFTER_MISSES):
+        asyncio.run(streamer._grab(streamer._page))
+        streamer._repair_ts = 0.0
+    assert repairs() == n_at_dormancy
+
+    # a navigation re-arms
+    streamer._page.url = "https://example.test/next"
+    asyncio.run(streamer._grab(streamer._page))
+    assert streamer._repair_dormant is False
+
+
+def test_walked_zone_never_repairs_only_collapse_band_does(streamer):
+    """928x634 (a scrollbar-walked but perfectly usable page) sits between the
+    960 gate floor and the 800 repair hard-floor: the gate misses but the
+    clear+apply reflow — the user-visible 'zooms in then back out' pulse —
+    must NOT fire. A genuinely collapsed ~700-wide emulation still repairs."""
+
+    class WalkedSess(FakeSess):
+        width = 928
+        async def send(self, method, params=None):
+            self.sent.append((method, params))
+            if method == "Page.captureScreenshot":
+                return {"data": _JPEG_B64}
+            if method == "Page.getLayoutMetrics":
+                return {"layoutViewport": {"clientWidth": self.width,
+                                           "clientHeight": 634}}
+            return {}
+
+    ctx = FakeCtx(n_pages=1)
+    ctx.sess = WalkedSess()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer._cdp = ctx.sess
+    streamer._cdp_for = streamer._page
+    streamer._repair_backoff = 0.0
+
+    def repairs():
+        # a repair reasserts metrics by OVERWRITE (clear-first was the strobe)
+        return sum(1 for m, _ in ctx.sess.sent
+                   if m == "Emulation.setDeviceMetricsOverride")
+
+    for _ in range(3 * OV.REPAIR_AFTER_MISSES):
+        asyncio.run(streamer._grab(streamer._page))
+        streamer._repair_ts = 0.0
+    assert repairs() == 0                      # walked zone: no pulse, ever
+
+    ctx.sess.width = 700                       # collapse band → repair engages
+    for _ in range(OV.REPAIR_AFTER_MISSES + 1):
+        asyncio.run(streamer._grab(streamer._page))
+        streamer._repair_ts = 0.0
+    assert repairs() >= 1
+    assert OV.REPAIR_HARD_FLOOR_W == 800
+
+
+def test_agent_run_rising_edge_reasserts_clobbered_view_metrics(monkeypatch, streamer):
+    """Run START: the agent's Playwright MCP attaches to the shared Chrome and
+    its emulation defaults drop our device-metrics override, so the canvas
+    snaps back to the window's native width the instant a task begins .
+
+    The repair loop cannot catch this — its gate only fires BELOW
+    REPAIR_HARD_FLOOR_W and an attach makes the page WIDER — so the rising edge
+    re-asserts instead. It must fire only while the live reading is off
+    (_gate_misses > 0), and must stop once the viewport is ours again.
+    """
+    ctx = FakeCtx(n_pages=1)
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+    monkeypatch.setattr(OV, "IDLE_STOP_AFTER", 30.0)
+    monkeypatch.setattr(OV, "FRAME_INTERVAL", 0.01)
+
+    forced = []
+
+    async def _fake_force(page, force=False):
+        forced.append(force)
+    monkeypatch.setattr(streamer, "_force_desktop_page", _fake_force)
+    monkeypatch.setattr(streamer, "_clear_emulation",
+                        lambda: asyncio.sleep(0, result={"ok": True}))
+
+    # Viewport is clobbered for the whole window: the live reading never
+    # matches view_w, which is what drives _gate_misses in _grab. (Presetting
+    # _gate_misses does not work — _grab recomputes it every frame.)
+    monkeypatch.setattr(streamer, "_matches_view_metrics", lambda w, h: False)
+
+    seq = iter([False, True, True, True, False, False])
+
+    class _Runner:
+        def is_running(self):
+            v = next(seq, None)
+            if v is None:
+                streamer._running = False
+                return False
+            return v
+    monkeypatch.setattr(OV.operator_agent, "runner", _Runner())
+
+    streamer._running = True
+    streamer._run()
+
+    # Assert on the flight-recorder, not on every _force_desktop_page call —
+    # the grab path forces unrelatedly when it can't read a viewport.
+    kinds = [e["kind"] for e in streamer._vp_events]
+    assert "run-start-reassert" in kinds, f"rising edge must re-assert: {kinds}"
+    assert any(f is True for f in forced), \
+        f"re-assert is a one-shot boundary event, must bypass the storm guard: {forced}"
+
+
+def test_run_start_reassert_stays_quiet_when_viewport_already_matches(
+        monkeypatch, streamer):
+    """A run that did NOT clobber the viewport must be left alone — otherwise
+    we'd fight a run that resizes on purpose, which is exactly what the
+    run-end-only design was protecting."""
+    ctx = FakeCtx(n_pages=1)
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+    monkeypatch.setattr(OV, "IDLE_STOP_AFTER", 30.0)
+    monkeypatch.setattr(OV, "FRAME_INTERVAL", 0.01)
+
+    forced = []
+
+    async def _fake_force(page, force=False):
+        forced.append(force)
+    monkeypatch.setattr(streamer, "_force_desktop_page", _fake_force)
+    monkeypatch.setattr(streamer, "_clear_emulation",
+                        lambda: asyncio.sleep(0, result={"ok": True}))
+
+    # Reading matches view_w throughout, so the gate never registers a miss.
+    monkeypatch.setattr(streamer, "_matches_view_metrics", lambda w, h: True)
+    monkeypatch.setattr(streamer, "_accept_viewport", lambda w, h: True)
+
+    seq = iter([False, True, True, True, False, False])
+
+    class _Runner:
+        def is_running(self):
+            v = next(seq, None)
+            if v is None:
+                streamer._running = False
+                return False
+            return v
+    monkeypatch.setattr(OV.operator_agent, "runner", _Runner())
+
+    streamer._running = True
+    streamer._run()
+
+    kinds = [e["kind"] for e in streamer._vp_events]
+    assert "run-start-reassert" not in kinds, \
+        f"viewport already matches — must not touch emulation: {kinds}"

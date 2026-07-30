@@ -69,7 +69,19 @@ def test_run_ending_with_a_look_passes_clean(runner):
     assert runner._completion_gate_check() == ""
 
 
-def test_bail_message_gets_the_replan_turn_even_with_evidence(runner):
+def test_bail_replan_is_opt_in_default_off(runner):
+    """2026-07-28: second live false positive (claude-b runs) — bail-replan is
+    now opt-in. A bail-sounding final with visual evidence passes clean unless
+    OPERATOR_BAIL_REPLAN=1."""
+    _did_work(runner)
+    runner._note_action("computer", {"action": "screenshot"})
+    runner.messages.append({"ts": 0, "role": "assistant",
+                            "text": "I was unable to find the export button."})
+    assert runner._completion_gate_check() == ""
+
+
+def test_bail_message_gets_the_replan_turn_even_with_evidence(runner, monkeypatch):
+    monkeypatch.setenv("OPERATOR_BAIL_REPLAN", "1")
     _did_work(runner)
     runner._note_action("computer", {"action": "screenshot"})
     runner.messages.append({"ts": 0, "role": "assistant",
@@ -78,6 +90,46 @@ def test_bail_message_gets_the_replan_turn_even_with_evidence(runner):
     assert gate == OA.AgentRunner._GATE_REPLAN_PROMPT
     assert any("Auto-replan" in m["text"] for m in runner.messages
                if m["role"] == "error")
+
+
+@pytest.mark.parametrize("final", [
+    # THE live false positive (2026-07-22): a finished passport-research answer
+    # whose CONTENT contains "can't" — burned a full replan turn on a done task.
+    "Validity: 5 years (under-16 passports can't be renewed, must reapply "
+    "in person each time)",
+    "Note: you cannot edit the DS-11 after printing, so double-check first.",
+    "The fee can't be paid by card at USPS; bring a check. All set.",
+    "You can take over the browser any time if you want to poke around.",
+    "They were unable to confirm same-day pickup, so I chose Thursday.",
+    "If it's not possible to attend, the ticket is refundable until Friday.",
+    "I set it up so you won't have to stop by the branch.",
+    "Done — I stopped the auto-renewal as requested.",
+])
+def test_negations_in_answer_content_do_not_trigger_replan(runner, final):
+    """Bail markers must be FIRST-PERSON anchored — third-party or factual
+    can't/cannot/unable in a successful summary is not a bail."""
+    _did_work(runner)
+    runner._note_action("computer", {"action": "screenshot"})
+    runner.messages.append({"ts": 0, "role": "assistant", "text": final})
+    assert runner._completion_gate_check() == ""
+
+
+@pytest.mark.parametrize("final", [
+    "I couldn't get past the login wall.",
+    "I can't complete the checkout — the card field rejects input.",
+    "I'm blocked by a captcha here.",
+    "I am stuck on the 2FA screen.",
+    "I'll stop here — the page keeps erroring.",
+    "Failed to complete the booking, the slot vanished.",
+    "Please take over for the payment step.",
+    "You'll need to take over to enter the SMS code.",
+])
+def test_first_person_bails_still_trigger_replan(runner, final, monkeypatch):
+    monkeypatch.setenv("OPERATOR_BAIL_REPLAN", "1")
+    _did_work(runner)
+    runner._note_action("computer", {"action": "screenshot"})
+    runner.messages.append({"ts": 0, "role": "assistant", "text": final})
+    assert runner._completion_gate_check() == OA.AgentRunner._GATE_REPLAN_PROMPT
 
 
 def test_gate_fires_at_most_once_per_start(runner):

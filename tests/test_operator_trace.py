@@ -153,6 +153,54 @@ def test_ascii_table_gets_fenced():
     assert out.startswith("```")
 
 
+# ── strip_plan_scaffold ──────────────────────────────────────────────────────
+# Flash 3.6 dumped its whole running Plan:/Status: scratchpad into the FINAL
+# answer content  — the leading scaffold blocks must be shed
+# so only the real answer reaches the reply bubble.
+
+_FLASH_DUMP = (
+    "Plan:\n"
+    "1. Search Google for \"Blueground insolvent\" news.\n"
+    "2. Inspect top financial news sources.\n"
+    "3. Synthesize the findings.\n"
+    "\n"
+    "Status: Step 1 (Navigating to Google Search) in progress.\n"
+    "Status: Step 1 complete. Reading search snapshot.\n"
+    "Plan:\n"
+    "1. Search Google (Done).\n"
+    "2. Run targeted search to confirm status.\n"
+    "3. Synthesize the findings.\n"
+    "\n"
+    "Status: Step 2 in progress.\n"
+    "Status: Step 2 complete.\n"
+    "\n"
+    "Key Takeaway: No, Blueground is not insolvent. While private, "
+    "reports indicate continued operations.")
+
+
+def test_leading_plan_status_scaffold_is_stripped():
+    out = OT.strip_plan_scaffold(_FLASH_DUMP)
+    assert out.startswith("Key Takeaway:")
+    assert "Plan:" not in out and "Status:" not in out
+
+
+def test_pure_scaffold_is_left_alone():
+    """If stripping would leave nothing, keep the original — a truncated turn
+    beats an empty bubble."""
+    scaffold_only = "Plan:\n1. Do a thing.\nStatus: Step 1 in progress."
+    assert OT.strip_plan_scaffold(scaffold_only) == scaffold_only
+
+
+def test_answer_mentioning_a_plan_mid_text_is_untouched():
+    t = "Here's the summary.\n\nPlan: the company plans to expand in 2027."
+    assert OT.strip_plan_scaffold(t) == t
+
+
+def test_plain_answer_passes_through():
+    t = "Blueground is fine — revenue grew 40% YoY."
+    assert OT.strip_plan_scaffold(t) == t
+
+
 def test_harmony_final_channel_extracted():
     raw = ("<|channel|>analysis<|message|>secret reasoning<|end|>"
            "<|channel|>final<|message|>the answer<|end|>")

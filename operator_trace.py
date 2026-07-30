@@ -25,7 +25,7 @@ def shot_dirs() -> list[str]:
         or os.environ.get("PLAYWRIGHT_OUTPUT_DIR")
         or "~/.cache/computer-use"))] + [
         os.path.realpath(os.path.expanduser("~/.operator-sessions/" + b))
-        for b in ("claude-a", "jiabanya", "gpt", "gemma")]
+        for b in ("claude-a", "claude-b", "gpt", "gemma")]
 
 
 # Map a Playwright MCP tool call -> ("present-tense action label", "short detail")
@@ -107,13 +107,13 @@ _NONBROWSER_LABELS = {
     "multiedit": "Editing file", "notebookedit": "Editing notebook",
     "ls": "Listing files", "cat": "Reading file",
     # memory / recall (host-app, search)
-    "recall": "Recalling", "memory": "Checking memory", "search": "Searching memory",
-    "get_corpus": "Searching memory", "list_corpora": "Checking memory",
-    # markets (ibkr)
-    "get_quote": "Checking quote", "quote": "Checking quote",
-    "get_positions": "Checking portfolio", "ibkr_quote": "Checking quote",
-    "ibkr_get_positions": "Checking portfolio", "ibkr_get_account_summary": "Checking account",
-    "ibkr_margin": "Checking margin", "ibkr_get_historical_bars": "Pulling chart data",
+    "recall": "Recalling", "memory": "Checking data", "search": "Searching",
+    "get_corpus": "Searching", "list_corpora": "Checking data",
+    # markets (tool)
+    "get_quote": "Checking data", "quote": "Checking data",
+    "get_positions": "Checking data", "tool_quote": "Checking data",
+    "tool_get_positions": "Checking data", "tool_get_account_summary": "Checking data",
+    "tool_margin": "Checking data", "tool_get_historical_bars": "Pulling data",
     # docs / misc
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
@@ -168,8 +168,7 @@ _SKIP_TOOLS = {"toolsearch", "tooldispatch"}
 
 
 def mcp_resource_label(name: str) -> str:
-    """Map generic MCP resource/listing ops to a clean verb (the owner: 'Listing
-    resources' etc. is fine; map when we can). Returns '' if nothing fits."""
+    """Map generic MCP resource/listing ops to a clean verb . Returns '' if nothing fits."""
     n = (name or "").lower().rsplit("__", 1)[-1]
     if any(k in n for k in ("list_resources", "listresources", "resources/list", "list_dir",
                             "listdir", "list_directory", "readdir")):
@@ -413,7 +412,7 @@ def clean_gemma_text(text: str) -> str:
     t = _re.sub(r'!\[[^\]]*\]\((?!https?://|/?operator/shot/)[^)]*\)', '', t)
     # [label](file:///...) plain (non-image) link -> a browser can't load file:// either;
     # keep just the label text so a self-narrated checklist ("see [trace.json](file:///...)")
-    # doesn't leave a dead link in the reply (2026-06-30, #37: agy work-summary leak).
+    # doesn't leave a dead link in the reply .
     t = _re.sub(r'(?<!!)\[([^\]]*)\]\(file://[^)]*\)', lambda m: m.group(1) or '', t)
     # strip a trailing files=[...] literal (single or multi-line)
     t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)
@@ -437,6 +436,43 @@ def clean_gemma_text(text: str) -> str:
     # collapse 3+ blank lines left by the strips
     t = _re.sub(r'\n{3,}', '\n\n', t).strip()
     return t
+
+
+_SCAFFOLD_HEAD_RE = _re.compile(
+    r'^\s*[*_]{0,2}(?:Plan|Status|Current Plan|Updated Plan|Revised Plan)'
+    r'[*_]{0,2}\s*[::]')
+_SCAFFOLD_ITEM_RE = _re.compile(r'^\s*(?:\d+[.)]|[-*•])\s+')
+
+
+def strip_plan_scaffold(text: str) -> str:
+    """Shed a LEADING Plan:/Status: scratchpad from a final answer.
+
+    Gemini Flash 3.6 (agy) sometimes dumps its whole running plan into the
+    final `content` step — "Plan: 1..2..3 / Status: step 1 in progress / ..."
+    — followed by the real answer . The per-step narration
+    already lands in the trace as role="thinking"; repeating it in the reply
+    bubble buries the answer. Only ANSWER-LEADING scaffold is dropped: blocks
+    are consumed from the top while they look like plan headers or their list
+    items; the first ordinary paragraph ends the scaffold. If nothing would
+    remain, the text is returned unchanged (a scaffold-only turn should still
+    show SOMETHING rather than an empty bubble)."""
+    if not isinstance(text, str) or not text.strip():
+        return text or ""
+    lines = text.splitlines()
+    i, in_block, consumed = 0, False, False
+    while i < len(lines):
+        ln = lines[i]
+        if _SCAFFOLD_HEAD_RE.match(ln):
+            in_block = consumed = True
+        elif not ln.strip():
+            pass                          # blank inside/between scaffold blocks
+        elif in_block and _SCAFFOLD_ITEM_RE.match(ln):
+            pass                          # a numbered/bulleted plan item
+        else:
+            break                         # first real paragraph — answer starts
+        i += 1
+    rest = "\n".join(lines[i:]).strip()
+    return rest if (consumed and rest) else text
 
 
 def extract_handoff(text: str) -> tuple[str, str | None]:

@@ -257,6 +257,64 @@ def test_settings_writer_idempotent_and_merge_safe(store, tmp_path, monkeypatch)
     assert json.loads(sp.read_text())["model"] == "claude-sonnet-5"
 
 
+def test_settings_writer_prunes_stale_steer_hook_paths(store, tmp_path):
+    """Regression (2026-07-22): a prior import of operator_agent from a
+    different checkout (git worktree / /tmp scratchpad) writes a steer_hook
+    command with THAT path baked in. Once the old checkout is gone, that
+    stale command fails on every tool call and its stderr surfaces into the
+    agent's transcript as a live "hook error". _ensure_steer_hook_settings
+    must prune any steer_hook.py entry that isn't the current canonical
+    path, not just skip-if-present."""
+    import operator_agent as OA
+    cwd = tmp_path / "botcwd"
+    cwd.mkdir()
+    sp = cwd / ".claude" / "settings.json"
+    sp.parent.mkdir(parents=True)
+    stale = {"hooks": {"PostToolUse": [
+        {"matcher": "", "hooks": [{"type": "command",
+            "command": "python3 /tmp/the host repo-operator-old1/modules/operator/steer_hook.py"}]},
+        {"matcher": "", "hooks": [{"type": "command",
+            "command": "python3 /tmp/the host repo-operator-old2/modules/operator/steer_hook.py"}]},
+        {"matcher": "", "hooks": [{"type": "command", "command": "some-other-hook"}]},
+    ]}}
+    sp.write_text(json.dumps(stale))
+    OA._ensure_steer_hook_settings(str(cwd))
+    cfg = json.loads(sp.read_text())
+    hooks = cfg["hooks"]["PostToolUse"]
+    steer_cmds = [h["command"] for grp in hooks for h in grp["hooks"]
+                  if "steer_hook.py" in h["command"]]
+    assert steer_cmds == [OA._STEER_HOOK_CMD]   # stale paths gone, exactly one survivor
+    other_cmds = [h["command"] for grp in hooks for h in grp["hooks"]
+                  if "steer_hook.py" not in h["command"]]
+    assert other_cmds == ["some-other-hook"]    # non-steer hooks untouched
+    # idempotent after pruning: re-running writes nothing further
+    before = sp.read_text()
+    OA._ensure_steer_hook_settings(str(cwd))
+    assert sp.read_text() == before
+
+
+def test_settings_writer_keeps_current_hook_while_pruning_stale(store, tmp_path):
+    """Edge of the same regression: the CANONICAL entry already present AND
+    stale ones beside it. Pruning must not eat the current entry (v1 of the
+    fix dropped the current-only group and skipped the re-add — one run with
+    no steering at all)."""
+    import operator_agent as OA
+    cwd = tmp_path / "botcwd"
+    cwd.mkdir()
+    sp = cwd / ".claude" / "settings.json"
+    sp.parent.mkdir(parents=True)
+    sp.write_text(json.dumps({"hooks": {"PostToolUse": [
+        {"matcher": "", "hooks": [{"type": "command", "command": OA._STEER_HOOK_CMD}]},
+        {"matcher": "", "hooks": [{"type": "command",
+            "command": "python3 /tmp/the host repo-operator-gone/modules/operator/steer_hook.py"}]},
+    ]}}))
+    OA._ensure_steer_hook_settings(str(cwd))
+    cfg = json.loads(sp.read_text())
+    steer_cmds = [h["command"] for grp in cfg["hooks"]["PostToolUse"] for h in grp["hooks"]
+                  if "steer_hook.py" in h["command"]]
+    assert steer_cmds == [OA._STEER_HOOK_CMD]
+
+
 # ── the /operator/agent/say route ────────────────────────────────────────────
 
 def _app(monkeypatch, demo=False):

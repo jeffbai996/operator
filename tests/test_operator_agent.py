@@ -72,6 +72,35 @@ def test_final_content_step_is_tagged_assistant():
     assert assistant_msgs[0]["text"] == "Here's the answer."
 
 
+def test_planning_narration_with_tool_calls_is_not_assistant():
+    # Flash 3.5 rides its per-step planning line in `content` WITH tool_calls
+    # attached (other agy models put it in `thinking`, content empty until the
+    # final answer). That narration is CoT — it must surface as role="thinking"
+    # (trace only), never as an assistant message / reply-bubble candidate
+    # .
+    r = make_runner()
+    path = write_traj([
+        planner_step(0, content="I will list the open browser tabs.",
+                     tool_calls=[{"name": "browser_tabs", "args": {}}]),
+        planner_step(2, content="I will click the Add Torrent button.",
+                     tool_calls=[{"name": "browser_click", "args": {}}]),
+        planner_step(4, content="All torrents queued — here is the status."),
+    ])
+    try:
+        got_answer = r._agy_parse_trajectory(path)
+    finally:
+        os.unlink(path)
+    assert got_answer is True
+    assistant_msgs = [m for m in r.messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+    assert assistant_msgs[0]["text"].startswith("All torrents queued")
+    thinking = [m["text"] for m in r.messages if m["role"] == "thinking"]
+    assert any("browser tabs" in t for t in thinking)
+    # narration precedes the actions it announces (trace reads top-down)
+    roles = [m["role"] for m in r.messages]
+    assert roles.index("thinking") < roles.index("action")
+
+
 def test_dead_file_link_stripped_to_label_only():
     r = make_runner()
     text = "see [trace.json](file:///home/user/.gemini/brain/trace.json) for detail"

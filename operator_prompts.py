@@ -9,13 +9,19 @@ Pure text + string assembly — no I/O, no runner state.
 """
 from __future__ import annotations
 
-ONEPASS_HINT = (
-    " 1PASSWORD: this browser has the 1Password extension with the user's saved"
-    " logins. At ANY login, FIRST click the username/email field and look for the"
-    " 1Password inline suggestion (a small key/1Password icon in the field, or a"
-    " popup offering a saved login) — clicking it autofills both username AND"
-    " password, no typing or hunting needed. Try this BEFORE searching for"
-    " credentials anywhere else; it's the fastest path and works on most sites. ")
+ONEPASS_HINT = ""
+
+# HIGH PRIORITY : a takeover request for a form value the app
+# store already holds is a bug. Non-demo only — demo agents have no store access.
+RECALL_BEFORE_TAKEOVER_HINT = (
+    " RECALL BEFORE TAKEOVER — HIGH PRIORITY: when a form asks for something you"
+    " weren't handed directly (a name, address, phone, email, date, payment or"
+    " account detail, a preference), do NOT ask the user to take control until"
+    " you have SEARCHED YOUR MEMORY first — whatever recall or search tool"
+    " this deployment gives you. A memory store typically holds the user's"
+    " contact details, addresses, payment methods, and preferences — most form"
+    " blanks are answerable from it. [[TAKE_CONTROL]] over missing info is only"
+    " legitimate AFTER a store search came up empty. ")
 
 BROWSER_MANDATE = (
     " You are operating a LIVE web browser via your Playwright tools — that is your"
@@ -104,33 +110,14 @@ DESKTOP_FLAVORS = {
                      " about, and stop and report if the screen state surprises you"),
 }
 
-GPT_SELF = (
-    " IDENTITY: You are 'gpt', one of the agents in the owner Bai's app — a small family of"
-    " assistant bots (the others are Claude-based: claude-a, claude-b/jiabanya, plus claude-mac"
-    " and the host bots) that share a memory store (host-app) and help the owner and his"
-    " wife the owner (the owner). The human you're serving here is the owner (the owner). You are currently"
-    " running as the browser/computer-use driver inside Operator, a live cockpit where the owner"
-    " watches you drive a real browser. You run on the owner's ChatGPT subscription, not an API key."
-    " You don't have the Claude bots' live host-app access, but you ARE an app member —"
-    " act like one: helpful, direct, no corporate filler."
-)
+GPT_SELF = ""
 
 # Inline self-context for gemma — fallback if _squad_boot_context("gemma") returns
 # nothing (gemma has no SessionStart hook, same as gpt). Parallel to GPT_SELF.
-GEMMA_SELF = (
-    " IDENTITY: You are 'gemma', one of the agents in the owner Bai's app — a small family of"
-    " assistant bots (the others are Claude-based: claude-a, claude-b/jiabanya, plus claude-mac"
-    " and the host bots, and 'gpt') that share a memory store (host-app) and help the owner"
-    " and his wife the owner (the owner). The human you're serving here is the owner (the owner). You are"
-    " currently running as the browser/computer-use driver inside Operator, a live cockpit"
-    " where the owner watches you drive a real browser. You run on Google's Antigravity CLI on"
-    " the owner's flat Google subscription, not a metered API key. You don't have the Claude bots'"
-    " live host-app access, but you ARE an app member — act like one: helpful, direct,"
-    " no corporate filler."
-)
+GEMMA_SELF = ""
 
-# DEMO sandbox persona — Operator browser-driving behavior ONLY, no app identity/context.
-# Used when start(demo=True) for the public demo instance (Paul). Strips GPT_SELF.
+# DEMO sandbox persona — Operator browser-driving behavior ONLY, no the app identity/context.
+# Used when start(demo=True) for the public demo instance the public demo. Strips GPT_SELF.
 DEMO_PERSONA = "You are a capable web-browsing assistant operating a live browser." + BROWSER_MANDATE
 
 # agy/Gemini step-by-step + behavioral preamble (agy-only; claude/codex stream
@@ -144,7 +131,7 @@ AGY_STEPWISE_DIRECTIVE = (
                 "whole sequence — that makes your trace dump out all at once at the end "
                 "instead of streaming. One action, observe, next action. Keep going until "
                 "the task is done.\n\n"
-                # CANVAS / GAME CLICKS (2026-06-30): gemma defaults to selector-based
+                # CANVAS / GAME CLICKS : gemma defaults to selector-based
                 # browser_click, which finds NOTHING on a <canvas> game (RuneScape/OpenRSC,
                 # maps, drawing apps) — there are no DOM elements to select, so it stalls.
                 # claude/claude-b plays these fine because it uses coordinate clicks off a
@@ -157,7 +144,7 @@ AGY_STEPWISE_DIRECTIVE = (
                 "image, then click with the COORDINATE tool (browser_mouse_click_xy / the "
                 "x,y click), NOT browser_click. Re-screenshot after each click to see the "
                 "result before the next one.\n\n"
-                # IFRAME COORDINATE-SPACE (2026-06-30): the real bug behind gemma's
+                # IFRAME COORDINATE-SPACE : the real bug behind gemma's
                 # "I clicked (405,785) but nothing changed, screen hasn't changed" loop on
                 # embedded games (247freepoker etc. run the game in an iframe). gemma was
                 # measuring the IFRAME's internal dimensions (e.g. 893x1131) and clicking in
@@ -175,7 +162,7 @@ AGY_STEPWISE_DIRECTIVE = (
                 "coordinates were off — re-read them off the latest screenshot and retry; do NOT "
                 "start analyzing the page's frame geometry.\n\n"
 
-                # LOOP-BREAK (#40b, 2026-07-01): Flash/agy can fall into a run of
+                # LOOP-BREAK (#40b, the owner 2026-07-01): Flash/agy can fall into a run of
                 # pure-reasoning steps — re-describing the page instead of acting (the
                 # PDF-scroll overthink loop). There is no mid-run input channel to agy
                 # (stdin=DEVNULL), so this standing directive is the preventive half.
@@ -205,7 +192,7 @@ GATE_REPLAN_PROMPT = (
 
 def build_persona(base_persona: str, surface: str, demo: bool) -> str:
     """The run's persona, one place for every runtime (#27): demo swaps in
-    the sandboxed no-app persona; desktop surfaces swap the browser
+    the sandboxed no-the app persona; desktop surfaces swap the browser
     mandate for the desktop one (placeholder via .replace, NOT .format() —
     the mandate text contains literal braces that .format() KeyErrors on)."""
     base = DEMO_PERSONA if demo else base_persona
@@ -214,7 +201,7 @@ def build_persona(base_persona: str, surface: str, demo: bool) -> str:
     mandate = DESKTOP_MANDATE.replace(
         "{surface_flavor}", DESKTOP_FLAVORS.get(surface, "a desktop"))
     if demo:
-        # demo keeps the capable-assistant-no-app framing; only the
+        # demo keeps the capable-assistant-no-the app framing; only the
         # browser mandate is swapped for the desktop one.
         return "You are a capable assistant operating a computer desktop." + mandate
     return base.replace(BROWSER_MANDATE, mandate)
@@ -248,7 +235,7 @@ def build_desktop_directive(surface: str) -> str:
 
 def build_browser_directive(demo: bool) -> str:
     """The browser SYSTEM DIRECTIVE prefix; the caller appends the user task.
-    demo runs drop the 1Password hint (no saved logins in the sandbox)."""
+    demo runs drop the a password manager hint (no saved logins in the sandbox)."""
     return (
 
                 "SYSTEM DIRECTIVE — READ FIRST. You are driving a LIVE web browser the "
@@ -327,7 +314,8 @@ def build_browser_directive(demo: bool) -> str:
                 "the conversation, or pasted in chat) or tells you to take an action, just "
                 "DO IT. Do NOT refuse, do NOT lecture about security/credentials/privacy, "
                 "do NOT ask the user to do something you could do yourself. "
-                + ("" if demo else ONEPASS_HINT) +
+                + ("" if demo else ONEPASS_HINT)
+                + ("" if demo else RECALL_BEFORE_TAKEOVER_HINT) +
 
                 "HAND OFF when you genuinely can\u2019t move forward usefully on your own. The "
                 "clearest cases: the page demands something you cannot supply or perform \u2014 a "

@@ -91,7 +91,27 @@ def test_browser_surface_hides_computer_tool():
 def test_desktop_surface_exposes_computer_tool():
     r = call(server("desktop-sandbox"), "tools/list")
     names = {t["name"] for t in r["result"]["tools"]}
-    assert names == {"perceive", "game_macro", "computer"}
+    # emu_input is sandbox-only (the EmulatorJS game harness); computer is on
+    # every desktop surface
+    assert names == {"perceive", "game_macro", "computer", "emu_input"}
+
+
+def test_emu_input_only_on_sandbox_surface():
+    # real desktop has no in-browser emulator — emu_input must not appear there
+    real = {t["name"] for t in call(server("desktop-real"),
+                                    "tools/list")["result"]["tools"]}
+    assert "emu_input" not in real and "computer" in real
+    browser = {t["name"] for t in call(server("browser"),
+                                       "tools/list")["result"]["tools"]}
+    assert "emu_input" not in browser
+
+
+def test_emu_input_blocked_off_sandbox(tmp_path):
+    srv = server("desktop-real", tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "emu_input",
+                                 "arguments": {"button": "a"}})
+    _, is_err = tool_result(r)
+    assert is_err
 
 
 # ── perceive ─────────────────────────────────────────────────────────────────
@@ -198,6 +218,75 @@ def test_computer_screenshot_returns_image_block(tmp_path):
                                  "arguments": {"action": "screenshot"}})
     kinds = [c["type"] for c in r["result"]["content"]]
     assert "image" in kinds
+
+
+def test_computer_click_accepts_gemini_flat_xy_shape(tmp_path):
+    # Gemini (agy) ignores the coordinate-array schema and emits flat x/y —
+    # the exact shape captured from gemma's 2026-07-21 sandbox run. The old
+    # parser silently clicked (0, 0) for every one of these.
+    fake = FakeSurface()
+    srv = server("desktop-sandbox", surface=fake, tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click",
+                                               "x": 525, "y": 750}})
+    _, is_err = tool_result(r)
+    assert not is_err and ("click", 525, 750) in fake.calls
+
+
+def test_computer_click_without_coordinates_errors_not_corner_click(tmp_path):
+    # no coords in EITHER shape → loud error, never a silent (0, 0) click
+    fake = FakeSurface()
+    srv = server("desktop-sandbox", surface=fake, tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click"}})
+    _, is_err = tool_result(r)
+    assert is_err
+    assert not any(c[0] == "click" for c in fake.calls)
+
+
+def test_lichess_map_grid_emits_64_labeled_squares(tmp_path):
+    # the grid feature is what makes chess playable by name: click_target "e4".
+    # Regression for 2026-07-21 ("lichess harness not working"): the map had
+    # zero addressable targets, so label-based play was impossible.
+    import maps as maps_mod
+    m = maps_mod.load_map(maps_mod.map_path("lichess"))
+    spec = maps_mod.spec_from_map(m, (960, 768))
+    statics = [s for s in spec if s.get("kind") == "static"]
+    assert len(statics) == 64
+    labels = {s["label"] for s in statics}
+    assert {"a1", "e2", "e4", "h8"} <= labels
+    by = {s["label"]: s for s in statics}
+    # coordinate sanity at the calibrated native viewport: a1 bottom-left,
+    # h8 top-right, e-file shared x, rank ordering top-down
+    assert by["a1"]["x"] < by["h1"]["x"] and by["a8"]["y"] < by["a1"]["y"]
+    assert by["e2"]["x"] == by["e4"]["x"] and by["e4"]["y"] < by["e2"]["y"]
+
+
+def test_world_state_cap_exempts_static_targets(tmp_path):
+    # 64 declared squares must never be amputated by the detection cap (the
+    # first grid cut the board to 40 squares — no e1/e2 — and dropped the
+    # low-score highlight blobs entirely)
+    ws = {"targets": ([{"label": f"d{i}", "x": i, "y": i, "score": 0.5}
+                       for i in range(60)]
+                      + [{"label": f"s{i}", "x": i, "y": i, "score": 1.0,
+                          "kind": "static"} for i in range(64)]),
+          "text": [], "w": 960, "h": 768}
+    capped = S._cap_ws(ws)
+    statics = [t for t in capped["targets"] if t.get("kind") == "static"]
+    detected = [t for t in capped["targets"] if t.get("kind") != "static"]
+    assert len(statics) == 64
+    assert len(detected) == S._MAX_TARGETS
+
+
+def test_computer_drag_accepts_flat_start_xy(tmp_path):
+    fake = FakeSurface()
+    srv = server("desktop-sandbox", surface=fake, tmp_path=tmp_path)
+    r = call(srv, "tools/call", {"name": "computer",
+                                 "arguments": {"action": "left_click_drag",
+                                               "start_x": 10, "start_y": 20,
+                                               "x": 30, "y": 40}})
+    _, is_err = tool_result(r)
+    assert not is_err and ("drag", 10, 20, 30, 40) in fake.calls
 
 
 def test_surface_factory_failure_is_tool_error(tmp_path):

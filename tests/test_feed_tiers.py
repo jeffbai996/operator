@@ -27,9 +27,10 @@ class _FakeSess:
     """Records CDP sends; answers captureScreenshot with a tiny valid payload
     and getLayoutMetrics with the given metrics (raises when None — the
     'metrics unavailable' path)."""
-    def __init__(self, metrics=None):
+    def __init__(self, metrics=None, body=None):
         self.calls = []
         self._metrics = metrics
+        self._body = body   # [scrollWidth, scrollHeight] for the extent probe
 
     async def send(self, method, params=None):
         self.calls.append((method, params or {}))
@@ -39,6 +40,10 @@ class _FakeSess:
             if self._metrics is None:
                 raise RuntimeError("no metrics")
             return self._metrics
+        if (method == "Runtime.evaluate" and self._body is not None
+                and "scrollWidth" in (params or {}).get("expression", "")):
+            import json
+            return {"result": {"value": json.dumps(self._body)}}
         return {"result": {"value": "null"}}
 
 
@@ -51,16 +56,18 @@ def _mk_metrics(cw, ch, zoom=1.1, page_x=0, page_y=0):
                                   "clientWidth": cw, "clientHeight": ch}}
 
 
-def _grab_with(tier, vw=1400, vh=900, metrics="auto"):
+def _grab_with(tier, vw=1400, vh=900, metrics="auto", view=None, body=None):
     st = OV._Streamer()
     st.tier = tier
     st.vw, st.vh = vw, vh
+    if view is not None:
+        st.view_w, st.view_h = view
     if metrics == "auto":
         metrics = _mk_metrics(vw, vh)
     # _grab sessions are identity-checked against the page (Codex P1: a cache
     # bound to another tab streamed the wrong page) — seed _cdp_for to match.
     pg = object()
-    sess = _FakeSess(metrics)
+    sess = _FakeSess(metrics, body=body)
     st._cdp = sess
     st._cdp_for = pg
     out = asyncio.run(st._grab(pg))
@@ -68,22 +75,70 @@ def _grab_with(tier, vw=1400, vh=900, metrics="auto"):
     return out, shot
 
 
-def test_grab_hi_clips_full_device_viewport_at_native_res():
-    """2026-07-12 rev 2: clip covers the FULL device viewport (no right/bottom
-    crop — the owner "right edge cut off") and outputs at DEVICE resolution
-    (scale=1.0). Click accuracy is independent of frame size — the frontend
-    sends normalized (0..1) coords that _viewport_css maps to CSS px — so we
-    keep native sharpness instead of downscaling to CSS width. Downscaling only
-    the CDP path (while the fallback captured device-res) flipped served frame
-    sizes 690<->863 mid-nav → the phone rescaled each swap ("spasming small/big
-    at constant frequency") and the small frames upscaled soft ("pixelated")."""
+def test_grab_hi_native_page_clips_device_viewport():
+    """NATIVE regime (2026-07-26 rev 2): these metrics read a device viewport
+    (1540) that does NOT match the streamer's view target (1280) — no override
+    is active (a PDF tab, or a reset-view sweep whose re-apply missed), the
+    capture renders at device scale, and the clip must be the device viewport
+    or the frame zooms+crops (the google.com "urgh browser issues")."""
     out, shot = _grab_with("hi")
     assert out == b"\xff\xd8fakejpeg"
     assert shot["quality"] == OV.JPEG_QUALITY
     clip = shot["clip"]
-    assert clip["width"] == pytest.approx(1400 * 1.1)   # full device viewport
+    assert clip["width"] == pytest.approx(1400 * 1.1)   # device viewport
     assert clip["height"] == pytest.approx(900 * 1.1)
-    assert clip["scale"] == pytest.approx(1.0)          # native device res
+    assert clip["scale"] == pytest.approx(1.0)
+
+
+def test_grab_emulated_page_clips_css_viewport():
+    """OVERRIDE regime (the "chin"): when the device layout viewport equals
+    the view target, our setDeviceMetricsOverride is active and the capture
+    renders 1:1 CSS on an override-sized canvas — the clip must be the CSS
+    viewport or the frame pads a white right+bottom band (live-proven on
+    chatgpt.com: view 1280x1020, css 1024x816, device clip left a 204px chin)."""
+    metrics = {"layoutViewport": {"pageX": 0, "pageY": 0,
+                                  "clientWidth": 1280, "clientHeight": 1020},
+               "cssLayoutViewport": {"pageX": 0, "pageY": 0,
+                                     "clientWidth": 1024, "clientHeight": 816}}
+    st_view = (1280, 1020)
+    out, shot = _grab_with("hi", vw=1024, vh=816, metrics=metrics, view=st_view)
+    clip = shot["clip"]
+    assert clip["width"] == pytest.approx(1024)   # css layout viewport
+    assert clip["height"] == pytest.approx(816)
+    assert clip["scale"] == pytest.approx(1.0)
+
+
+def test_grab_emulated_body_minwidth_page_grows_clip_to_view():
+    """PAGE-ZOOM SPLIT (2026-07-26 rev 3): under the profile page zoom the css
+    viewport is view/zoom, but google.com hard-sizes its body to the full
+    override width — the clip must grow to the body extent (capped at the view
+    target) or the right/bottom of REAL content is cut (the gmail/avatar
+    corner, the owner "cuts off google")."""
+    metrics = {"layoutViewport": {"pageX": 0, "pageY": 0,
+                                  "clientWidth": 1280, "clientHeight": 1140},
+               "cssLayoutViewport": {"pageX": 0, "pageY": 0,
+                                     "clientWidth": 1024, "clientHeight": 912}}
+    out, shot = _grab_with("hi", metrics=metrics, view=(1280, 1140),
+                           body=[1280, 1140])
+    clip = shot["clip"]
+    assert clip["width"] == pytest.approx(1280)
+    assert clip["height"] == pytest.approx(1140)
+
+
+def test_grab_emulated_scrolled_tail_caps_clip_at_remaining_content():
+    """The body-extent grow is bounded by content remaining BELOW the scroll
+    offset — a page scrolled near its tail must not clip past the bottom of
+    the document (that would pad the very band the grow exists to avoid)."""
+    metrics = {"layoutViewport": {"pageX": 0, "pageY": 2560,
+                                  "clientWidth": 1280, "clientHeight": 1140},
+               "cssLayoutViewport": {"pageX": 0, "pageY": 2048,
+                                     "clientWidth": 1024, "clientHeight": 912}}
+    out, shot = _grab_with("hi", metrics=metrics, view=(1280, 1140),
+                           body=[1024, 2960])   # 912 css px left below the fold
+    clip = shot["clip"]
+    assert clip["width"] == pytest.approx(1024)    # fluid body: no grow
+    assert clip["height"] == pytest.approx(912)    # min(view 1140, 2960-2048)
+    assert clip["y"] == pytest.approx(2048)
 
 
 def test_grab_clip_follows_scrolled_device_viewport():
@@ -93,6 +148,7 @@ def test_grab_clip_follows_scrolled_device_viewport():
     metrics = _mk_metrics(1098, 980, zoom=1.25, page_x=8, page_y=475.2)
     _, shot = _grab_with("hi", vw=1098, vh=980, metrics=metrics)
     clip = shot["clip"]
+    # native regime (device 1372.5 != view 1280) → device document coords
     assert clip["x"] == pytest.approx(10)
     assert clip["y"] == pytest.approx(594)
 
@@ -101,8 +157,8 @@ def test_grab_lo_downscales_and_compresses_harder():
     _, shot = _grab_with("lo", vw=1400, vh=900)
     assert shot["quality"] == OV.TIER_LO_QUALITY < OV.JPEG_QUALITY
     clip = shot["clip"]
-    assert clip["width"] == pytest.approx(1400 * 1.1)   # still full-coverage clip
-    # lo caps the output width at TIER_LO_MAX_W of the DEVICE width (fixed cap →
+    assert clip["width"] == pytest.approx(1400 * 1.1)   # native → device clip
+    # lo caps the output width at TIER_LO_MAX_W of the clip width (fixed cap →
     # stable frame size, no rescale pulse).
     assert clip["scale"] == pytest.approx(OV.TIER_LO_MAX_W / (1400 * 1.1))
 
