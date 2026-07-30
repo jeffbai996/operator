@@ -1,20 +1,46 @@
 {% extends "_base.html" %}
-{% block title %}operator — host-app{% endblock %}
+{% block title %}{% if OP_TITLE_STANDALONE %}Operator{% else %}operator — host-app{% endif %}{% endblock %}
+{# Operator wears the OPERATOR mark, not the plain host-app roundel
+   . It's the same green ring with the cursor glyph inside, so
+   it reads as part of the family while still being findable among a dozen
+   tailnet tabs. The SVG stays crisp where supported; an exact 64px raster
+   fallback covers Safari versions that do not accept SVG favicons. The larger
+   PNGs remain for the PWA manifest / apple-touch-icon. #}
+{% block favicon %}
+{# Operator is the ONE page that overrides the site favicon: its own mark
+   (the splash-spinner glyph). Same ?v= cache-buster as _base.html — see the
+   note there; without it a rewritten mark leaves stale tabs on the old art. #}
+<link rel="icon" type="image/png" sizes="64x64"
+      href="{{ url_for('operator.static', filename='icons/operator-mark.png') }}?v={{ FAVICON_V }}">
+<link rel="icon" type="image/svg+xml"
+      href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
+{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1033">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1147">
+{% if standalone %}
+{# Standalone instances (operator-fam): the cockpit IS the app — hide the
+   host-app site chrome and give the stage the whole viewport. The 150px
+   in .op's default height budget is the hidden header+padding allowance. #}
+<style>
+  header.site { display: none; }
+  .wrap { max-width: none; padding: 0.6rem 0.8rem; }
+  .op { height: calc(100vh - 22px); height: calc(100dvh - 22px); }
+</style>
+{% endif %}
 {# PWA (1.0.14): _base.html has no head block, so these ride in the body —
    browsers collect link/meta wherever they appear. Relative start_url/scope in
-   the manifest resolve correctly under both /operator and /app/operator. #}
+   the manifest resolve correctly under both /operator and /squad/operator. #}
 <link rel="manifest" href="{{ url_for('operator.static', filename='manifest.webmanifest') }}">
 <meta name="theme-color" content="#0d1117">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Operator">
-<link rel="apple-touch-icon" href="{{ url_for('operator.static', filename='icons/operator-180.png') }}">
-{# Operator's own tab icon, overriding the host-app one in _base.html (last
-   rel=icon in document order wins). White outer ring + green ring, matching the
-   app icon — the rest of host-app keeps its plain circle. #}
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28.7' fill='%2308090b'/%3E%3Ccircle cx='32' cy='32' r='30.2' fill='none' stroke='%23ffffff' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='16.5' fill='none' stroke='%233fb950' stroke-width='5.5'/%3E%3C/svg%3E">
+{# viewport-fit=cover: browsers apply the LAST viewport meta, so this overrides
+   _base.html's for Operator only — edge-to-edge in the installed PWA (content
+   under the notch/status bar), and it makes env(safe-area-inset-*) non-zero so
+   the standalone padding below can clear the home indicator. #}
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="apple-touch-icon" href="{{ url_for('operator.static', filename='icons/operator-180.png') }}?v={{ FAVICON_V }}">
 
 <div class="op op-booting" id="op" data-state="idle" data-busy="0">
 
@@ -26,7 +52,7 @@
       <span class="op-titlewrap" id="op-brand" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="switch surface">
         <span class="op-brand-text">
           <span class="op-title">Operator</span>
-          <span class="op-verline"><span class="op-ver">1.0.28</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+          <span class="op-verline"><span class="op-ver">1.0.33</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
         </span>
         <svg class="op-brand-caret" viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1.5l4 3.5 4-3.5"></path></svg>
       </span>
@@ -41,16 +67,37 @@
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
-      <button class="op-full-btn op-iconbtn" id="op-lp-open" title="task launchpad" aria-label="open task launchpad"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect></svg></button>
+      {# Home is the Operator MARK, not a house glyph  — going
+         home means going to Operator's own launchpad, and this also puts the
+         logo in the persistent cockpit chrome rather than only on the splash. #}
+      <button class="op-full-btn op-iconbtn op-home-btn" id="op-lp-open" title="home — task launchpad" aria-label="open task launchpad">{# viewBox 0 0 24 24, NOT the cropped 6.4/11.2 the other marks use: the sibling
+   rail icons are all 24-box at 13px, where their art occupies the middle ~16
+   units and renders ~9px of ink. Cropping to the glyph's bounds made this one
+   fill all 13px — 45% more ink than its neighbours, which is what read as "too
+   big", and with zero margin any rotation had nowhere to go. The 24-box gives
+   the same framing as its neighbours AND the room to spin.
+   52px DRAWN, scale(.25) SHOWN (13px): the spin runs on the compositor, which
+   rasterises the svg once and rotates the BITMAP — at a 13px texture the
+   resampling shimmers ("tumbles like a badly stabilized bullet", the owner
+   2026-07-26). Drawing at 4x and scaling down makes the rotation sample a
+   supersampled texture: crisp at every angle. 52 in the 20px button also
+   centers on integers (-16 each side), killing the old half-pixel askew.
+   Seam-free geometry (single circle + off-apex spirals), same as the favicon. #}<svg viewBox="6 6 12 12" width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-clear" title="clear chat" aria-label="clear chat"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path><path d="M10 11v6M14 11v6"></path></svg></button>
-      <button class="op-full-btn op-iconbtn" id="op-flat" title="high-contrast / flat theme" aria-label="toggle flat theme"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg></button>
+      {# brow theme button: same fragify 3-icon next-stop pattern as the splash
+         sun/moon  — the shared .op-lp-theme-* visibility rules
+         apply to any .op descendant, so the classes carry the logic here too #}
+      <button class="op-full-btn op-iconbtn" id="op-flat" title="theme: default → flat → light" aria-label="cycle theme (default, flat, light)"><svg class="op-lp-theme-day" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg><svg class="op-lp-theme-night" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg><svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-full" title="fullscreen">⤢</button>
     </div>
 
 
     <button class="op-action" id="op-action" type="button" aria-expanded="false"
             title="click to show the step-by-step event history">
-      <span class="op-action-ico"></span>
+      {# While busy the mark REPLACES the ring (the ::before is hidden) and spins
+         with the ring's own constant timing — not the chat spinner's
+         halt-and-breathe. Idle/done states still show the ::before ring. #}
+      <span class="op-action-ico"><svg class="op-act-mark" viewBox="6.4 6.4 11.2 11.2" fill="none" aria-hidden="true"><g class="op-act-hooks"><path d="M12 7.2a4.8 4.8 0 0 1 0 9.6 3.1 3.1 0 0 1 0-6.2 1.4 1.4 0 0 0 0 2.8"/><path d="M12 16.8a4.8 4.8 0 0 1 0-9.6 3.1 3.1 0 0 1 0 6.2 1.4 1.4 0 0 0 0-2.8"/></g></svg></span>
       <span class="op-min-emoji" id="op-min-emoji" aria-hidden="true"></span>
       <div class="op-action-body" style="min-width:0; text-align:left;">
         <div class="op-action-txt" id="op-action-txt">Connecting…</div>
@@ -81,23 +128,13 @@
 
     <div class="op-logwrap" id="op-logwrap">
       <div class="op-log" id="op-log"></div>
-      <button class="op-jump" id="op-jump" type="button" aria-label="jump to present" hidden><svg class="op-jump-ff" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 5l8 7-8 7z"></path><path d="M12 5l8 7-8 7z"></path></svg>Jump</button>
+      <button class="op-jump" id="op-jump" type="button" aria-label="jump to present" hidden><svg class="op-jump-ff" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 5l8 7-8 7z"></path><path d="M12 5l8 7-8 7z"></path></svg><span class="op-jump-lbl">Jump</span></button>
     </div>
 
 
     <div class="op-inputbox">
-      <div class="op-pal" id="op-pal" hidden>
-        <div class="op-pal-head"><span id="op-pal-title">SAVED TASKS</span><span>type to filter</span></div>
-        <div class="op-pal-list" id="op-pal-list"></div>
-        <div class="op-pal-save" id="op-pal-save" hidden>
-          <input type="text" id="op-pal-save-name" placeholder="task name" autocomplete="off" spellcheck="false">
-          <input type="text" class="op-pal-sites" id="op-pal-save-sites" placeholder="preferred sites (optional)" autocomplete="off" spellcheck="false">
-          <span class="op-pal-key">↵ save</span>
-        </div>
-        <div class="op-pal-foot" id="op-pal-foot"><span><span class="op-pal-key">↑↓</span> pick</span><span><span class="op-pal-key">↵</span> run as stored</span><span><span class="op-pal-key">Tab</span> load &amp; edit</span><span><span class="op-pal-key">/save</span> save last task</span><span><span class="op-pal-key">Esc</span> close</span></div>
-      </div>
       <div class="op-steer">
-        <textarea class="op-input" id="op-input" rows="1" autocomplete="off" spellcheck="false" placeholder="Message Operator"></textarea>
+        <div class="op-grow-wrap"><textarea class="op-input" id="op-input" rows="1" autocomplete="off" spellcheck="false" placeholder="Message Operator"></textarea></div>
         <button class="op-send" id="op-send" title="send (Enter)" aria-label="send"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v5a3 3 0 0 1-3 3H5"></path><path d="M8 9l-3 3 3 3"></path></svg></button>
       </div>
       <div class="op-modelrow" id="op-modelrow">
@@ -208,17 +245,75 @@
       <img class="op-view" id="op-view" alt="">
       <!-- ships COLLAPSED: initLaunchpad() runs post-paint (setTimeout 0), so an
            expanded first paint flashed the category tabs + card grid for ~400ms
-           on every splash refresh before the JS collapse landed (2026-07-20). -->
+           on every splash refresh before the JS collapse landed . -->
       <div class="op-lp op-lp-collapsed" id="op-lp">
+        {# Status ring — the Operator mark as a backend-health indicator, sized
+           and spaced to sit in the same row as the theme toggle and the X. The
+           ring sweeps while connecting, settles green when the feed is live,
+           and goes red when the browser backend is down. Not aria-hidden: it
+           carries state, so it gets a live region for screen readers. #}
+        {# The label text is CSS-driven off #op's data-state (see op-lp-mark-tip)
+           so it can never go stale the way the old hardcoded title= did. #}
+        <div class="op-lp-mark" id="op-lp-mark" role="status" aria-live="polite"
+             aria-label="connecting">
+          <span class="op-lp-mark-tip" aria-hidden="true"><span class="op-lp-mark-ver">v1.0.33</span></span>
+          <svg viewBox="0 0 64 64" width="26" height="26" fill="none">
+            <circle class="op-lp-mark-track" cx="32" cy="32" r="25" stroke-width="7"/>
+            {# The sweep is ROTATED by this wrapper, not slid via stroke-dashoffset
+               .
+               A dash pattern whose length equals the circumference seams where
+               the round caps overlap at the wrap; a 360deg rotation has no seam
+               at all. The circle keeps only dash geometry, so the settle can
+               still grow it into a closed ring without fighting the spin. #}
+            <g class="op-lp-mark-spin">
+              <circle class="op-lp-mark-sweep" cx="32" cy="32" r="25" stroke-width="7" stroke-linecap="round"/>
+            </g>
+            {# The 24-box art is centered into the 64-box by the inner group's
+               own transform attribute, so the CSS transform is left free to
+               carry ONLY the settle rotation — mixing both in CSS made
+               transform-origin resolve in the translated space and swung the
+               glyph out of the ring. #}
+            {# 1.15 — tuned for this size. Do not "unify" it with the other
+               copies' values; they render at different sizes, so one shared
+               number gives three different apparent weights. #}
+            <g class="op-lp-mark-glyph" stroke-width="1.15" stroke-linecap="round">
+              <g transform="translate(3.2 3.2) scale(2.4)">
+                <path d="M12 7.2a4.8 4.8 0 0 1 0 9.6 3.1 3.1 0 0 1 0-6.2 1.4 1.4 0 0 0 0 2.8"/>
+                <path d="M12 16.8a4.8 4.8 0 0 1 0-9.6 3.1 3.1 0 0 1 0 6.2 1.4 1.4 0 0 0 0-2.8"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+        {# About card : DESKTOP click on the status ring opens
+           it (mobile keeps the ring-as-menu). Left-aligned; heading = mark +
+           wordmark + version; rights line; Operator · BaiCloud brand foot in
+           the Fragify settings style. #}
+        <div class="op-about-backdrop" id="op-about-backdrop" hidden></div>
+        <div class="op-about" id="op-about" hidden role="dialog" aria-modal="true" aria-label="about Operator">
+          <div class="op-about-head">
+            <svg class="op-about-mark" viewBox="6.4 6.4 11.2 11.2" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg>
+            <span class="op-about-word">Operator</span>
+            <span class="op-about-ver"><span class="op-about-ver-v">v</span>1.0.33</span>
+          </div>
+          <div class="op-about-rights">© 2026 the owner Bai. All rights reserved.</div>
+          <div class="op-about-foot">
+            <span class="op-about-brand"><svg class="op-about-foot-mark" viewBox="6.4 6.4 11.2 11.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg>Operator</span>
+            <span class="op-about-dot" aria-hidden="true">·</span>
+            <span class="op-about-brand">BaiCloud<svg class="op-about-cloud" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 18.5h10.7a4.3 4.3 0 0 0 .5-8.6A6.2 6.2 0 0 0 6.1 8.2a5.2 5.2 0 0 0 .4 10.3Z"/></svg></span>
+          </div>
+        </div>
         <button type="button" class="op-lp-theme" id="op-lp-theme" aria-label="use light mode" title="use light mode">
           <svg class="op-lp-theme-day" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg>
           <svg class="op-lp-theme-night" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg>
+          {# OLED stop: Fragify's pitch-black moon , filled so
+             it reads "solid black" next to the outline night crescent #}
+          <svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg>
         </button>
         <button type="button" class="op-lp-close" id="op-lp-x" aria-label="close welcome screen" title="close">
           <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg>
         </button>
         <div class="op-lp-hero">
-          <div class="op-lp-wordmark" id="op-lp-wordmark">Operator</div>
+<div class="op-lp-wordmark" id="op-lp-wordmark">Operator</div>
           {# demo-only (CSS-gated on body.op-demo): the public demo's welcome notice.
              This hero view doubles as the future "new chat" landing page once
              sessions + a conversation sidebar exist — keep it self-contained. #}
@@ -367,5 +462,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1033"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1147"></script>
 {% endblock %}

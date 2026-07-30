@@ -3,14 +3,32 @@
 
   /* ── Operator-style page: left conversation/steer rail + right live browser,
      a live action-status line, and a full-window mode that hides the host-app
-     header. Dark app tokens for cohesion. ── */
+     header. Dark the app tokens for cohesion. ── */
+  /* Wordmark-only weight 750: a self-hosted static instance of the variable
+     Jakarta (fontTools instancer, latin subset). Scoped to its own family so
+     the general UI keeps Google's static 400–700 files — loading the variable
+     font for everything shifted PJS line metrics and skewed the splash
+     composer's placeholder/caret centering on iPad . */
+  @font-face {
+    font-family: 'PJS Wordmark';
+    font-style: normal;
+    font-weight: 750;
+    font-display: swap;
+    src: url('fonts/pjs-wordmark-750.woff2') format('woff2');
+  }
+  /* color-scheme drives the UA's overlay-scrollbar thumb shade (and form
+     control chrome): without it WebKit kept painting LIGHT thumbs over the
+     light theme's bubbles — the out-of-place white scrollbar . */
+  .op { color-scheme: dark; }
+  [data-theme="light"] .op { color-scheme: light; }
   .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
-    --chat-font: 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* chat content + input font — Anthropic Sans (2026-07-21) */
+    --chat-font: 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* chat content + input font — Anthropic Sans  */
     --live:#3fb950; --live-glow:rgba(63,185,80,.6);
     --rail-w: minmax(248px, 300px);   /* allow a very narrow chat so the browser can maximize */
-    display: grid; grid-template-columns: var(--rail-w) 1fr; gap: 0.7rem;
+    --op-gap: 0.7rem;   /* rail↔browser gutter — the resizer centers on it, keep in sync */
+    display: grid; grid-template-columns: var(--rail-w) 1fr; gap: var(--op-gap);
     margin: 12px 0; box-sizing: border-box; position: relative;
     height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 380px;
     -webkit-user-select: none; user-select: none; }   /* app chrome: not selectable */
@@ -46,6 +64,13 @@
     --bg: #000; --bg-2: #060708; --bg-3: #0c0e11; --bg-4: #14171c;
     --border: rgba(255,255,255,.10); --border-2: rgba(255,255,255,.14); }
   .op.op-flat .op-rail, .op.op-flat .op-browser, .op.op-flat .op-tabs { background: #000 !important; backdrop-filter: none !important; }
+  /* flat + splash → true OLED black: kill the translucent bg-2 mix, the blur,
+     the radial vignette AND the grain — the splash otherwise kept its default
+     dark dressing and the third theme never showed there .
+     .op-lp-over (the post-trash translucent glance) keeps its blur on purpose. */
+  .op.op-flat .op-lp:not(.op-lp-over) { background: #000; backdrop-filter: none; }
+  .op.op-flat .op-lp::after { display: none; }
+  [data-theme="light"] .op.op-flat .op-lp:not(.op-lp-over) { background: #eef1f5; }
   [data-theme="light"] .op.op-flat {
     --bg: #eef1f5; --bg-2: #e4e8ee; --bg-3: #dde2e9; --bg-4: #d3d9e2;
     --border: rgba(0,0,0,.14); --border-2: rgba(0,0,0,.20); }
@@ -93,13 +118,11 @@
       flex: 1 1 auto; min-height: 0; min-width: 0; width: 100%; max-width: 100%;
       margin: 0 !important; padding-bottom: 0 !important;   /* no extra bottom gap below the op grid */
       display: flex; flex-direction: column; }
-    /* windowed wears the SAME slim 6px frame as fullscreen (2026-07-19:
-       "same margins in full screen and windowed" — windowed had 0 sides / 9px
-       bottom). The op's own padding is the gutter; wrap side/bottom padding
+    /* windowed wears the SAME slim 6px frame as fullscreen . The op's own padding is the gutter; wrap side/bottom padding
        stays 0. wrap padding-top 12→6 so header gap stays ~12 with the frame. */
     body.op-locked .op { flex: 1 1 auto; min-height: 0; min-width: 0;
       width: 100%; max-width: 100%; height: auto !important; margin: 0 !important;
-      gap: 8px; padding: 8px; box-sizing: border-box; background: var(--bg); }
+      --op-gap: 8px; gap: var(--op-gap); padding: 8px; box-sizing: border-box; background: var(--bg); }
   }
 
   /* full-window: hide the site header + let the operator page own the viewport */
@@ -107,10 +130,13 @@
   body.op-full main, body.op-full .container, body.op-full .wrap {
     max-width: none !important; margin: 0 !important; padding: 0 !important; }
   body.op-full { overflow: hidden; background: #0c0e13; }
+  /* fullscreen page canvas follows the theme — it stayed hardcoded dark and
+     framed the light cockpit in black  */
+  :root[data-theme="light"] body.op-full { background: #eef1f5; }
   body.op-full:has(.op-flat) { background: #000; }
   body.op-full .op { position: fixed; inset: 0; width: auto; height: auto;
     min-width: 0; min-height: 0; margin: 0; box-sizing: border-box;
-    border-radius: 0; gap: 8px; padding: 8px; background: var(--bg); z-index: 50;   /* slim frame, nudged 6→8 (2026-07-19 "slightly slightly wider") */
+    border-radius: 0; --op-gap: 8px; gap: var(--op-gap); padding: 8px; background: var(--bg); z-index: 50;   /* slim frame, nudged 6→8  */
     overflow: hidden; }
   body.op-full .op.op-flat { background: #000; }
   body.op-full .op-rail, body.op-full .op-browser { border-radius: 10px; }
@@ -122,7 +148,7 @@
   body.op-locked:has(.op[data-mode="auto"][data-busy="0"] .op-lp:not([hidden])) .wrap {
     padding-top: 0 !important; padding-bottom: 0 !important; }
   /* the splash is its own full-bleed surface — the cockpit's black frame
-     (the 8px .op gutter) must not ring it (2026-07-19) */
+     (the 8px .op gutter) must not ring it  */
   body.op-locked:has(.op[data-mode="auto"][data-busy="0"] .op-lp:not([hidden])) .op,
   body.op-full:has(.op[data-mode="auto"][data-busy="0"] .op-lp:not([hidden])) .op {
     padding: 0 !important; }
@@ -137,8 +163,7 @@
   .op-head { display: flex; align-items: center; gap: 0.22rem; margin-top: -1.5px; }   /* tight so all controls fit one row */
   /* As the chat rail narrows (user drags it small to maximize the browser), shed
      header chrome so all controls stay on one row instead of clipping. */
-  /* Surface chip sheds size as the rail narrows (2026-07-11: MAN/AUTO
-     occluded SANDBOX mid-slide). Shrinking the chip also narrows the verline,
+  /* Surface chip sheds size as the rail narrows . Shrinking the chip also narrows the verline,
      which pulls the brand caret left with it — no Operator↔caret gap. */
   @container rail (max-width: 340px) {
     .op-surface-chip { font-size: 0.38rem; padding: 1px 3px; letter-spacing: .02em; }
@@ -148,7 +173,7 @@
      MAN/AUTO crowded right up against the wordmark before anything hid and
      the two stages fired 16px apart — reads as panic, not design. New timing
      sheds ahead of pressure: stage 1 drops the brand caret (+ surface chip)
-     with ~40px of air still left, stage 2 minimizes the wordmark (scale, not
+     with ~20px of air still left, stage 2 minimizes the wordmark (scale, not
      clip — no letter chopped mid-word) ~15px before the caret-less collision,
      with a ~35-40px drag interval between stages so each reads as deliberate.
      Thresholds are rail CONTENT-box px, CALIBRATED PER MEDIA LAYOUT (mobile
@@ -156,7 +181,7 @@
      desktop ≈ 223px; titlewrap 80px full / 66px caret-less. Minimizing costs
      the surface-menu button below stage 2 — accepted tradeoff. */
   @media (max-width: 820px) {
-    @container rail (max-width: 420px) {
+    @container rail (max-width: 400px) {
       .op-head { gap: 0.16rem; }
       .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }   /* tighten MAN/AUTO labels */
       .op-fontpill button { width: 17px; }
@@ -171,7 +196,7 @@
     }
   }
   @media (min-width: 821px) {
-    @container rail (max-width: 344px) {
+    @container rail (max-width: 324px) {
       .op-head { gap: 0.16rem; }
       .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }
       .op-fontpill button { width: 17px; }
@@ -188,7 +213,11 @@
   #op-clear { margin-left: auto; }   /* push the icon group to the right edge */
   /* nudge the trash glyph up + right a hair to center it optically in its box */
   #op-clear svg { display: block; transform: translate(0.3px, 0px); transform-origin: center; }   /* nudged left 0.25 */
-  #op-flat svg { display: block; transform: translate(-0.25px, 0.5px); transform-origin: center; }   /* contrast: down + left */
+  /* contrast nudge: down + left. NO `display` here — the ID selector (1,0,1)
+     outguns every class rule, and with the 3-stop icons it forced all three
+     svgs visible at once (the 2026-07-28 side-by-side row). Visibility belongs
+     to the svg.op-lp-theme-* rules alone. */
+  #op-flat svg { transform: translate(-0.25px, 0.5px); transform-origin: center; }
   #op-full { transform: translate(0.75px, 0.75px); }   /* fullscreen glyph: down + right */
   /* no hover zoom — just a smooth shake on clear. keyframes KEEP the base translate so
      the can doesn't drift lower-left, and rotate around its own center. */
@@ -207,9 +236,19 @@
     min-width: 0; overflow: hidden; }   /* tight header (low zoom): clip the wordmark instead of letting the MAN/AUTO pill paint over the version */
   .op-brand-text { display: inline-flex; flex-direction: column; justify-content: center;
     flex: 0 0 auto; white-space: nowrap; }   /* fixed wordmark — never let the flex row squeeze it to 0 */
-  .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
+  /* Anthropic Sans  — the wordmark keeps PJS, the version line
+     under it moves to the chat face. It reads a touch smaller at the same size,
+     so 0.46 -> 0.48rem holds the previous optical weight. */
+  .op-ver { font: 600 0.48rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
-  .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans', sans-serif; color: var(--fg);
+  /* wordmark weight experiment : +50 over the old 700.
+     Served by a self-hosted single-weight instance ('PJS Wordmark' @font-face
+     below) so the GENERAL UI keeps the static Jakarta files — the variable
+     load in _base.html shifted PJS line metrics and skewed the composer's
+     placeholder/caret centering on iPad . REVERT = set
+     --op-wordmark-wght back to 700 (one line; the fallback family serves it). */
+  .op { --op-wordmark-wght: 750; }
+  .op-title { font: var(--op-wordmark-wght) 0.9rem/1 'PJS Wordmark', 'Plus Jakarta Sans', sans-serif; color: var(--fg);
     letter-spacing: -.01em; margin-right: 0.15rem; white-space: nowrap; }
   .op-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex:0 0 auto;
     transition: background .3s, box-shadow .3s; }
@@ -348,26 +387,30 @@
   .op-action > div { transition: opacity .18s ease; }
   /* display:none (not width:0) so the collapsed body contributes NO flex gap —
      width:0 still left a gap on each side, pushing the caret too far right
-     (2026-07-21). The body carries no info when minimized (the emoji does),
+     . The body carries no info when minimized (the emoji does),
      so removing it from layout is correct. */
   .op[data-status-min="1"] .op-action > div { display: none; }
-  /* minimized-card action emoji (2026-07-21): when the status pill is
+  /* minimized-card action emoji : when the status pill is
      collapsed, show the CURRENT action's emoji (🖱️ Clicking, 🌐 Browsing …) to
      the right of the spinning ring — the at-a-glance "what's it doing" that the
      hidden text would otherwise carry. Hidden when expanded (the text says it)
      and when idle (no live action). Same cycle animation the maximized card's
      emoji uses. */
   /* inline-flex + full pill height so the glyph is vertically CENTERED, not
-     clipped top/bottom (2026-07-21). Collapse via max-width (not
+     clipped top/bottom . Collapse via max-width (not
      overflow:hidden, which cropped the emoji) so the whole glyph always shows
      when open. margin-right:auto is NOT used — the caret hugs it via the
      tightened action gap below. */
+  /* Collapsed to max-width:0, this stays a flex item — so flex `gap` still applies
+     on BOTH sides of it, putting TWO 0.55rem gaps between the status ring and the
+     "Ready" label (it read ~2× too far right, the owner 2026-07-21). Cancel the ring-side
+     gap with a negative margin while collapsed; restore it when the emoji expands. */
   .op-min-emoji { display: inline-flex; align-items: center; justify-content: center;
     max-width: 0; opacity: 0; overflow: hidden; font-size: 0.86rem; height: 1.4em;
-    flex: 0 0 auto; pointer-events: none;
-    transition: max-width .18s ease, opacity .18s ease; }
+    flex: 0 0 auto; pointer-events: none; margin-left: -0.55rem;
+    transition: max-width .18s ease, opacity .18s ease, margin-left .18s ease; }
   .op[data-status-min="1"][data-busy="1"] .op-min-emoji {
-    max-width: 1.6em; opacity: 1; }
+    max-width: 1.6em; opacity: 1; margin-left: 0; }
   .op-min-emoji.op-card-swap { animation: op-sub-cycle .34s cubic-bezier(.22,1,.36,1); }
   /* minimized: float the pill top-left so the rest of its row is transparent and the
      message log reclaims the full width underneath it. */
@@ -382,10 +425,11 @@
   .op-action-ico::before { content:""; position:absolute; inset:0; border-radius:50%;
     border: 2px solid var(--border-2);
     transition: border-color .3s cubic-bezier(.4,0,.2,1), box-shadow .3s ease; }
-  .op[data-busy="1"] .op-action-ico::before {
-    border: 2px solid color-mix(in srgb, var(--live) 35%, transparent); border-top-color: var(--live);
-    box-shadow: 0 0 6px -2px var(--live);   /* soft modern glow on the active ring */
-    animation: op-spin .8s cubic-bezier(.65,.05,.36,1) infinite; }
+  /* BUSY: the ring is REPLACED by the Operator mark , not
+     wrapped around it — the ::before is hidden and the mark spins in its place
+     with the ring's own timing (see .op-act-hooks). Every other state keeps the
+     ring exactly as it was. */
+  .op[data-busy="1"]:not(.op-signal-lost) .op-action-ico::before { display: none; }
   /* CONNECTING → yellow spinning ring (not green), even while busy=1 on cold start */
   .op[data-state="connecting"]:not(.op-signal-lost) .op-action-ico::before {
     border: 2px solid #d2a30f !important; border-top-color: #f0cf6a !important;
@@ -403,6 +447,29 @@
   .op.op-signal-lost .op-action-ico::before { animation: none; }
   @keyframes op-spin{
     0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+  /* ── The mark AS the status spinner  ─────────────────────
+     While busy the mark REPLACES the ring (the ::before is hidden above), so it
+     fills the icon box rather than tucking inside a ring. It spins with the OLD
+     RING'S animation — constant op-spin at the ring's own .8s timing — NOT the
+     chat spinner's halt-and-breathe. Deliberately different: this one reads as
+     a classic throbber, the chat one as the logo idling. */
+  .op-action-ico .op-act-mark { position: absolute; inset: 0; display: block;
+    overflow: visible; opacity: 0; transition: opacity .2s ease; }
+  .op-action-ico .op-act-hooks { fill: none; stroke: var(--fg-2); stroke-width: 1.28;   /* one notch lighter  */
+    stroke-linecap: round; transform-origin: center; transform-box: fill-box; }
+  /* only while a task is actually running — an idle card keeps the bare ring,
+     and the done-state ✓ (::after) owns the box when it lands. */
+  .op[data-busy="1"]:not(.op-signal-lost) .op-action-ico .op-act-mark { opacity: 1; }
+  .op[data-busy="1"]:not(.op-signal-lost) .op-action-ico .op-act-hooks {
+    stroke: var(--live);
+    animation: op-spin .8s cubic-bezier(.65,.05,.36,1) infinite; }
+  /* connecting keeps its amber, same as the ring it replaced */
+  .op[data-state="connecting"]:not(.op-signal-lost) .op-action-ico .op-act-hooks {
+    stroke: #d2a30f; animation-duration: .85s; }
+  .op[data-mode="man"] .op-action-ico .op-act-hooks { stroke: #f0883e; }
+  .op[data-agent="done"] .op-action-ico .op-act-mark { opacity: 0; }
+  @media (prefers-reduced-motion: reduce) {
+    .op[data-busy="1"] .op-action-ico .op-act-hooks { animation: none; } }
   /* constant-speed spinner: paired with `linear` timing (no accel/decel). */
   /* animated checkmark when a task completes — a centered ✓ glyph */
   .op-action-ico::after { content: ""; position: absolute; inset: 0;
@@ -440,7 +507,7 @@
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
   .op-action-body { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--fg); }   /* status card font → Anthropic Sans (2026-07-21); FIXED size — not −/+ controlled */
+    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans', sans-serif; color: var(--fg); }   /* status card label (Ready/Working/…) → back to Jakarta; rest of the chrome stays Anthropic  */
   .op-action-sub { transition: color .25s ease; }
   /* tool-call / status text changes animate in like the chat bubbles do */
   .op-action-txt.op-card-swap { animation: op-card-in .4s cubic-bezier(.22,1,.36,1); }
@@ -479,21 +546,38 @@
     margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* FIXED size (not −/+ controlled); +1px baseline-align with "Working" */
 
   /* wrap is the flex slot; log scrolls inside it; jump-button floats over it */
-  .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    /* soften the top boundary: scrolled bubbles melt out under the status card
+       instead of hard-clipping at it . Mask, not overlay —
+       theme-independent and never intercepts taps. */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 18px); }
+  /* EMPTY chat: nothing scrolls, nothing to melt — but the empty-state hint
+     ("Type a message, or…") sits at y=0 where the fade eats its top half
+     . Drop the mask entirely. */
+  .op-logwrap:has(.op-log:empty) { -webkit-mask-image: none; mask-image: none; }
   /* "Jump to bottom" live pill — rises from above the input when scrolled up; red dot = feed is live. */
   /* "Jump to present" pill — filled red, fast-forward glyph, rises from above the input. */
   .op-jump { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%) translateY(8px);
     height: 24px; padding: 0 0.7rem 0 0.55rem; border-radius: 999px; cursor: pointer;
     background: var(--bad); color: #fff; border: 1px solid var(--bad);
     display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap;
-    font: 700 0.72rem/1 'Plus Jakarta Sans', sans-serif;
+    font: 600 0.72rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans, semibold  */
     box-shadow: none; z-index: 6;
     opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
+  /* Anthropic Sans sits ~1px low in a line-height:1 flex box (ascender-heavy
+     metrics + the SVG glyph anchoring the row height), so "Jump" reads slightly
+     below center. Lift the label 1px into optical center; the ff glyph stays put. */
+  .op-jump-lbl { margin-top: -1px; }
   .op-jump-ff { flex: 0 0 auto; width: 12px !important; height: 12px !important; }   /* ▶▶ filled fast-forward */
   .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
   .op-jump:hover { background: #e5484d; border-color: #e5484d; }   /* stay red on hover, no gray, no glow */
-  /* conversation log — flex-grows, scrolls */
+  /* conversation log — flex-grows, scrolls. overflow-anchor:none: the app owns
+     scroll (stickToBottom); native scroll anchoring fought the task-card
+     collapse at turn end and could park the viewport in the vacated space —
+     blank chat until a manual scroll re-clamped it . */
   .op-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    overflow-anchor: none;
     display: flex; flex-direction: column; gap: 0.4rem; padding: 0.05rem 0.1rem; }
   .op-log:empty { padding-top: 0; }
   .op[data-mode="man"] .op-log:empty::after { content: none; }
@@ -502,7 +586,7 @@
   .op[data-mode="man"] .op-log { opacity: 0.5; filter: grayscale(0.35);
     transition: opacity .3s ease, filter .3s ease; pointer-events: none; }
   .op-log { transition: opacity .3s ease, filter .3s ease; }
-  .op-log:empty::after { content: "Type a message, or use the browser to steer Operator. Tip: type / for saved tasks.";
+  .op-log:empty::after { content: "Type a message, or use the browser to steer Operator.";   /* "/" palette tip removed with the palette  */
     color: var(--muted); font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif;
     padding: 0; margin: 0; letter-spacing: -.003em; }
   /* demo has no saved tasks (routes 404, palette hidden) — keep its copy tip-free */
@@ -555,7 +639,10 @@
     box-shadow: 0 2px 8px -3px rgba(0,0,0,.4); white-space: pre-wrap; word-break: break-word; }
   .op-msg.step .body { color: var(--muted) !important;
     font: 600 0.66rem/1.4 'Plus Jakarta Sans',sans-serif !important; letter-spacing:-.002em; }
-  .op-msg.step.err .body { color: var(--bad); }
+  .op-msg.step.err .body { color: var(--bad) !important; }   /* !important: the base .body rule above is !important-muted and was silently winning */
+  /* ⚠ triangle on coalesced action-failure lines — inline, sits on the text baseline */
+  .op-msg.step .warn { display: inline-flex; vertical-align: -2px; margin-right: 0.3rem; color: var(--bad); }
+  .op-msg.step .warn svg { display: block; }
   /* code: darker, theme-aware (adapts to dark/midnight/light via the bg/border vars) */
   .op-msg.bot .bubble code, .op-msg.bot .bubble pre {
     background: var(--op-code-bg); border: 1px solid var(--op-code-bd); border-radius: 5px;
@@ -578,9 +665,30 @@
   .op-lightbox img { max-width: 94vw; max-height: 92vh; border-radius: 10px;
     box-shadow: 0 20px 60px rgba(0,0,0,.6); }
   @keyframes op-lb-in { from { opacity: 0 } to { opacity: 1 } }
-  /* wrap, never sideways-scroll — the chat column is too narrow to pan (2026-07-09) */
-  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.45rem 0 0.35rem; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; position: relative; }   /* breathing room — 0.1rem stuck the block onto the text above (2026-07-12) */
+  /* wrap, never sideways-scroll — the chat column is too narrow to pan  */
+  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.45rem 0 0.35rem; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; position: relative; }   /* breathing room — 0.1rem stuck the block onto the text above  */
   .op-msg.bot .bubble pre code { background: none; border: none; padding: 0; }   /* no double box */
+  /* TABULAR code (ASCII tables) — wrapping shreds the alignment, so these
+     scroll sideways instead. Ordinary code keeps the wrap rule above. */
+  .op-msg.bot .bubble pre.op-pre-table { white-space: pre; word-break: normal;
+    overflow-wrap: normal; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* markdown pipe tables → real tables, flat-design, sideways scroll if wide */
+  .op-md-tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch;
+    margin: 0.45rem 0 0.35rem; border: 1px solid var(--op-code-bd); border-radius: 8px; }
+  .op-md-table { border-collapse: collapse; min-width: max-content; width: 100%;
+    font-size: 0.95em; line-height: 1.35; }
+  .op-md-table th, .op-md-table td { padding: 0.3rem 0.6rem; text-align: left;
+    vertical-align: top; border-bottom: 1px solid var(--op-code-bd); }
+  .op-md-table th { font-weight: 700; background: rgba(128,128,128,0.10); }
+  .op-md-table th:not(:last-child), .op-md-table td:not(:last-child) {
+    border-right: 1px solid var(--op-code-bd); }
+  .op-md-table tbody tr:last-child th, .op-md-table tbody tr:last-child td { border-bottom: none; }
+  /* the host site's global table chrome (sticky uppercase thead pinned 92px
+     down, row hover wash) leaks into chat bubbles — neutralize it here */
+  .op-md-table thead th { position: static; top: auto; z-index: auto;
+    background: rgba(128,128,128,0.10); color: inherit; text-transform: none;
+    letter-spacing: normal; font-size: inherit; font-weight: 700; }
+  .op-md-table tr:hover td { background: transparent; }
   /* code-block copy button: top-right, hover-reveal, theme-safe */
   .op-copy { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
     display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
@@ -609,10 +717,10 @@
     display: flex; flex-direction: column; gap: 0.5rem;
     box-shadow: 0 1px 10px -6px rgba(0,0,0,.55); }
   .op-handoff-head { display: flex; align-items: center; gap: 0.45rem;
-    font: 700 calc(0.82rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;
+    font: 700 calc(0.88rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;   /* +1 notch 0.82->0.88  */
     color: var(--fg); letter-spacing: -.01em; }
   /* head icon: a traffic-light-YELLOW dot that BLINKS (hard on/off) at 0.80Hz
-     (1.25s period — 1Hz read as frantic; 2026-07-11). steps() snaps
+     (1.25s period — 1Hz read as frantic; the owner 2026-07-11). steps() snaps
      between states so it flashes rather than breathes. */
   .op-handoff-head .hi { flex: 0 0 auto; width: 0.6em; height: 0.6em;
     background: #f5c542; border-radius: 50%; display: inline-block;
@@ -621,6 +729,13 @@
   @keyframes op-handoff-blink {
     0%   { opacity: 1; }
     50%  { opacity: 0.15; } }
+  /* After the user takes control the card STAYS  as a record,
+     but the blinker stops flashing and dims to a static dot — the "stopped
+     waiting" signal — and the Take-control button becomes a grayed, inert
+     "Took control" (handled in JS + the [disabled] rule below). */
+  .op-handoff.done .hi { animation: none; opacity: 0.45; background: var(--muted); }
+  /* light: #f5c542 washes out on the light canvas — deepen to a truer yellow */
+  [data-theme="light"] .op-handoff-head .hi { background: #eab308; }
   .op-handoff-reason { font: 500 calc(0.72rem * var(--chat-scale))/1.45 var(--chat-font);
     color: var(--fg-2); letter-spacing: -.005em; }
   .op-takeover-btn { align-self: flex-start; cursor: pointer;
@@ -647,15 +762,16 @@
   .op-finish-btn { animation: op-man-in .22s cubic-bezier(.16,1,.3,1); }
   /* structural dedupe: while the expand is open its go-button IS the "Finish
      up" — the trigger can never show beside it, whatever JS state says
-     (two identical buttons kept surfacing in manual mode, 2026-07-12) */
+     (two identical buttons kept surfacing in manual mode, the owner 2026-07-12) */
   .op-finish:has(.op-finish-expand:not([hidden])) .op-finish-btn { display: none; }
   .op-finish-q { font: 500 calc(0.66rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); }
   .op-finish-opt { font-size: 0.86em; font-style: italic; color: var(--muted); }   /* ONLY "(optional)" — small + italic + muted */
   .op-finish-input { width: 100%; box-sizing: border-box; resize: none;
     background: var(--bg); color: var(--fg); border: 1px solid var(--border-2); border-radius: 10px;
     padding: 0.4rem 0.55rem; font: 500 calc(0.72rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif;
-    outline: none; }   /* typed text sized to the placeholder — iPad landscape is >820px so the
-                          mobile-only drop never reached it (2026-07-20 "still enormous") */
+    outline: none; }
+  .op-finish-input::placeholder { font-weight: 525; }   /* match the composer's bump */   /* typed text sized to the placeholder — iPad landscape is >820px so the
+                          mobile-only drop never reached it  */
   /* placeholder: italic, more grayed out (it was too bright); font-size inherits
      so typed text and placeholder can never drift apart again */
   .op-finish-input::placeholder { font-size: inherit; font-style: italic;
@@ -692,14 +808,14 @@
   .op-driver:focus { outline: none; border-color: var(--accent); }
   /* align-items:flex-end pins the send button to the BOTTOM of the row, so it
      stays put at the input's bottom-right as the textarea grows past one line
-     instead of stretching taller with it (2026-07-21). Matches the splash
+     instead of stretching taller with it . Matches the splash
      composer, where send is absolutely bottom-right. */
   .op-steer { display: flex; gap: 0.4rem; align-items: flex-end; }
   .op-input-wrap { flex: 1 1 auto; position: relative; display: flex; }
   .op-prefix { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
     color: var(--accent); font: 700 0.85rem/1 'JetBrains Mono', monospace; pointer-events: none; }
   .op-input { flex: 1 1 auto; width: 100%; background: var(--bg); border: 1px solid var(--border-2);
-    border-radius: 10px; color: var(--fg); font: 500 calc(0.77rem * var(--chat-scale))/1 var(--chat-font);   /* Anthropic Sans via --chat-font (2026-07-21); text + placeholder together */
+    border-radius: 10px; color: var(--fg); font: 500 calc(0.77rem * var(--chat-scale))/1 var(--chat-font);   /* Anthropic Sans via --chat-font ; text + placeholder together */
     padding: 0.7rem 0.8rem 0.7rem 1.85rem; transition: border-color .2s, box-shadow .2s; }
   .op-input::placeholder { color: var(--muted); }   /* inherits the input's size — keep them in lockstep */
   .op-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.20); }
@@ -716,7 +832,11 @@
   /* ── RIGHT: live browser ───────────────────────────────────── */
   /* drag-to-resize handle between the chat rail and the browser (desktop only) */
   .op-resizer { grid-column: 1; grid-row: 1; justify-self: end; align-self: stretch;
-    width: 10px; margin-right: -0.7rem; cursor: ew-resize; z-index: 8;
+    /* center the 10px hit box (and its 3px line) on the grid gutter: shift
+       right by half the gap + half the box. The old fixed -0.7rem overshot the
+       8px locked-mode gap and the line hugged the browser edge. */
+    width: 10px; margin-right: calc(-1 * (var(--op-gap, 0.7rem) / 2 + 5px));
+    cursor: ew-resize; z-index: 8;
     display: flex; align-items: center; justify-content: center;
     -webkit-user-select: none; user-select: none; touch-action: pinch-zoom; }
   .op-resizer::before { content: ""; width: 3px; height: 38px; border-radius: 3px;
@@ -747,7 +867,7 @@
   .op-tab.active { color: var(--fg); background: var(--accent-soft, rgba(184,192,204,.14));
     border-color: var(--border-2); }
   .op-tab .lbl { overflow: hidden; text-overflow: ellipsis; }
-  .op-urlbar { display: flex; align-items: center; gap: 0.5rem; padding: 0.22rem 0.7rem;   /* slimmed toward the rail head, round two (2026-07-19) */
+  .op-urlbar { display: flex; align-items: center; gap: 0.5rem; padding: 0.22rem 0.7rem;   /* slimmed toward the rail head, round two  */
     background: var(--bg-2); border-bottom: 1px solid var(--border);
     max-height: 60px; overflow: hidden;
     transition: max-height .28s cubic-bezier(.4,0,.2,1), padding .28s cubic-bezier(.4,0,.2,1),
@@ -801,7 +921,11 @@
   .op-tab-fav { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 3px; display: block; }
   /* favicon hover popover (v0.7.0): hovering a tab's favicon shows the big icon
      + the full page title + host — like hovering a real browser tab, but richer. */
-  .op-favpop { position: absolute; z-index: 40; display: flex; align-items: center; gap: 0.55rem;
+  /* fixed + body-level : .op-browser is `overflow: hidden`, so
+     as a descendant this card was CLIPPED by the pane no matter its z-index —
+     a clipping ancestor cannot be escaped by stacking. It now sits on <body>,
+     positioned in viewport coords, above the cockpit's own layers. */
+  .op-favpop { position: fixed; z-index: 2147483000; display: flex; align-items: center; gap: 0.55rem;
     max-width: 320px; padding: 0.5rem 0.65rem; background: var(--bg-4);
     border: 1px solid var(--border-2); border-radius: 10px;
     box-shadow: 0 10px 28px -8px rgba(0,0,0,.7); pointer-events: none;
@@ -883,7 +1007,7 @@
   .op[data-state="error"] .op-overlay, .op.op-signal-lost .op-overlay { display: flex; }
   /* STALE FRAME (feed dropped but we have a last good frame): keep the frame on
      screen, dimmed + desaturated, with a small corner chip — no full-screen
-     SIGNAL LOST flash (2026-07-10: overlay flapping read as flicker). The
+     SIGNAL LOST flash . The
      .op-overlay is NOT shown in this mode (op-signal-stale is deliberately
      absent from the overlay display selector above). */
   .op.op-signal-stale .op-view { filter: grayscale(.45) brightness(.6);
@@ -930,7 +1054,7 @@
   .op-sheet-handle { display: none; }
 
   @media (max-width: 820px) {
-    /* ── MOBILE: keep the host-app header (owner still navigates back to it);
+    /* ── MOBILE: keep the host-app header ;
        the headerless full-viewport is reserved for the ⤢ fullscreen toggle (op-full).
        Here we only (a) hard-clamp horizontal overflow so the wide nav row can't leak
        a scroll / bezel-bleed, and (b) strip the container's max-width/padding so the
@@ -943,7 +1067,7 @@
        + bottom sheet) — the only thing normal-flow scroll could do is slide the
        header out of the viewport, opening a page-bg void above the fixed stage
        that reads as "the header nav went black" (iPhone + narrow desktop
-       windows, 2026-07-07). The old "phones scroll normally" choice
+       windows, the owner 2026-07-07). The old "phones scroll normally" choice
        predates the bottom-sheet redesign; nothing needs page scroll here.
        (position:sticky can't do this job — the overflow-x clamp above breaks
        viewport-stickiness.) */
@@ -961,14 +1085,14 @@
     /* MOBILE ONLY: the −/+ control scales the whole chat box together (input + the
        model/effort pickers), so the chatbox text matches the message scale. Desktop
        keeps fixed sizes. */
-    #op-input.op-input { font-size: calc(0.74rem * var(--chat-scale)); }   /* matched to the model picker's 0.74rem (2026-07-21: input/placeholder/follow-up all too small) */
+    #op-input.op-input { font-size: calc(0.74rem * var(--chat-scale)); }   /* matched to the model picker's 0.74rem  */
     /* keep the "Leave a message for Operator?" follow-up input IN LOCKSTEP with
        the main Message Operator input on mobile — typed text matches the 0.64
        placeholder notch; the placeholder itself inherits (base rule) so the two
-       can't drift (2026-07-20: "font too big on input for follow up"). */
-    .op-finish-input { font-size: calc(0.74rem * var(--chat-scale)); }   /* matched to model picker 0.74rem (2026-07-21) */
+       can't drift . */
+    .op-finish-input { font-size: calc(0.74rem * var(--chat-scale)); }   /* matched to model picker 0.74rem  */
     .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; }   /* model/effort scales with -/+ (mobile) but CAPPED. Caret gutter is NOT overridden here any more — the base rule's em-based padding already scales with this font-size, and a second hard-coded gutter is what let the two drift apart. */
-    #op-input.op-input::placeholder { font-size: calc(0.74rem * var(--chat-scale)); }   /* "Message Operator" matched to model picker (2026-07-21) */
+    #op-input.op-input::placeholder { font-size: calc(0.74rem * var(--chat-scale)); }   /* "Message Operator" matched to model picker  */
     .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
        flex-centered digit; desktop keeps its 0.5px top-pad) */
@@ -981,7 +1105,11 @@
     /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px).
        Desktop keeps the compact 20px sizing. */
     .op-iconbtn { width: 28px; height: 28px; min-width: 28px; font-size: 1.1rem !important; }
-    .op-iconbtn svg { width: 16px !important; height: 16px !important; }
+    /* NOT the home mark: it is DRAWN at 52px and scaled down (supersampled
+       spin) — forcing 16px here crushed it to an invisible 4px dot (the
+       "empty button", the owner 2026-07-26). Its mobile size is set by transform
+       in the end-of-file block instead. */
+    .op-iconbtn:not(.op-home-btn) svg { width: 16px !important; height: 16px !important; }
     #op-full { font-size: 1.05rem; }
     .op-fontpill { height: 28px; }
     .op-fontpill button { width: 26px; font-size: 1rem; }
@@ -1001,7 +1129,7 @@
       border: none; border-radius: 0; z-index: 1; }
     /* the URL bar NEVER loses the flex fight: .op-stage's 280px min-height floor
        was crushing it to an 8px sliver when the sheet ate the vertical room
-       (2026-07-20 "URL bar mangled"). Unshrinkable controls; the stage
+       . Unshrinkable controls; the stage
        (object-fit: contain, covered by the sheet anyway) absorbs the squeeze. */
     .op-urlbar { flex: 0 0 auto; }
     .op-stage { min-height: 0; }
@@ -1090,9 +1218,18 @@
       padding-bottom: 0.5rem; align-content: start; }
     .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; aspect-ratio: auto; }
       /* full-width single column: let cards stay content-height, not tall squares */
-    .op-lp-name { font-size: calc(0.82rem * var(--chat-scale)); padding-right: 2.2rem; }   /* -1 notch + run further right (2026-07-15) */
-    .op-lp-prompt { font-size: calc(0.72rem * var(--chat-scale)); -webkit-line-clamp: 2; }
-    .op-lp-site { font-size: calc(0.64rem * var(--chat-scale)); padding: 0.22rem 0.55rem; }
+    /* The three top-right controls (X, theme, status ring) DO fit a phone —
+       142px of a 390px viewport — and they are position:fixed so they cost the
+       layout nothing. They only need clearing the safe-area inset, which the
+       desktop 1.1rem top does not account for on a notched device. No mobile
+       hamburger needed . */
+    /* the +3px on theme/ring is their existing optical offset against the X —
+       keep it, or the row goes 3px out of line on mobile only. */
+    .op-lp-close { top: calc(0.75rem + env(safe-area-inset-top)); }
+    .op-lp-theme, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
+    .op-lp-close { right: calc(0.75rem + env(safe-area-inset-right)); }
+    .op-lp-theme { right: calc(3.5rem + env(safe-area-inset-right)); }
+    .op-lp-mark  { right: calc(6.25rem + env(safe-area-inset-right)); }
     .op-lp-go { top: 0.7rem; right: 0.7rem; padding: 0.4rem 0.72rem 0.4rem 0.62rem;
       font-size: calc(0.68rem * var(--chat-scale)); }   /* bigger tap target on touch */
     .op-lp-go svg { width: 12px; height: 12px; }
@@ -1140,9 +1277,9 @@
     border-radius: 4px; padding: 0.1rem 0.3rem; color: var(--muted);
     font: 500 0.6rem/1.2 'JetBrains Mono', monospace;
     transition: color .12s ease, background .12s ease; }
-  /* SVG icon slot (History clock) — an icon, not a keycap: no chip box, just the
-     stroke glyph in the same muted color the keycaps use (2026-07-21). */
-  .op-ham-item .k.k-icon { background: none; border: 0; padding: 0.1rem 0.18rem;
+  /* SVG icon slot (History clock) — boxed in the same keycap chip as its
+     sibling shortcut slots, icon instead of glyph text . */
+  .op-ham-item .k.k-icon { padding: 0.13rem 0.24rem;
     display: inline-flex; align-items: center; }
   .op-ham-item:hover .k.k-icon { color: var(--fg); }
   .op-ham-item:hover .k { color: var(--fg-2); background: var(--bg-3); }
@@ -1177,40 +1314,133 @@
 
   /* the whole input box: one bordered container holding the input row + model row */
   .op-inputbox { border: 1px solid var(--border-2); border-radius: 11px; background: var(--bg);
-    padding: 0.35rem 0.5rem;   /* EQUAL top/bottom (was 0.4/0.3, more space above "Message Operator" than below — 2026-07-21) */
+    padding: 0.35rem 0.5rem;   /* EQUAL top/bottom (was 0.4/0.3, more space above "Message Operator" than below — the owner 2026-07-21) */
     transition: border-color .25s, box-shadow .25s, background .3s ease, opacity .3s ease; }
   .op-inputbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
-  .op-steer { display: flex; gap: 0.4rem; align-items: flex-end; }   /* send pinned bottom-right as the textarea grows (2026-07-21) */
+  .op-steer { display: flex; gap: 0.4rem; align-items: flex-end; }   /* send pinned bottom-right as the textarea grows  */
+  /* BLOCK wrapper around #op-input: the iOS anti-zoom technique below widens the
+     textarea to 1/scale and paints it back down — as a direct flex item that widened
+     box shrank straight back to the row width and painted squished (the documented
+     lp-composer flex defeat). The wrapper is the flex item; inside block flow the
+     widened box sticks. Inert on desktop (textarea fills it at 100% as before). */
+  .op-grow-wrap { flex: 1 1 auto; min-width: 0; }
   .op-input { flex: 1 1 auto; width: 100%; background: transparent; border: none; outline: none;
-    color: var(--fg); font: 500 0.58rem/1.35 var(--chat-font); padding: 0.2rem 0.25rem;   /* Anthropic Sans via --chat-font (2026-07-21) */
+    color: var(--fg); font: 500 0.58rem/1.35 var(--chat-font); padding: 0.2rem 0.25rem;   /* Anthropic Sans via --chat-font  */
     text-align: left; resize: none; overflow-y: hidden; max-height: 140px;
     white-space: pre-wrap; word-break: break-word; }
   /* iOS forcibly zooms a page when an editable control computes below 16px.
      Keep the surrounding compact UI, but meet that threshold on coarse-pointer
      WebKit instead of ever disabling native page zoom in the viewport.
-     #op-input is carved out like the URL bar (1.0.23): the rail chatbox keeps
-     the owner-preferred compact size from 2026-07-13 and accepts Safari's
-     focus zoom — the blanket 16px force-up was what made "Message Operator"
-     oversized and misaligned against the compact rail (2026-07-18). */
+     #op-input history: first carved out of the blanket 16px force-up (2026-07-18,
+     it read oversized against the compact rail), accepting Safari's focus zoom —
+     until that zoom itself became the complaint . It now gets the lp-composer paint-scale treatment in its own
+     block below: computed 16px (no focus zoom) painted back to the compact size. */
   @supports (-webkit-touch-callout: none) {
     @media (pointer: coarse) {
-      /* .op-finish-input carved out alongside #op-input: the blanket 16px
-         force-up blew the "Leave a message for Operator?" box up to 16px on
-         iPad — enormous next to the 12px labels above it (2026-07-21).
-         Like the main input, it keeps its compact size and accepts Safari's
-         focus-zoom (it's an optional follow-up field). */
-      #op textarea:not(#op-input):not(.op-nt-input):not(.op-finish-input),
-      #op input[type="text"]:not(.op-nt-input):not(.op-nt-pill-in),
-      #op input[type="search"], #op input:not([type]):not(.op-nt-pill-in) {
+      /* Zoom kill for EVERY text input . Two strategies:
+         1. Blanket 16px for the roomy controls — computing at 16px is fine and
+            is the simplest kill. Now INCLUDES the save-modal fields and the
+            pill input (old carve-outs that instead accepted the zoom): a save
+            dialog / manual-takeover popover is roomy enough for 16px text, and
+            killing the zoom matters more than shaving a couple px.
+         2. The two COMPACT multiline boxes that must stay small in place
+            (#op-input handled in its own block below; .op-finish-input here)
+            get the paint-scale transform instead of 16px text. */
+      #op textarea:not(#op-input):not(.op-finish-input),
+      #op input[type="text"], #op input[type="search"], #op input:not([type]) {
         font-size: 16px !important;
       }
+      .op-nt-pill-in { font-size: 16px !important; }   /* chip-row field: plain 16px, no transform (flex item) */
+      /* Paint-scale the finish-up box (manual-takeover follow-up). Same trick
+         as #op-input: computed 16px kills the focus zoom, a scale transform
+         paints it back to the compact 0.72rem design size. transform-origin
+         top-left + width:1/scale keeps the painted box at 100% width; a
+         negative bottom margin reclaims the (1−scale) phantom height so the
+         shrunk box leaves no dead space under it (it lives in an
+         overflow:hidden column-flex, so an uncompensated shrink would clip
+         low). resize:none — a transform desyncs the native resize handle and
+         touch users don't drag it. */
+      .op-finish-input {
+        --op-sec: 0.72;                       /* 16 × 0.72 ≈ 11.5px ≈ the compact design size */
+        font-size: 16px !important;
+        transform: scale(var(--op-sec)); transform-origin: left top;
+        /* align-self:flex-start so the column-flex stretch doesn't CAP the
+           widened box at parent width — without it width:calc(100%/scale)
+           gets clamped and the painted box only fills `scale`× the row (a
+           right-side gap). flex-start lets it overflow the layout box, which
+           the scale then paints back down to exactly 100%. */
+        align-self: flex-start;
+        width: calc(100% / var(--op-sec)); resize: none;
+        margin-bottom: calc((var(--op-sec) - 1) * (1.4em + 0.8rem));
+      }
+      .op-finish-input::placeholder { font-size: inherit; }
+      /* Save-task prompt box: the blanket 16px (zoom kill) left it GIANT next
+         to the modal's 0.68rem fields . Same paint-scale
+         trick as .op-finish-input: computed 16px so iOS never focus-zooms,
+         painted back down to the design size. 0.68 ≈ 16×0.68 = 10.9px = the
+         .op-nt-input font. resize:none — a transform desyncs the handle. */
+      textarea.op-nt-input {
+        --op-nts: 0.68;
+        font-size: 16px !important;
+        transform: scale(var(--op-nts)); transform-origin: left top;
+        width: calc(100% / var(--op-nts)); resize: none;
+        margin-bottom: calc((var(--op-nts) - 1) * (4.4em + 0.96rem));
+      }
+      textarea.op-nt-input::placeholder { font-size: inherit; }
     }
   }
-  .op-steer { align-items: flex-end; }   /* send hugs the input's bottom-right, stable as it grows past one line (2026-07-21) */
-  .op-input::placeholder { color: var(--muted); text-align: left; }
+  /* #op-input anti-zoom (history above): computed 16px so iOS never focus-zooms,
+     painted back to the compact size via transform. --op-ipt mirrors the model
+     picker's font formula EXACTLY — min(0.74·--chat-scale, 0.96) — so the painted
+     input tracks A−/A+ and the picker's cap in lockstep; a pinned literal here
+     re-opens the drift the moment the zoom control moves. THE v1049 REGRESSION
+     ("Message Operator way down + misaligned", the owner 2026-07-22) was the
+     ::placeholder: its own 0.74·scale font-size (mobile block above) computed
+     INSIDE the transformed element, so it shrank twice — once by font-size, once
+     by the paint transform (~74% of the picker at scale 1) — and its short line
+     box rode the top of the phantom-inflated row. Fix: placeholder inherits the
+     16px (one shrink, via the transform), and the idle margin hands back the
+     (1−scale) phantom of line + v-padding; autoGrow overrides it live once
+     typing starts. REGRESSION GUARD: any change here must keep
+     test_ios_input_anti_zoom_tracks_picker_and_single_shrinks_placeholder green.
+     Needs the .op-grow-wrap block parent — see the flex-defeat note at .op-steer. */
+  @supports (-webkit-touch-callout: none) {
+    @media (pointer: coarse) {
+      #op-input.op-input {
+        --op-ipt: min(calc(0.74 * var(--chat-scale)), 0.96);
+        font-size: 16px !important;
+        width: calc(100% / var(--op-ipt));
+        /* the 140px visual cap is a LAYOUT 140/scale here (autoGrow's
+           layoutCap) — the base rule's flat 140px clamped the box ~2 lines
+           EARLY while the JS still thought it had room: lines 141..189 existed
+           but couldn't paint or take the caret, and the painted-height wrap pin
+           sized for them anyway — the growing black gutter under ~8 lines of
+           draft . Keep CSS and JS caps identical. */
+        max-height: calc(140px / var(--op-ipt));
+        transform: scale(var(--op-ipt));
+        transform-origin: left top;
+        /* display:block, or the inline-level textarea rides a text baseline in
+           the wrap and the line-box strut adds ~6px of dead space BELOW it that
+           no margin can express ("too high, not centered", the owner 2026-07-22 —
+           measured live: wrap 28.4px vs painted input 21.7px until this). */
+        display: block;
+        margin-bottom: calc((var(--op-ipt) - 1) * (1.35em + 0.4rem));   /* idle phantom: line + v-padding */
+      }
+      /* single-shrink: inherit the 16px so the paint transform is the ONLY
+         scaling — beats the mobile block's 0.74·scale placeholder rule above */
+      #op-input.op-input::placeholder { font-size: inherit; }
+    }
+    /* ≥821px (iPad-width): the desktop source-order block sets 0.77rem, not 0.74 */
+    @media (pointer: coarse) and (min-width: 821px) {
+      #op-input.op-input { --op-ipt: min(calc(0.77 * var(--chat-scale)), 0.96); }
+    }
+  }
+  .op-steer { align-items: flex-end; }   /* send hugs the input's bottom-right, stable as it grows past one line  */
+  .op-input::placeholder { color: var(--muted); text-align: left;
+    font-weight: 525; }   /* middle of 500 and 550  */
   /* 21px (was 23): a hair smaller so it doesn't out-height the input line and
      inflate the row — with the symmetric inputbox padding this evens the space
-     above/below "Message Operator" (2026-07-21). */
+     above/below "Message Operator" . */
   .op-send { flex: 0 0 auto; width: 21px; height: 21px; background: #ededea; color: #0b0e18;
     border: 1px solid var(--border-2); border-radius: 6px; cursor: pointer; padding: 0;
     display: grid; place-items: center;   /* SVG centers geometrically */
@@ -1223,16 +1453,24 @@
   [data-theme="light"] .op { --op-code-bg: #e9edf2; --op-code-bd: rgba(0,0,0,.12); --op-code-fg: #2a2e36;
     /* the default light theme washes out under this UI — give the operator rail a
        slightly deeper, cooler surface + firmer borders so it reads as a panel, not paper. */
-    --bg-2: #e4e8ee; --bg: #eef1f5; --bg-3: #dde2e9; --border: rgba(0,0,0,.12); --border-2: rgba(0,0,0,.16); }
+    --bg-2: #e4e8ee; --bg: #eef1f5; --bg-3: #dde2e9; --border: rgba(0,0,0,.12); --border-2: rgba(0,0,0,.16);
+    /* one notch darker than the base light --muted (#5b6573) — the lightest
+       text (disclaimer, "Follow up", card sublines) washed out  */
+    --muted: #4e5866;
+    /* --bg-4 was MISSING here: user bubbles ride it, and without a light value
+       they fell through to .op:not(.op-flat)'s dark #1a1d24 — dark bubble, dark
+       text, invisible chat in non-flat light . Match flat-light. */
+    --bg-4: #d3d9e2; }
   [data-theme="light"] .op-rail { background: #e7ebf1; }   /* solid (no gradient corner seam) */
   [data-theme="midnight"] .op { --op-code-bg: #0a0e18; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
-  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans (2026-07-21); fixed size — does NOT scale with the +/- control */
+  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans ; fixed size — does NOT scale with the +/- control */
     color: var(--muted); opacity: 0.82; text-align: center; cursor: default;
     /* iOS Safari's double-tap-select latches onto the nearest SELECTABLE text —
        a double-tap on the (non-selectable) stage bled through and highlighted
        this line. It's chrome, not content: make it unselectable. */
     -webkit-user-select: none; user-select: none; }
-  [data-theme="light"] .op-disclaimer { color: #5a6573; opacity: 0.92; }   /* darker on light for readability */
+  [data-theme="light"] .op-disclaimer { color: #4b5462; opacity: 0.95; }   /* darker on light for readability; one more smidge  */
+  [data-theme="light"] .op-ver { color: #4b5462; opacity: 0.85; }   /* version under the wordmark rode --muted at 0.7 — too faint on light  */
   [data-theme="light"] .op-disclaimer-info { color: #3a424d; }
   /* ── LIGHT-MODE chat legibility: several chat elements are tuned for dark and
      wash out on light. Give them dark-on-light colors so everything reads. ── */
@@ -1245,14 +1483,18 @@
   [data-theme="light"] .op-act-lab { color: var(--fg); }
   [data-theme="light"] .op-msg.sys .body { color: #3a424d; }
   .op-disclaimer-info { display: block; max-height: 0; overflow: hidden; opacity: 0;
-    transform: translateY(-2px); transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem; }   /* a smidge smaller than the disclaimer; collapsed: zero height + slight up-offset */
+    transform: translateY(-2px); transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem;
+    will-change: transform; }   /* a smidge smaller than the disclaimer; collapsed: zero height + slight up-offset; will-change: no AA re-snap when the slide ends (the end-stilt, the owner 2026-07-26) */
   /* revealed: gap as margin-top (outside the overflow box, collapses cleanly), NOT
      transitioned → no 1px end-jump. Only max-height+opacity animate. */
+  /* max-height must MATCH the content (one 0.75rem line), not overshoot it:
+     at the old 1.4rem the visible growth hit the real height mid-transition
+     and stopped dead while the clock kept running — the end-stilt. */
   .op-disclaimer:hover .op-disclaimer-info,
-  .op[data-mode="man"] .op-disclaimer-info { max-height: 1.4rem; opacity: 0.85; transform: translateY(0); margin-top: 0.2rem; }   /* slide down + fade in; height matches 1 line (1:1, no step) */
+  .op[data-mode="man"] .op-disclaimer-info { max-height: 0.78rem; opacity: 0.85; transform: translateY(0); margin-top: 0.2rem; }
   /* enable the reveal transition only AFTER first paint (op-ready) so a refresh can't
      animate the info open→closed (the flash on load). */
-  .op.op-ready .op-disclaimer-info { transition: max-height .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, transform .28s cubic-bezier(.22,.61,.36,1); }   /* ease-out: height resolves smoothly; opacity leads; subtle slide */
+  .op.op-ready .op-disclaimer-info { transition: max-height .3s cubic-bezier(.22,.8,.28,1), opacity .26s ease .04s, transform .3s cubic-bezier(.22,.8,.28,1); }   /* height + slide resolve together; opacity trails 40ms so text fades in as it settles, not before */
   /* MAN mode: the "no screenshots while you have control" line stays shown persistently
      (it's an active reassurance while the user is driving), not just on hover. */
   .op-noshot { display: inline-block; vertical-align: middle; position: relative; top: -1px; }   /* center the icon on the text midline (not flush at baseline) */
@@ -1271,45 +1513,7 @@
      Zero standing chrome — the palette floats above the inputbox only while the
      draft starts with "/". Same tokens as everything else; never in the demo. ── */
   .op-inputbox { position: relative; }
-  .op-pal { position: absolute; left: -1px; right: -1px; bottom: calc(100% + 8px);
-    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 11px;
-    box-shadow: 0 -8px 30px rgba(0,0,0,.55); overflow: hidden; z-index: 30;
-    animation: op-pal-in .18s cubic-bezier(.2,1,.3,1); }
   @keyframes op-pal-in { from{opacity:0;transform:translateY(6px) scale(.99)} to{opacity:1;transform:none} }
-  .op-pal[hidden] { display: none; }
-  .op-pal-head { display: flex; justify-content: space-between; padding: 0.45rem 0.65rem;
-    font: 700 calc(0.54rem * var(--chat-scale))/1 var(--chat-font); color: var(--muted);
-    letter-spacing: .08em; border-bottom: 1px solid var(--border); }
-  .op-pal-list { max-height: 205px; overflow-y: auto; }
-  .op-pal-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem;
-    cursor: pointer; }
-  .op-pal-item.sel { background: var(--bg-4); }
-  .op-pal-name { font: 700 calc(0.66rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--fg); white-space: nowrap; }
-  .op-pal-prompt { font: 500 calc(0.58rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .op-pal-empty { padding: 0.55rem 0.65rem; font: 500 calc(0.6rem * var(--chat-scale))/1.4 var(--chat-font);
-    color: var(--muted); }
-  .op-pal-key { flex: 0 0 auto; background: var(--bg-4); border: 1px solid var(--border-2);
-    border-radius: 4px; padding: 0.06rem 0.3rem; color: var(--fg-2);
-    font: 600 calc(0.54rem * var(--chat-scale))/1.3 var(--chat-font); }
-  .op-pal-del { flex: 0 0 auto; background: transparent; border: none; cursor: pointer;
-    color: var(--muted); font-size: 0.7rem; padding: 0.05rem 0.2rem; visibility: hidden; }
-  .op-pal-item.sel .op-pal-del, .op-pal-item:hover .op-pal-del { visibility: visible; }
-  .op-pal-del:hover { color: var(--fg); }
-  .op-pal-del.arm { color: #e5534b; visibility: visible; }
-  .op-pal-foot { display: flex; gap: 0.8rem; padding: 0.4rem 0.65rem; border-top: 1px solid var(--border);
-    font: 600 calc(0.54rem * var(--chat-scale))/1.6 var(--chat-font); color: var(--muted); flex-wrap: wrap; }
-  .op-pal-foot[hidden] { display: none; }   /* same [hidden]-vs-flex trap as the save row */
-  .op-pal-save { display: flex; gap: 0.4rem; padding: 0.5rem 0.65rem; align-items: center; }
-  .op-pal-save[hidden] { display: none; }   /* the class's display:flex would beat the hidden attr */
-  .op-pal-save input { flex: 1 1 auto; min-width: 0; background: var(--bg-3);
-    border: 1px solid var(--border-2); border-radius: 6px; color: var(--fg);
-    font: 500 calc(0.62rem * var(--chat-scale))/1.4 var(--chat-font); padding: 0.28rem 0.45rem; }
-  .op-pal-save input::placeholder { color: var(--muted); }
-  .op-pal-save input:focus { outline: none; border-color: var(--accent); }
-  .op-pal-save .op-pal-sites { flex: 0 1 38%; }
-  .op-demo .op-pal { display: none !important; }   /* never in the public demo */
   /* ── New-task modal (#30 v2b): OpenAI-Operator-style save dialog — name,
      "What would you like Operator to do?", websites/apps/MCPs. Opened from the
      💾 urlbar button (and prefilled from the draft or last dispatch). ── */
@@ -1331,7 +1535,7 @@
     padding-top: 0.5rem; margin-bottom: -0.2rem; }
   @keyframes op-nt-in { from{opacity:0;transform:translateY(8px) scale(.97)} to{opacity:1;transform:none} }
   .op-nt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem; }
-  .op-nt-title { font: 700 calc(1.15rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); letter-spacing: -.01em; }
+  .op-nt-title { font: 700 calc(1.20rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); letter-spacing: -.01em; }   /* "Save task" heading +1 notch 1.15->1.20; modal stays Anthropic  */
   .op-nt-x { background: transparent; border: none; color: var(--muted); cursor: pointer;
     width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; }
   .op-nt-x:hover { background: var(--bg-4); color: var(--fg); }
@@ -1372,7 +1576,7 @@
      force-up (see the #op textarea block): typed text and placeholder share
      the compact dialog scale, accepting Safari's focus zoom — the 16px
      element / 0.68rem placeholder split read as "typed text comes out
-     enormous" (2026-07-19). */
+     enormous" . */
   .op-nt-sug { position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 5;
     background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 9px;
     box-shadow: 0 10px 28px rgba(0,0,0,.55); max-height: 214px; overflow-y: auto; padding: 3px;   /* taller — the pick list grew (v0.7.0) */
@@ -1434,6 +1638,16 @@
   /* ── Launchpad (#1): saved tasks as cards on the idle stage — the OpenAI-
      Operator homepage pattern. Shown only on a fresh session (empty log, no
      run); disappears for good the moment the conversation starts. ── */
+  /* FULL-VIEWPORT whenever open :
+     the splash lives INSIDE .op-stage, so absolute inset-0 covers only the
+     stage pane. It only ever looked full-screen because separate rules
+     collapse the rail — rules gated on mode=auto AND busy=0. Open the splash
+     during a LIVE run and it rendered centered in the stage with the rail
+     showing on the left; the "alternating with zoom" was the run's busy flag
+     flipping between turns while zoom notches were stepped. Fixed positioning
+     escapes the stage regardless of mode/busy; the grid-collapse rules below
+     remain as the tidy-up, not the load-bearing part. */
+  .op .op-lp:not([hidden]) { position: fixed; inset: 0; z-index: 40; }
   .op-lp { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column;
     align-items: safe center; justify-content: safe center; gap: 1rem; padding: 1.5rem;
     /* 3 cols × 218px + 2 × 0.75rem gap — the shared width for bar + grid */
@@ -1458,6 +1672,20 @@
   .op-lp-grid { touch-action: pan-y pinch-zoom; }
   .op-lp[hidden] { display: none; }
   .op[data-mode="man"] .op-lp { display: none !important; }
+  /* Browser → splash used to be a hard cut: [hidden] flips display:none→flex and
+     the splash popped in. Fade + settle it instead. transition-behavior:allow-discrete
+     lets `display` participate so the element is laid out for the whole fade; the
+     @starting-style block is the enter-from state (Chrome 117+/all modern browsers,
+     confirmed on the bot's Chrome 148). op-ready gates it exactly like the disclaimer
+     reveal — a cold refresh restores the splash with no animation, only the in-session
+     return-to-splash animates. Boot/manual paths keep their hard display rules. */
+  .op.op-ready .op-lp:not([hidden]) {
+    transition: opacity .34s cubic-bezier(.22,.8,.28,1),
+                transform .34s cubic-bezier(.22,.8,.28,1);
+    opacity: 1; transform: none; }
+  @starting-style {
+    .op.op-ready .op-lp:not([hidden]) { opacity: 0; transform: scale(.985) translateY(6px); }
+  }
   /* The server renders the splash as the initial surface. Keep it on top for
      the first two animation frames while local/shared session state restores,
      so neither the rail nor browser chrome can flash before launchpad paint. */
@@ -1495,6 +1723,14 @@
     grid-column: 1; border: 0; border-radius: 0; }
   .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-stage {
     min-height: 100%; }
+  /* WHITE FLASH on trash→splash: the launchpad background is translucent + blurred,
+     and the live browser frame (.op-view MJPEG) is usually a WHITE page sitting right
+     behind it — so returning to splash washed white for the fade's duration . The stage itself is already #05060a; just fade the white frame out
+     under the splash so only dark shows through the blur. Transitioned so it dims in
+     step with the launchpad fade rather than snapping. */
+  .op-view { transition: opacity .28s ease; }
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-view {
+    opacity: 0; }
   /* There is no second way into the cockpit from homepage mode: submitting a
      task is the door. The old X merely exposed an empty control panel. */
   .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-lp-close {
@@ -1507,10 +1743,16 @@
   /* rem-only, NOT vw: under page zoom vw shrinks while rem text grows, so a
      vw-clamped wordmark scaled out of proportion to everything else. Mobile
      keeps its vw clamp below — narrow screens genuinely need viewport fit. */
-  .op-lp-wordmark { font: 700 5.6rem/0.9 'Plus Jakarta Sans',
-    sans-serif; color: var(--fg); letter-spacing: -.03em;
-    text-rendering: geometricPrecision; }
-  /* ── The welcome/splash view (ALL instances — 2026-07-17: prod too, the
+  .op-lp-wordmark { font: var(--op-wordmark-wght, 700) 5.6rem/0.9 'PJS Wordmark',
+    'Plus Jakarta Sans', sans-serif; color: var(--fg); letter-spacing: -.03em;
+    text-rendering: geometricPrecision;
+    /* lh 0.9 leaves the p's descender ~0.2em of ink OUTSIDE the box: any later
+       sibling (composer, demonote, splash transitions) paints over exactly the
+       bottom of the p. Lift the wordmark's paint order, and grow the box over
+       the ink (negative margin keeps net layout identical). */
+    position: relative; z-index: 1;
+    padding-bottom: .24em; margin-bottom: -.24em; }
+  /* ── The welcome/splash view (ALL instances — the owner 2026-07-17: prod too, the
      translucent veil let the live feed bleed through and read as broken): the
      launchpad as a landing page — wordmark + composer on solid near-black,
      cluster centered on the viewport middle. Prototype of the future "new
@@ -1527,7 +1769,267 @@
   /* Cards are part of first paint, so keep the compact hero near the top and
      reserve the remaining height for the fixed two-row grid. */
   .op-lp-hero { margin-top: 0; gap: 0.6rem; }
-  .op-lp-composer { margin-top: 1.4rem; }   /* pulled close under the wordmark (2026-07-17) */
+  /* ── The animated Operator mark (1.0.29) ──────────────────────────────────
+     Boot: the green arc sweeps the ring (indeterminate spinner) while the
+     glyph is still faded out. Once the feed resolves the sweep closes into a
+     full ring and the mark fades/scales in — so the "loader" IS the logo
+     assembling, not a spinner that gets replaced by one. Colors match the
+     favicon's ring stack. */
+  /* Third control in the splash's top-right row: X at 1.1rem, theme at 4rem,
+     this at 6.9rem. Same 32px box as its neighbours so the three read as one
+     row; the 26px art inside leaves the ring visually matched to their glyphs
+     rather than ballooning to the full button. */
+  .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
+    width: 32px; height: 32px; display: grid; place-items: center; line-height: 0; }
+  .op-lp-mark svg { overflow: visible; }
+  /* ── Hover label  ────────────────────────────────────────
+     Says what the ring MEANS: Ready when the feed is live, and the matching
+     wording for trouble — amber ring = a minor/transient problem, red = the
+     backend is down. Text comes from data-state so it cannot drift out of sync
+     the way the old hardcoded title= attribute did. Sits below the badge,
+     right-aligned to it so it never runs off the viewport edge. */
+  .op-lp-mark-tip { position: absolute; top: calc(100% + 6px); right: 0;
+    display: grid; gap: 1px; justify-items: end;
+    padding: 0.34rem 0.55rem; border-radius: 9px; white-space: nowrap;
+    background: color-mix(in srgb, var(--bg-4) 92%, transparent);
+    border: 1px solid var(--border-2); backdrop-filter: blur(14px) saturate(140%);
+    color: var(--fg); font: 600 0.63rem/1.25 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    box-shadow: 0 10px 26px -12px rgba(0,0,0,.85);
+    opacity: 0; transform: translateY(-3px); pointer-events: none;
+    transition: opacity .14s ease, transform .16s cubic-bezier(.2,1,.3,1); }
+  /* the state word is ::before content so it can be swapped purely in CSS;
+     the version rides under it as a dimmed second line. */
+  .op-lp-mark-ver { color: var(--muted); font-weight: 500; font-size: 0.5rem;
+    letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+  .op-lp-mark:hover .op-lp-mark-tip,
+  .op-lp-mark:focus-visible .op-lp-mark-tip { opacity: 1; transform: none; }
+  /* light mode: --bg-4 is NOT re-themed by the light block (deliberately — user
+     bubbles ride it), so this card must restyle itself or it stays a dark chip
+     with dark light-mode text  */
+  [data-theme="light"] .op-lp-mark-tip {
+    background: color-mix(in srgb, #f6f8fb 94%, transparent);
+    border-color: rgba(0,0,0,.13);
+    box-shadow: 0 10px 26px -14px rgba(0,0,0,.35); }
+  .op-lp-mark-tip::before { content: "Connecting…"; }
+  .op-mark-settled .op-lp-mark-tip::before { content: "Ready"; }
+  .op[data-state="hung"] .op-lp-mark-tip::before { content: "Degraded performance"; }
+  .op[data-state="hung"] .op-lp-mark-tip { color: #d2a30f; }
+  .op[data-state="error"] .op-lp-mark-tip::before,
+  .op.op-signal-lost .op-lp-mark-tip::before { content: "Connection error"; }
+  .op[data-state="error"] .op-lp-mark-tip,
+  .op.op-signal-lost .op-lp-mark-tip { color: var(--bad); }
+  /* Hover: breathe in, spin, breathe out — a FULL 720deg double turn , swelling through the middle and relaxing back.
+     Runs on the settled mark only; mid-boot the sweep animation owns it.
+     1.15s rather than .78s: two turns at the single-turn duration reads as a
+     frantic blur and loses the "breathe" beat entirely. */
+  /* The greet is allowed to FINISH. Mouse-off used to kill the animation
+     mid-turn — at, say, 190deg the glyph snapped straight back to 0deg in one
+     frame, and THAT is the flash . The animation now lives on a state class that JS removes
+     only once the run completes, so leaving the badge never interrupts it:
+     the turn plays out and lands on its own resting pose. */
+  /* Rotation and swell on SEPARATE animatable properties (rotate / scale
+     compose, unlike two transform tracks): the old single keyframes put a
+     mid-stop at 45%→215deg under the overshoot ease, so the turn visibly
+     STALLED around 215deg and crept the rest — the owner 2026-07-27 "does 360 but
+     there's a halt in the middle... should be like the brow one, keep the
+     breathing". The turn is now one continuous from→to like the home greet;
+     the breath rides its own track. */
+  .op-lp-mark.op-greeting .op-lp-mark-glyph {
+    animation: op-mark-greet-turn .78s cubic-bezier(.34,1.06,.44,1),
+               op-mark-greet-swell .78s ease-in-out; }
+  /* The glyph keeps opacity 1 and an identity transform AT REST, so hover-off
+     has nothing to snap back to. Pinning opacity inside the keyframes (the
+     2026-07-25 fix) was not enough on its own: `both` holds the animation's
+     final frame only while the :hover rule still matches, so the instant the
+     cursor left, BOTH the opacity and the rotate/scale reverted to whatever the
+     base rule said — that revert is the flash. Declaring the resting state
+     explicitly here makes the animation's end frame and the resting state
+     identical, so the handover is invisible.
+     A 720deg end frame is congruent with 0deg, so nothing jumps even if the
+     animation is interrupted mid-turn. */
+  .op-mark-settled .op-lp-mark-glyph {
+    opacity: 1; transform: rotate(0deg) scale(1);
+    transform-origin: center; transform-box: fill-box; }
+  /* ONE turn , and it must reset
+     SMOOTHLY. The flash on mouse-off came from using an animation: it ends held
+     by `both`, and un-hovering drops that hold in a single frame. A transition
+     has no such cliff — the same declaration animates in on hover and eases
+     back out on release, so there is nothing to snap. */
+  @keyframes op-mark-greet-turn {
+    from { rotate: 0deg; } to { rotate: 360deg; } }
+  @keyframes op-mark-greet-swell {
+    0%, 100% { scale: 1; } 45% { scale: 1.14; } }
+  /* the ring swells with it, a touch behind, so the whole badge feels alive */
+  .op-lp-mark.op-greeting .op-lp-mark-sweep {
+    transform-origin: center; transform-box: fill-box;
+    animation: op-mark-greet-ring .78s cubic-bezier(.34,1.06,.44,1); }
+  /* Resting state declared for the same reason as the glyph above: the ring
+     must already BE at scale(1) when the hover rule drops, or it snaps. */
+  .op-mark-settled .op-lp-mark-sweep {
+    transform-origin: center; transform-box: fill-box; transform: scale(1); }
+  @keyframes op-mark-greet-ring {
+    0%,100% { transform: scale(1); }
+    25%     { transform: scale(1.07); }
+    60%     { transform: scale(1.04); } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-mark.op-greeting .op-lp-mark-glyph,
+    .op-lp-mark.op-greeting .op-lp-mark-sweep { animation: none; } }
+  .op-lp-mark-track { stroke: color-mix(in srgb, var(--muted) 26%, transparent); }
+  /* The SPIN lives on the wrapper group; the circle carries only dash geometry.
+     Splitting them is what makes the settle clean: growing the dash to a closed
+     ring never has to stop the rotation, and a full 360deg turn has no seam (a
+     dash-offset lap flashes where the round caps overlap at the wrap). */
+  /* fill-box + center, NOT `32px 32px`: on an SVG child a px origin resolves
+     against the VIEWPORT (26px here), not user units (the 64 viewBox) — so
+     "32px" landed at 123% of the box and the arc orbited a point outside the
+     icon, which is what read as a lurching, un-smooth spin .
+     Same trap that hit the chat spinner. viewBox-independent by construction. */
+  .op-lp-mark-spin { transform-origin: center; transform-box: fill-box;
+    animation: op-mark-spin 1.15s linear infinite; }
+  .op-lp-mark-sweep { stroke: #3fb950;
+    /* r=25 => circumference 157.08. Dash 40/157 = a ~92deg arc. */
+    stroke-dasharray: 40 117.08;
+    will-change: transform;
+    transition: stroke-dasharray .5s cubic-bezier(.22,1,.36,1); }
+  /* The inner <g> carries the translate/scale that centers the 24-box art;
+     this group carries ONLY the rotation, so transform-origin is the true
+     ring center (32,32) and the mark pivots in place instead of swinging in. */
+  /* Visible (faintly) from the START, not opacity 0 — the mark used to be
+     completely hidden until the settle, so the icon's centre sat EMPTY for the
+     whole boot and then popped. That empty middle is what read as "a clearing
+     of the canvas" . It now ghosts in behind the sweep and
+     just resolves to full. */
+  /* will-change keeps the glyph/sweep on their compositor layer PERMANENTLY.
+     Without it the layer is torn down the frame each animation finishes and
+     the element re-rasterises in-flow — an AA re-snap that reads as a blink
+     at the END of every run, hover or not . Two tiny SVG
+     nodes; the held layer is cheap. */
+  .op-lp-mark-glyph { stroke: var(--fg); opacity: .3;
+    will-change: transform;
+    transform-origin: center; transform-box: fill-box; }
+  /* Settled state — the sweep closes to a full ring, the mark resolves in.
+     Gated on .op-mark-settled (set by JS on the first live feed state), NOT on
+     .op-ready: op-ready flips ~32ms after parse, which would skip the spin. */
+  /* Settle: the dash GROWS to the full circumference, so the arc closes into a
+     complete ring. Only the dasharray is touched — the offset is deliberately
+     left alone. Once the dash covers the whole circle the offset stops being
+     observable (a full ring looks the same at any rotation), so the spin can
+     be cut without the arc's position ever showing a jump. Transitioning the
+     offset instead would snap it from mid-lap back to 0: the stutter. */
+  /* Settle: grow the dash into a closed ring. The rotation keeps running on the
+     wrapper and is stopped separately AFTER the ring closes — a full ring looks
+     identical at every angle, so stopping it then is invisible. */
+  .op-mark-settled .op-lp-mark-sweep { stroke-dasharray: 157.08 0; }
+  /* The spin EASES OUT instead of being cut . Capping iteration-count stops the animation the instant the
+     current turn ends — at linear timing that is a hard halt from full speed.
+     A one-shot decelerating turn hands over smoothly instead. */
+  /* DISTINCT keyframes name, not op-mark-spin: same-name updates never
+     restart a running CSS animation — with iteration-count switched to 1 and
+     a lap already elapsed, the animation jumped straight to its filled end
+     state and the mark FROZE at 0deg (the "halt": the decelerating finale
+     never actually played for any settle after the first lap — live-traced
+     2026-07-27, rotation flatlines the instant op-mark-settled lands). A
+     fresh name restarts cleanly from 0deg at the lap boundary. */
+  .op-mark-settled .op-lp-mark-spin {
+    animation: op-mark-spin-settle 1.15s cubic-bezier(.25,.8,.3,1) 1 forwards; }
+  /* The glyph CROSS-FADES UP from a resting state — it no longer starts at
+     opacity 0 . Fading in from
+     nothing blanked the icon for a beat mid-settle; starting part-visible and
+     un-rotated keeps something on screen the whole way through. */
+  .op-mark-settled .op-lp-mark-glyph { opacity: 1;
+    animation: op-mark-settle .5s cubic-bezier(.22,1,.36,1) both; }
+  /* THE mouse-off flash, finally (2026-07-26). While .op-greeting is on the
+     mark, the greet rule REPLACES this settle animation in the cascade; the
+     moment the class drops, `op-mark-settle` re-enters the element's
+     animation list and the browser treats it as newly applied — it REPLAYS
+     from opacity .3 / scale .94. That dip-and-refade is the flash. JS stamps
+     .op-boot-played once the settle has run; after that the settle animation
+     is never applied again (:not(.op-greeting) keeps this order-independent
+     of the greet rule, which must still win during a greet). */
+  .op-lp-mark.op-boot-played:not(.op-greeting) .op-lp-mark-glyph {
+    animation: none; }
+  /* ── Status colors ────────────────────────────────────────────────────────
+     Driven entirely by #op's existing data-state, so the ring needs no state
+     of its own: green live, amber connecting/hung, red when the backend is
+     down. The closed ring is the health readout; the sweep only runs before
+     the first resolved state. */
+  .op[data-state="error"] .op-lp-mark-sweep,
+  .op.op-signal-lost .op-lp-mark-sweep { stroke: var(--bad); }
+  .op[data-state="hung"] .op-lp-mark-sweep { stroke: #d2a30f; }
+  .op[data-state="error"] .op-lp-mark-glyph,
+  .op.op-signal-lost .op-lp-mark-glyph { stroke: var(--bad); }
+  /* A dead backend pulses so a red ring reads as an alarm, not just a recolor. */
+  .op-mark-settled[data-state="error"] .op-lp-mark-sweep,
+  .op-mark-settled.op-signal-lost .op-lp-mark-sweep {
+    animation: op-mark-alarm 1.6s ease-in-out infinite; }
+  @keyframes op-mark-alarm { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-mark-settled[data-state="error"] .op-lp-mark-sweep,
+    .op-mark-settled.op-signal-lost .op-lp-mark-sweep { animation: none; } }
+  /* A true 360deg turn — seamless by construction, no dash wrap to flash. */
+  @keyframes op-mark-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes op-mark-spin-settle { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  /* ── Home button = the Operator mark, and it greets on hover  — a double turn, same language as the splash badge's greet.
+     transform-box: fill-box so the pivot is the glyph's own centre regardless
+     of the cropped viewBox (a px origin would resolve against the 15px
+     viewport, not user units — the trap that broke the other two marks). */
+  /* display:block — an inline SVG sits on the TEXT BASELINE, which lifted the
+     mark off-centre in its 20px button . The button
+     is a flex centring box, so a block child centres exactly. */
+  /* No transform-box here: on an SVG ROOT element, fill-box resolves against
+     the ink's bounding box rather than the element box, which pivoted the mark
+     off its own centre and made the spin tumble . The element
+     is already an exactly-square 13px block centred by the button's flex, so
+     the default border-box + `center` is the true centre. (fill-box IS correct
+     on the inner <g> of the other two marks — different element, different box.) */
+  /* The button inherits .op-full-btn's monospace `font: 500 .72rem/1`, and
+     .op-iconbtn only overrides font-SIZE — the leftover line-height kept
+     nudging the glyph off centre. Pin the box to a grid and drop the inherited
+     line box entirely so the only thing positioning the mark is the centring.
+     No transform-box: on an SVG ROOT, fill-box resolves against the ink bbox,
+     not the element box, which pivoted the spin off-centre (the tumble). */
+  .op-home-btn { display: grid; place-items: center; line-height: 0; }
+  /* will-change pins the mark to its compositor layer between spins — layer
+     teardown at animation end re-rasterised the glyph a hair lower (the "1px
+     stilt down", the owner 2026-07-26). Same fix as the splash glyph. */
+  /* The svg is DRAWN at 52px and scaled to 13 (see the template comment: the
+     compositor rotates a rasterised texture, and only a supersampled texture
+     spins without shimmer at this size). scale(.25) must therefore appear in
+     every transform that touches this element, keyframes included. No top/
+     left nudges: 52 in the 20px button centers on integers by itself —
+     verified dx 0.0 / dy 0.0 in an 8x headless measure. */
+  .op-home-btn { position: relative; }
+  /* absolutely centered, not grid-centered: the 52px box overflows the 20px
+     button and the button's layout pushed it below instead of holding it
+     centered. left/top 50% + integer -26px margins = exact center. */
+  .op-home-btn svg { display: block; transform-origin: center; will-change: transform;
+    position: absolute; left: 50%; top: 50%; margin: -26px 0 0 -26px;
+    transform: scale(0.25); }
+  /* Class-gated like the splash greet, NOT :hover-driven: mouse-off used to
+     kill the spin mid-turn and snap back. JS adds .op-greeting on enter and
+     clears it only on animationend, so the turn always completes. No `both`:
+     720deg end pose is congruent with rest, holding it buys nothing. */
+  .op-home-btn.op-greeting svg {
+    animation: op-home-greet .82s cubic-bezier(.34,1.06,.44,1); }
+  /* Pure double spin — NO breathing here . The swell belongs
+     to the splash badge's greet; on a 20px rail button it just reads as wobble. */
+  @keyframes op-home-greet {
+    from { transform: rotate(0deg)   scale(0.25); }
+    to   { transform: rotate(720deg) scale(0.25); } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-home-btn.op-greeting svg { animation: none; } }
+  /* starts at the glyph's resting .3 so the animation picks up exactly where
+     the static state left off — no step at the handover. */
+  @keyframes op-mark-settle {
+    from { opacity: .3; transform: scale(.94); }
+    to   { opacity: 1;  transform: scale(1); } }
+  /* Motion-sensitive users get the finished logo, never the spin. */
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-mark-spin { animation: none; }
+    .op-lp-mark-sweep { stroke-dasharray: 157.08 0; }
+    .op-lp-mark-glyph { opacity: 1; animation: none; }
+  }
+  .op-lp-composer { margin-top: 1.4rem; }   /* pulled close under the wordmark  */
   .op-lp-wordmark { font-size: 2.4rem; }
   /* ── the post-trash presentation: tasks over the LIVE feed, old translucent
      blur look — a glance at what's still on screen, not the solid splash ── */
@@ -1551,9 +2053,8 @@
      hijacked absolute anchoring; the splash is full-viewport so fixed pins
      the X to the view's true top-right and it survives launchpad scroll */
   .op-lp-close { position: fixed; top: 1.1rem; right: 1.1rem; z-index: 3; }
-  /* the launchpad reopen button only makes sense in auto mode (manual mode
-     force-hides the launchpad itself) */
-  .op[data-mode="man"] #op-lp-open { display: none; }
+  /* Home stays visible in manual mode too — its click flips back to auto and
+     opens the splash (see the openBtn handler; the owner 2026-07-22). */
   .op-lp-composer { width: min(100%, 36rem); min-height: 42px; position: relative; display: flex;
     align-items: center; padding: 0.4rem 3rem 0.4rem 0.92rem; box-sizing: border-box;
     background: color-mix(in srgb, var(--bg) 78%, #000); border: 1px solid var(--border-2);
@@ -1564,25 +2065,48 @@
   .op-lp-input { display: block; width: 100%; height: 1.3em; min-height: 1.3em; max-height: none;
     resize: none; overflow-y: hidden;
     padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg);
-    font: 500 calc(0.68rem * var(--chat-scale))/1.3 'Anthropic Sans', var(--chat-font);
-    letter-spacing: -.01em; caret-color: var(--fg); }
-  .op-lp-input::placeholder { color: var(--muted); opacity: .88;
-    font-size: inherit; }
+    font: 500 calc(0.84rem * var(--chat-scale))/1.3 'Anthropic Sans', var(--chat-font);   /* 0.68→0.76  */
+    letter-spacing: -.01em; caret-color: var(--fg);
+    transform: translateY(0.5px);   /* optical: Jakarta's ascender-heavy metrics read ~1px high in the centered pill  */
+    transition: height .16s cubic-bezier(.22,.8,.28,1); }   /* smooth the JS grow-to-fit as the draft wraps rows  */
+  /* NO font-size override: the placeholder ALWAYS matches the input's font
+      — an oversized placeholder in an input-sized box was
+     the ride-high bug, twice. Inherit and it can never desync again.
+     Guarded by test_composer_render. */
+  .op-lp-input::placeholder { color: var(--muted); opacity: .88; }
   /* EMPTY state: clamp any inline auto-resize height. iPad Safari rounds the
      textarea's scrollHeight differently than Chrome, so the JS grow-to-fit
      could leave the empty box taller than one line — flex centers the tall
      box but the placeholder rides its top ("What can I help you do?"
-     misaligned, 2026-07-19, second occurrence). */
+     misaligned, the owner 2026-07-19, second occurrence). */
   .op-lp-input:placeholder-shown { -webkit-user-select: none; user-select: none;
     height: 1.3em !important; }
   .op-lp-input:not(:placeholder-shown) { -webkit-user-select: text; user-select: text; }
-  .op-lp-send { position: absolute; right: 0.55rem; bottom: 0.35rem; width: 30px; height: 30px;
+  /* The composer is a 999px stadium: its right end-cap is a semicircle of radius
+     = height/2 (21px at the 42px default). A circular button reads "centered in
+     the corner" only when its OWN center lands on that semicircle's center — equal
+     radial clearance all around. The old right:8.8px/bottom:5.6px left it 3.8px shy
+     of center, so it looked skewed out of the curve . Symmetric
+     right/bottom inset = (inner-cap - btn)/2 puts the single-line button dead-center
+     in the cap (the 1px border sits outside the positioning box, so 5px inset reads
+     as 6px of visual clearance all round); bottom-anchored — not vertically centered —
+     so on a multi-row draft it stays pinned bottom-right, not floating to the middle
+     . */
+  .op-lp-send { position: absolute; right: 5px; bottom: 5px;
+    width: 30px; height: 30px;
     display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%;
     padding: 0; gap: 0; background: var(--fg); color: var(--bg); cursor: pointer;
-    transition: opacity .12s ease, filter .12s ease; }
+    transition: opacity .12s ease, filter .16s cubic-bezier(.22,.8,.28,1), transform .13s cubic-bezier(.34,1.56,.64,1); }
   .op-lp-send svg { width: 16px; height: 16px; flex: 0 0 16px; }
-  .op-lp-send:hover { filter: brightness(.88); }
-  .op-lp-send:active { filter: brightness(.75); }
+  /* EMPTY composer: truly center the button. bottom:5px only equals centered
+     while the pill is exactly 42px — a raised chat-scale grows the pill and
+     the bottom-anchored button reads low . `translate`, not
+     transform: the hover/active scale would overwrite a transform centering.
+     Multi-row drafts keep the bottom anchor (the :has gate drops with text). */
+  .op-lp-composer:has(.op-lp-input:placeholder-shown) .op-lp-send {
+    top: 50%; bottom: auto; translate: 0 -50%; }
+  .op-lp-send:hover { filter: brightness(.88); transform: scale(1.06); }
+  .op-lp-send:active { filter: brightness(.75); transform: scale(.92); }
   .op-lp-theme { position: fixed; top: calc(1.1rem + 3px); right: 4rem; z-index: 4;
     width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center;
     justify-content: center; border: 1px solid transparent; border-radius: 9px;
@@ -1591,11 +2115,46 @@
   .op-lp-theme:hover { color: var(--fg); background: var(--bg-3); border-color: var(--border-2); }
   .op-lp-theme:active { transform: scale(.94); }
   .op-lp-theme svg { display: block; }
-  .op-lp-theme-night { display: none !important; }
-  [data-theme="light"] .op-lp-theme-day { display: none; }
-  [data-theme="light"] .op-lp-theme-night { display: block !important; }
-  .op-lp-cats { width: min(100%, var(--op-lp-w)); display: flex; align-items: center; justify-content: center;
-    flex-wrap: nowrap; gap: 0.22rem; padding: 3px 0.1rem; box-sizing: border-box;   /* vertical clearance: overflow-x:auto clips the pressed pill's bottom curve at 0px (2026-07-19) */
+  /* 3-stop icon: the button shows the NEXT stop of the cycle (matches its
+     title/aria-label). dark → filled Fragify moon (OLED next), OLED → sun
+     (light next), light → outline crescent (dark next). Source order matters:
+     the light rules sit LAST so a historical light+flat combo reads as light.
+     svg-QUALIFIED selectors, not bare classes: the base `.op-lp-theme svg
+     {display:block}` above is (0,1,1) and beat the (0,1,0) class hides — ALL
+     THREE icons rendered side by side . Qualifying
+     ties the specificity so these later rules win. Same classes also drive
+     the brow #op-flat button. */
+  /* sunrise on swap : a display:none→shown flip restarts CSS
+     animations, so the INCOMING icon plays a rise-over-the-horizon each cycle
+     click for free — no JS. `from`-only keyframes: the end state is the
+     element's natural style, so #op-flat's static nudge transform is landed
+     on exactly instead of being snapped to after a hardcoded `to`. */
+  .op-lp-theme svg, #op-flat svg {
+    animation: op-theme-rise .45s cubic-bezier(.22,.8,.28,1); }
+  /* the button IS the horizon: clip the rise so the icon climbs into view
+     instead of sliding up over the surrounding chrome */
+  .op-lp-theme, #op-flat { overflow: hidden; }
+  @keyframes op-theme-rise {
+    from { transform: translateY(58%) rotate(-40deg); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-theme svg, #op-flat svg { animation: none; } }
+  svg.op-lp-theme-day, svg.op-lp-theme-night { display: none; }
+  .op.op-flat svg.op-lp-theme-oled { display: none; }
+  .op.op-flat svg.op-lp-theme-day { display: block; }
+  [data-theme="light"] .op svg.op-lp-theme-day,
+  [data-theme="light"] .op svg.op-lp-theme-oled { display: none; }
+  [data-theme="light"] .op svg.op-lp-theme-night { display: block; }
+  .op-lp-cats { width: min(100%, var(--op-lp-w)); display: flex; align-items: center;
+    /* `safe center` (NOT plain center): when the pill row overflows its width —
+       browser zoomed out, so the container shrinks while the pills keep their
+       text size — plain `center` centers the overflow and pushes BOTH ends
+       outside the scroll area. The first pill (Browse) spills past the
+       flex-start edge, which overflow-scroll can NEVER reach (scrollLeft can't
+       go negative), so it's permanently clipped; Saved clips off the right too
+       . `safe` centers only while everything fits and falls
+       back to flex-start on overflow, so nothing is ever cut off the start. */
+    justify-content: safe center;
+    flex-wrap: nowrap; gap: 0.22rem; padding: 3px 0.1rem; box-sizing: border-box;   /* vertical clearance: overflow-x:auto clips the pressed pill's bottom curve at 0px  */
     overflow-x: auto; scrollbar-width: none; }
   .op-lp-cats::-webkit-scrollbar { display: none; }
   .op-lp-cat { display: inline-flex; align-items: center; gap: 0.38rem; min-width: max-content;
@@ -1603,15 +2162,23 @@
     padding: 0.42rem 0.58rem; border: 1px solid transparent; border-radius: 999px;
     background: transparent; color: var(--fg-2); cursor: pointer; white-space: nowrap;
     font: 600 0.65rem/1 'Anthropic Sans', var(--chat-font);
-    transition: color .12s ease, background .12s ease, border-color .12s ease; }
+    transition: color .18s cubic-bezier(.22,.8,.28,1), background .18s cubic-bezier(.22,.8,.28,1),
+                border-color .18s cubic-bezier(.22,.8,.28,1), transform .13s cubic-bezier(.34,1.56,.64,1); }
   .op-lp-cat[hidden] { display: none; }
   .op-lp-cat:hover { color: var(--fg); background: var(--bg-3);
-    border-color: color-mix(in srgb, var(--fg) 26%, transparent); }   /* thin modern hover border (2026-07-17) */
+    border-color: color-mix(in srgb, var(--fg) 26%, transparent); }   /* thin modern hover border  */
+  .op-lp-cat:active { transform: scale(.94); }   /* tactile press — springs back via the transform easing */
   .op-lp-cat.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
   /* collapsed default: nothing is "selected" yet — suppress the active fill
-     (any theme) until the user opens a view (2026-07-19) */
+     (any theme) until the user opens a view  */
   .op-lp.op-lp-collapsed .op-lp-cat.active { color: var(--fg-2) !important;
     background: transparent !important; border-color: transparent !important; }
+  /* ...but it must still HOVER like its neighbours . The suppression above uses !important,
+     so plain .op-lp-cat:hover loses to it on the active pill and the hover
+     silently did nothing — this restates it at the same weight. */
+  .op-lp.op-lp-collapsed .op-lp-cat.active:hover { color: var(--fg) !important;
+    background: var(--bg-3) !important;
+    border-color: color-mix(in srgb, var(--fg) 26%, transparent) !important; }
   .op-lp-cat-ico { width: 14px; height: 14px; flex: 0 0 auto; fill: none;
     stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
   @media (max-width: 1060px) and (min-width: 821px) {
@@ -1622,14 +2189,14 @@
     .op-lp { justify-content: flex-start; padding: 1.1rem 0.8rem 1.5rem; gap: 0.72rem; }
     /* flex-start is for the EXPANDED splash (grid scrolls from the top). The
        collapsed default has no grid — top-pinning it strands the assembly over
-       a giant void (2026-07-20 "funky on mobile"). Center it, like
+       a giant void . Center it, like
        desktop; expanding drops the class and returns to flex-start. */
     .op-lp.op-lp-collapsed { justify-content: center; }
     .op-lp-hero { align-items: flex-start; gap: 0.7rem; }
-    .op-lp-wordmark { align-self: center; font-size: clamp(2.4rem, 11vw, 3rem); margin-left: 0; }
+    .op-lp-wordmark { align-self: center; font-size: clamp(2.2rem, 10vw, 2.7rem); margin-left: 0; }   /* one notch down  */
     .op-lp-composer { min-height: 44px; border-radius: 999px; padding: 0.42rem 3rem 0.42rem 0.9rem; }
     .op-lp-input { font-size: max(16px, calc(0.64rem * var(--chat-scale))); }
-    .op-lp-send { width: 30px; height: 30px; right: 0.58rem; }
+    .op-lp-send { width: 30px; height: 30px; right: 6px; bottom: 6px; }   /* 44px cap: 6px inset (+1px border) centers a single-line button; bottom-anchored for multi-row */
     .op-lp-cats { justify-content: flex-start; overflow-x: auto; scrollbar-width: none;
       padding-bottom: 3px; }
     .op-lp-cats::-webkit-scrollbar { display: none; }
@@ -1657,7 +2224,7 @@
       /* 16px real font (Safari anti-zoom) scaled .7 to LOOK ~11px — but a
          transform doesn't shrink the FLOW box, so the composer was wrapping a
          21px-tall box whose visible text is 14.6px, top-anchored: placeholder
-         rode high over a fat dead zone ("textbox mangled", 2026-07-20).
+         rode high over a fat dead zone ("textbox mangled", the owner 2026-07-20).
          margin-bottom -0.39em (= the 30% the scale gives up of the 1.3em line)
          hands the dead zone back; with symmetric padding the pill is 44px and
          the text is dead-centered (measured offset 0.0). */
@@ -1677,7 +2244,10 @@
   .op-lp.op-lp-collapsed .op-lp-results { grid-template-rows: 0fr; opacity: 0;
     transform: translateY(14px); pointer-events: none; }
   @media (prefers-reduced-motion: reduce) {
-    .op-lp-results, .op-lp { transition: none; }
+    .op-lp-results, .op-lp,
+    .op.op-ready .op-lp:not([hidden]),
+    .op-lp-cat, .op-lp-send { transition: none; }
+    .op-lp-cat:active, .op-lp-send:hover, .op-lp-send:active { transform: none; }
   }
   /* title bar: label left, a clear labeled Close on the right (the old tiny
      corner X was unhittable) */
@@ -1689,8 +2259,9 @@
   /* real section heading: the card-title font (var(--chat-font)), a step up in
      size from the card names (0.82rem), aligned to the grid's left edge. Reads
      as the menu's title, not a micro-label. */
-  .op-lp-title { font: 700 calc(1.35rem * var(--chat-scale))/1.1 var(--chat-font);
-    color: var(--fg-2); letter-spacing: -0.01em; margin-left: 2px;   /* teeny nudge off the card's left edge */ }
+  .op-lp-title { font: 700 calc(1.35rem * var(--chat-scale))/1.1 'Plus Jakarta Sans', sans-serif;
+    white-space: nowrap;   /* "Things to do with Operator" stays ONE line  */
+    color: var(--fg-2); letter-spacing: -0.01em; margin-left: 2px;   /* "Saved tasks" / section heading stays Jakarta — only the category pill went Anthropic  */ }
   .op-lp-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; }
   .op-lp-actions > button { flex: 0 0 auto; align-self: center; padding: 0; gap: 0; }
   .op-lp-actions > button svg { display: block; flex: 0 0 auto; }
@@ -1792,11 +2363,21 @@
       max-height: calc(2 * var(--op-lp-cardh) + 0.75rem); overflow: hidden; } }
   /* Quiet cross-fade: geometry never moves, so cycling cannot make the fixed
      card grid wobble. Fresh cards use the same short opacity entrance. */
-  .op-lp-grid { transition: opacity .2s ease; }
-  .op-lp-grid.op-lp-fading { opacity: 0; pointer-events: none; }
+  /* category swap (incl. → Saved): fade the grid with a small settle instead of a
+     flat opacity dip, so switching tabs reads as one smooth cross-motion . Easing matches the launchpad's motion language. */
+  .op-lp-grid { transition: opacity .22s cubic-bezier(.22,.8,.28,1), transform .22s cubic-bezier(.22,.8,.28,1); }
+  .op-lp-grid.op-lp-fading { opacity: 0; transform: translateY(6px) scale(.995); pointer-events: none; }
+  /* the heading rides the grid's cross-fade (swapGrid toggles both) so the
+     category title glides instead of snapping  */
+  .op-lp-title { transition: opacity .2s cubic-bezier(.22,.8,.28,1), transform .2s cubic-bezier(.22,.8,.28,1); }
+  .op-lp-title.op-lp-fading { opacity: 0; transform: translateY(4px); }
+  /* empty ↔ cards height glide: swapGrid pins the old height, flips to the new
+     one a frame later, then clears the inline height  */
+  .op-lp-results-inner.op-lp-hmorph { transition: height .32s cubic-bezier(.22,.8,.28,1); }
   @media (prefers-reduced-motion: reduce) {
-    .op-lp-grid { transition: none; }
+    .op-lp-grid, .op-lp-title, .op-lp-results-inner.op-lp-hmorph { transition: none; }
     .op-lp-grid.op-lp-fading { opacity: 1; transform: none; }
+    .op-lp-title.op-lp-fading { opacity: 1; transform: none; }
     .op-lp-card { animation: none; }
   }
   .op-lp-card { background: color-mix(in srgb, var(--bg) 78%, #000);
@@ -1814,8 +2395,11 @@
   [data-theme="light"] .op-nt-pills,
   [data-theme="light"] .op-nt-pill { background: #fff; }
   [data-theme="light"] .op-lp-composer:focus-within,
-  [data-theme="light"] .op-lp-searchinput:focus,
-  [data-theme="light"] .op-lp-cat:hover { background: #fff; }
+  [data-theme="light"] .op-lp-searchinput:focus { background: #fff; }
+  /* hover must visibly change, not just the hairline border — white-on-white
+     read as dead  */
+  [data-theme="light"] .op-lp-cat:hover,
+  [data-theme="light"] .op-lp.op-lp-collapsed .op-lp-cat.active:hover { background: #e6eaf1 !important; }
   [data-theme="light"] .op-lp-cat { border-color: rgba(20, 24, 31, .1); }
   [data-theme="light"] .op-lp-cat.active {
     color: #16191f; background: #fff; border-color: rgba(20, 24, 31, .34);
@@ -1832,14 +2416,14 @@
   /* Fixed vertical rhythm so every card lays out identically: the name reserves
      exactly 2 lines and the prompt exactly 2, so the prompt's "…" terminates in
      the same visual band on every card regardless of title length. */
-  .op-lp-name { font: 700 0.78rem/1.28 var(--chat-font); color: var(--fg);   /* down 1 notch 0.82->0.78 (2026-07-15: titles cut off) */
+  .op-lp-name { font: 700 0.86rem/1.28 'Plus Jakarta Sans', sans-serif; color: var(--fg);   /* up 2 notches 0.78->0.86  */
     padding-right: 1.8rem;   /* 2.6->1.8: let the title run further right; still clears the Go button's left edge */
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     min-height: calc(2 * 1.28em); }
   /* prompt grows into the taller card: up to 4 lines, reserving 2 so short
      prompts still align the meta row. margin-top:auto on .op-lp-meta pushes the
      pill to the bottom, so the prompt takes whatever vertical space is free. */
-  .op-lp-prompt { font: 500 0.62rem/1.45 var(--chat-font); color: var(--muted);
+  .op-lp-prompt { font: 500 0.62rem/1.45 'Plus Jakarta Sans', sans-serif; color: var(--muted);   /* saved-task card prompt stays Jakarta  */
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
     min-height: calc(2 * 1.45em); }
   /* site pill pinned to the bottom of the card, aligned across cards */
@@ -1850,6 +2434,12 @@
     padding: 0.2rem 0.5rem; white-space: nowrap; max-width: none;
     display: inline-flex; align-items: center; gap: 0.3rem; }
   .op-lp-site img { width: 13px; height: 13px; border-radius: 3px; display: block; }
+  /* light mode: --bg-4 stays dark by design (user bubbles) — the neutral site
+     chips restyle themselves light-side  */
+  [data-theme="light"] .op-lp-site { background: #e3e8ef; border-color: rgba(0,0,0,.10);
+    color: #3c4450; }
+  [data-theme="light"] .op-lp-site.op-lp-sched { background: rgba(34,134,58,.10);
+    color: #1f7a37; border-color: rgba(34,134,58,.30); }
   /* scheduled-task chip on a launchpad card (v0.7.0) — soft green so it reads
      as "this one runs itself" next to the neutral site chips */
   .op-lp-site.op-lp-sched { background: rgba(63,185,80,.10); color: #56d364;
@@ -1881,16 +2471,20 @@
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
   .op-anim-ready .op-mini { transition: opacity .2s ease; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
-    border: none; cursor: pointer; font: 600 0.56rem/1.5 'Plus Jakarta Sans', sans-serif;
+    border: none; cursor: pointer; font: 550 0.56rem/1.5 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans , one step lighter. The face is VARIABLE (wght 300..800) so any integer renders — 599 would be "the smallest increment" literally but is ~0.03% lighter, i.e. invisible. 550 is the smallest step that actually reads as lighter. */
     padding: 0.1rem 1.35em 0.1rem 0.34em; flex: 0 0 auto; width: auto; line-height: 1.5;
     /* Caret gutter is em, not rem, so it tracks the −/+ zoom: at a fixed 1.05rem
        the text outgrew its reserve and slid under the caret. And because
        #op-model is flex-shrinkable, a squeezed row used to clip the name mid-
        letter behind the caret — ellipsize instead, stopping at the gutter
-       (2026-07-20: "at higher zoom the caret still hides the model name"). */
+       . */
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M1 1l3 3 3-3' fill='none' stroke='%237e8a9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
     background-position: right 0.3em center; background-size: 0.62em 0.42em; background-repeat: no-repeat; }
+  /* MODEL picker one visible weight step over the shared 550 — effort stays
+     put . Sub-50 steps don't render distinguishably on this
+     face (see the 550 note above), so 600 IS the tiniest visible increment. */
+  #op-model.op-mini { font-weight: 600; }
   .op-mini:hover { color: var(--fg); }
   .op-mini:focus { outline: none; color: var(--accent); }
   .op-mini.op-mini-swap { animation: op-mini-in .26s cubic-bezier(.2,1,.3,1); }
@@ -1901,12 +2495,12 @@
      −/+ chat scale like mobile always did — it was a FIXED 0.70rem here, so
      the size pill couldn't touch it and a fresh browsing context (e.g. the
      installed PWA, whose localStorage starts empty) read smaller with no way
-     back (2026-07-11). Default scale 1.05 ≈ a half-notch bump too. */
+     back . Default scale 1.05 ≈ a half-notch bump too. */
   @media (min-width: 821px) {
     /* 0.70->0.85rem: both inputs had drifted smaller; unified with the base
-       .op-input and the follow-up to 0.85rem*scale, equal (2026-07-11). */
-    .op-input { font-size: calc(0.77rem * var(--chat-scale)); }   /* down 2 notches 0.85->0.77 — was outsized vs the model picker (2026-07-15). NB this desktop block WINS over the base .op-input rules above (source order); edit here, not there */
-    .op-input::placeholder { font-size: calc(0.77rem * var(--chat-scale)); }   /* "Message Operator" up a notch 0.73->0.77, now matches the typed text (2026-07-21) */
+       .op-input and the follow-up to 0.85rem*scale, equal . */
+    .op-input { font-size: calc(0.77rem * var(--chat-scale)); }   /* down 2 notches 0.85->0.77 — was outsized vs the model picker . NB this desktop block WINS over the base .op-input rules above (source order); edit here, not there */
+    .op-input::placeholder { font-size: calc(0.77rem * var(--chat-scale)); }   /* "Message Operator" up a notch 0.73->0.77, now matches the typed text  */
     .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.92rem); }
   }
 
@@ -1919,40 +2513,131 @@
      resolves to a green checkmark + "Worked for Ns" when done. */
   .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
   .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
-    color: var(--fg-2); font: 600 calc(0.74rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
+    color: var(--fg-2); font: 600 calc(0.78rem * var(--chat-scale))/1.3 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans for the live verb ; 0.82rem two notches up, em-sized spinner scales with it */
     padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }
   .op-task:hover .op-task-head .verb,
   .op-task[data-busy="0"] .op-task-head:hover .verb { color: var(--fg); }   /* brighten text on hover, beats the dimmed finished-state color */
   .op-task-head:hover .car { opacity: 1; }
   .op-task-head:hover .car::before { border-color: var(--fg); }   /* + the caret */   /* left pad aligns spinner center to the trace vertical line */
-  .op-task-head .ico { width: 14px; height: 14px; flex: 0 0 auto; position: relative; }
+  /* Sized in em of the head's own font (see the spinner block below) so the
+     icon holds its proportion at every --chat-scale; was a fixed 14px. */
+  /* 1.35em: one notch up from 1.2em, nudged right . NB the geometric centres were already
+     within 0.2px — the steps rail sits at 1.05rem + half its 1.5px border —
+     so this is an OPTICAL correction, not a math one. Adjust by eye if asked;
+     don't "fix" it back to the computed centre. */
+  /* REM, not em, and the margin is DERIVED, not tuned : the em icon scaled with the chat-font control
+     while the trail line below it (steps margin-left 1.05rem + half the 1.5px
+     border) is rem-fixed — so hand-tuned px offsets only centered it at ONE
+     font scale and every device/scale read differently. Now both sides of the
+     equation are rem: icon center = head padding-left (0.62rem) + margin-left
+     + width/2, set equal to the line center (1.05rem + 0.75px) by
+     construction. Change any of those values and this calc self-corrects. */
+  .op-task-head .ico { width: 1.2rem; height: 1.2rem; flex: 0 0 auto; position: relative;
+    margin-left: calc(1.05rem + 0.75px - 0.62rem - 0.6rem);
+    margin-right: 0.19rem; }
   /* constant-speed solid spinner: a faint gray track with one SOLID gray arc
      sweeping at LINEAR velocity. Hard color stops — the earlier gradient tail
-     read as a blurred/faded smear (2026-07-12); the arc is a crisp solid
+     read as a blurred/faded smear ; the arc is a crisp solid
      segment in a distinct gray shade from the track. */
-  .op-task[data-busy="1"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
-    border-radius:50%;
-    background:
-      conic-gradient(from 0deg, var(--fg-2) 0deg 84deg, transparent 84deg 360deg);
-    /* the faint background track lives on the ::after; here we keep only the arc */
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-    animation: op-spin .8s linear infinite; }
-  /* static faint track behind the sweeping arc — gives the spinner a body so the
-     arc reads as motion on a ring, not a lone comet. */
-  .op-task[data-busy="1"] .op-task-head .ico::after { content:""; position:absolute; inset:0;
-    border-radius:50%; border:2px solid var(--border-2); }
-  .op-task[data-busy="0"] .op-task-head .ico::before { content:"\2713"; position:absolute; inset:0;
-    display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700; }
-  .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { content:"\2715"; color: var(--bad); }
-  .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2); }
-  /* stopped (hand-off): a stop symbol instead of the green ✓ */
-  .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { content:"\25A0"; color: var(--bad); font-size: 0.7rem; }
+  /* ── The Operator mark AS the spinner (1.0.29) ────────────────────────────
+     Replaces the conic-gradient arc: the logo itself turns while a task runs.
+     Motion is "halted spin + breathe" rather than constant rotation — two full
+     turns per cycle, each a quick sweep followed by a hold during which the
+     mark inhales and exhales. The glyph is 2-fold symmetric, so a turn always
+     lands back on itself and each hold reads as a pause, not a stall.
+
+     NO outer ring here  — the splash's status badge wears the
+     ring; the spinner is the bare hooks. Dropping it also lets the hooks use
+     the whole box: they only span r=4.8 of the 24-box, so inside a 14px .ico
+     they rendered ~10px and sat visually small next to the verb. The viewBox
+     is tightened to the hooks' own bounds (7.2..16.8 => 9.6 units) so the art
+     fills .ico edge to edge, and .ico grows 14->15px to match the cap height
+     of the 0.74rem verb beside it.
+
+     The SVG lives in .ico's markup (MARK_SVG in operator.js); the finished
+     states are ::before content that paints over it at busy=0, so the mark is
+     hidden there rather than removed. */
+  /* Scales with the verb instead of sitting at a fixed 14px: the head's type is
+     calc(0.74rem * --chat-scale), so a hardcoded icon drifted out of proportion
+     at every non-default text size . The .ico
+     rule above now sizes in em of the head's own font, so the ratio is constant
+     at every scale — the old 14px ran 1.39x the text height at the smallest
+     setting and 0.84x at the largest. 1.2em lands ~15px at the 1.05 default. */
+  .op-task-head .ico .op-ico-mark { width: 100%; height: 100%; display: block;
+    overflow: visible; }
+  .op-task-head .ico .op-ico-ring { display: none; }
+  /* transform-origin: center, NOT 12px 12px . On an SVG child a px origin resolves
+     against the VIEWPORT, not user units — with the tight viewBox scaled into a
+     ~15px box, "12px" landed at 80% of the box instead of the glyph's centre at
+     50%, so the mark orbited a point near the corner and swung clean out of
+     frame partway through every turn. `center` is viewBox-independent. */
+  /* stroke-width is tuned PER INSTANCE — every copy renders at a different size,
+     so one shared number gives three different apparent weights. Do not "unify"
+     them (tried 2026-07-25; it made every mark visibly heavier). Thinned to 1.3
+     on request. */
+  .op-task-head .ico .op-ico-hooks { fill: none; stroke: var(--fg-2); stroke-width: 1.3;
+    stroke-linecap: round; transform-origin: center; transform-box: fill-box; }
+  /* finished/failed/stopped: the ✓/✕/⏹ owns the box — hide the mark entirely. */
+  .op-task[data-busy="0"] .op-task-head .ico .op-ico-mark { display: none; }
+  .op-task[data-busy="1"] .op-task-head .ico .op-ico-hooks {
+    animation: op-mark-halt 2.9s cubic-bezier(.7,0,.2,1) infinite; }
+  /* Two FULL rotations per cycle , each a fast 360deg sweep
+     (~16% of the beat) followed by a hold — and the hold is where the mark
+     INHALES and EXHALES . The breath used to live on the
+     outer ring, which this spinner no longer draws, so the holds sat dead
+     still; it now rides the hooks themselves. Scale dips to .9 through each
+     sweep (giving the turn weight), swells to 1.08 mid-hold, and returns to
+     rest before the next sweep. */
+  @keyframes op-mark-halt {
+    0%    { transform: rotate(0deg)   scale(1); }
+    10%   { transform: rotate(0deg)   scale(1.08); }   /* inhale */
+    22%   { transform: rotate(0deg)   scale(1); }      /* exhale, then go */
+    38%   { transform: rotate(360deg) scale(.9); }
+    50%   { transform: rotate(360deg) scale(1); }
+    60%   { transform: rotate(360deg) scale(1.08); }   /* inhale */
+    72%   { transform: rotate(360deg) scale(1); }      /* exhale, then go */
+    88%   { transform: rotate(720deg) scale(.9); }
+    100%  { transform: rotate(720deg) scale(1); } }
+  /* Reduced motion: a still mark, no turn and no breath. */
+  @media (prefers-reduced-motion: reduce) {
+    .op-task[data-busy="1"] .op-task-head .ico .op-ico-hooks { animation: none; } }
+  /* Finished states are GEOMETRIC shapes, not font glyphs . A text ✓ carries
+     font side-bearings, so its ink was never truly centered in the box and
+     drifted per platform; a masked SVG stroke is centered by construction and
+     matches the flat stroke language of the other marks. The shape is a mask
+     over a solid background so theme vars keep owning the color. */
+  .op-task[data-busy="0"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700;
+    background: var(--live);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.2 12.9l4.5 4.5L18.8 7.4'/%3E%3C/svg%3E") center calc(50% - 0.1px) / 72% no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.2 12.9l4.5 4.5L18.8 7.4'/%3E%3C/svg%3E") center calc(50% - 0.1px) / 72% no-repeat; }
+  .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { background: var(--bad);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M7 7l10 10M17 7L7 17'/%3E%3C/svg%3E") center / 66% no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M7 7l10 10M17 7L7 17'/%3E%3C/svg%3E") center / 66% no-repeat; }
+  /* steered/stopped still use text glyphs — kill the inherited mask+fill or
+     the mask would clip them into a phantom check shape */
+  .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2);
+    background: none; -webkit-mask: none; mask: none; }
+  /* stopped (hand-off): a geometric rounded square, same mask technique */
+  .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { background: var(--bad);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6.5' y='6.5' width='11' height='11' rx='2.4' fill='%23000'/%3E%3C/svg%3E") center / 60% no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6.5' y='6.5' width='11' height='11' rx='2.4' fill='%23000'/%3E%3C/svg%3E") center / 60% no-repeat; }
   .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
   /* the live word sits in .op-verb-word; on a status change the old word is
      removed and the new one pops up (op-msg-in) — a clean replace, no overlap. */
-  .op-task-head .verb { font-weight: 700; color: var(--fg); transition: color .16s ease; }
-  .op-task[data-busy="0"] .op-task-head .verb { font-weight: 600; color: var(--fg-2); }
+  /* 600 -> 550 . .verb sets no
+     font-family, so it INHERITS Anthropic Sans (--chat-font) — I first read
+     this as Plus Jakarta, which is system-loaded and static, and wrongly
+     concluded 550 would snap back to 600. Anthropic Sans carries a real 550.
+     Covers the spinner label AND the done verbs — Working…/Browsing…/
+     Cogitated/Steered all route through taskVerb() into .verb. */
+  .op-task-head .verb { font-weight: 550; color: var(--fg); transition: color .16s ease; }
+  .op-task[data-busy="0"] .op-task-head .verb { font-weight: 550; color: var(--fg-2); }
+  /* light: the live "Working…" head read near-black next to the muted trace —
+     drop it to the (newly darkened) muted shade; hover still brightens
+      */
+  [data-theme="light"] .op-task[data-busy="1"] .op-task-head .verb { color: var(--muted); }
+  [data-theme="light"] .op-task[data-busy="1"]:hover .op-task-head .verb { color: var(--fg); }
   /* the incoming word replaces the old one CLEANLY (old removed first, no
      overlap — an earlier cross-fade had an ugly moment where both showed) and
      pops up from below via the SAME op-msg-in the trace steps use on add. */
@@ -1987,7 +2672,9 @@
   /* trace step lines (Reading / Browsing / Clicking …) stay Jakarta — the
      --chat-font switch to Anthropic Sans pulled them in too, but the owner wants
      these thinking headings in Jakarta (2026-07-21). NOT --chat-font. */
-  .op-task-step { color: var(--muted); font: 500 calc(0.69rem * var(--chat-scale))/1.5 'Plus Jakarta Sans', sans-serif;
+  /* Trace BODY is Anthropic Sans . op-act-step shares this
+     class, so the action labels pin Plus Jakarta back on themselves below. */
+  .op-task-step { color: var(--muted); font: 500 calc(0.69rem * var(--chat-scale))/1.5 var(--chat-font);
     letter-spacing: -.002em; animation: op-msg-in .2s ease;
     white-space: normal; overflow-wrap: anywhere;
     padding: 0.28rem 0 0.28rem 0.1rem; }
@@ -2008,21 +2695,26 @@
     overflow-wrap: anywhere; word-break: break-word; }
   .op-act-step { display: flex; flex-direction: column; gap: 0.05rem; color: var(--fg-2); position: relative; }
   .op-act-step .op-act-lab { white-space: nowrap; }
-  .op-act-ico2 { position: absolute; left: calc(-0.85rem - 0.75px); top: 0.72rem;
+  .op-act-ico2 { position: absolute; left: calc(-0.85rem - 0.75px); top: calc(0.72rem + 1.4px);   /* +1.4px: measured icon-center vs label-glyph-center drift  */
     transform: translate(-50%, -50%); font-size: 0.72rem; line-height: 1;
     background: var(--bg-2); padding: 1px; border-radius: 50%; }
   .op-act-step .op-act-lab { margin-left: 0; }
   /* label is a flex ROW so the text + the ×N pill sit on one line, vertically
      centered together. */
   .op-act-lab { font-weight: 700; color: var(--fg);
-    display: inline-flex; align-items: center; }
+    display: inline-flex; align-items: center; flex-wrap: wrap;
+    /* The task verbs ("Searching", "Running command") stay on Plus Jakarta —
+       op-task-step moved to Anthropic Sans for the trace BODY, and the labels
+       were explicitly carved out of that . Pinned here rather
+       than left to inherit, so the two can't drift apart again. */
+    font-family: 'Plus Jakarta Sans', sans-serif; }
   /* repeat-count badge — coalesced consecutive identical actions.
      wireframe pill: transparent fill, hairline border, muted text. Bigger so the
      digit has room, and centered both ways (inline-flex centers the number; the
      parent flex-row centers the pill against the label). */
   .op-act-x { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     margin-left: 0.4rem; width: 1.5em; height: 1.5em; padding: 0;   /* perfect circle */
-    font: 500 0.56rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);   /* smaller + Anthropic (2026-07-21): 0.66→0.56, mono→Anthropic */
+    font: 500 0.56rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);   /* smaller + Anthropic : 0.66→0.56, mono→Anthropic */
     background: transparent; border: 1px solid var(--border-2);
     border-radius: 50%; box-sizing: border-box; }
   .op-act-x.op-x-pop { animation: op-xpop .22s cubic-bezier(.34,1.56,.64,1); }
@@ -2036,7 +2728,15 @@
   /* inline coordinate detail after "Clicking"/"Dragging" — lighter, smaller, set apart */
   .op-act-coord { margin-left: 0.4rem; font-weight: 400; color: var(--muted);
     font: 400 calc(0.6rem * var(--chat-scale))/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: -.01em; position: relative; top: 1px; }   /* inline detail (coord OR duration) — Anthropic, muted (2026-07-21) */
+    letter-spacing: -.01em; position: relative; top: 1px; }   /* inline detail (coord OR duration) — Anthropic, muted  */
+  /* A search query is unbounded, unlike a coord or a duration, so it must be
+     allowed to wrap — the label row is nowrap and long queries were running
+     off the rail edge . min-width:0 lets the flex item shrink
+     below its content width, which is what actually permits the break; the
+     line-height override stops wrapped lines from overlapping (op-act-coord
+     sets 1 for single-line vertical centering). */
+  .op-act-query { white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+    min-width: 0; line-height: 1.4; top: 0; }
   /* plain detail (element names under Clicking/Typing/etc.) — NOT a code block */
   .op-act-detail-plain { color: var(--muted); font-weight: 400; max-width: 100%;
     font: 500 calc(0.66rem * var(--chat-scale))/1.45 var(--chat-font);
@@ -2053,7 +2753,8 @@
   a.op-act-detail { color: var(--fg-2); text-decoration: none; display: block; cursor: pointer; }
   a.op-act-detail:hover { border-color: var(--accent); background: rgba(184,192,204,.08); color: var(--fg); }
   /* step-count header at the top of the live trace — white, same size as action labels */
-  .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
+  /* "1 step" / "N steps" -> Anthropic Sans, matching the trace body . */
+  .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 var(--chat-font);
     letter-spacing: .01em; margin: 0 0 0.3rem 0.35rem; }   /* bumped 0.66→0.70rem */
   .op-step-count[hidden] { display: none; }
 
@@ -2069,6 +2770,9 @@
   .op-titlewrap[role="button"] .op-title { transition: color .15s ease; }
   .op-titlewrap[role="button"]:hover .op-title,
   .op-titlewrap[role="button"]:focus-visible .op-title { color: #fff; }
+  /* light mode: white hover fades INTO the light brow — darken instead */
+  [data-theme="light"] .op-titlewrap[role="button"]:hover .op-title,
+  [data-theme="light"] .op-titlewrap[role="button"]:focus-visible .op-title { color: #000; }
   .op-titlewrap[role="button"]:hover .op-brand-caret { opacity: .9; }
   /* caret is a centered sibling of the wordmark, aligned to the MAN/AUTO row.
      Fixed 9px box + centered origin so the flip pivots in place (no jump). */
@@ -2119,7 +2823,7 @@
     transition: background .12s ease, color .12s ease, border-color .12s ease; }
   /* Confirm = a green checkmark in a SQUARE pill (same pill family as Cancel);
      Cancel = red — the dangerous surface's bail-out reads at a glance
-     (2026-07-11). */
+     . */
   .op-surf-confirm .op-surf-yes { color: #56d364; border-color: rgba(86,211,100,.4);
     background: rgba(86,211,100,.10); padding: 0; width: 26px; height: 26px;
     display: inline-flex; align-items: center; justify-content: center; }
@@ -2191,7 +2895,7 @@
 
   /* MAX-SHEET chat (mobile data-sheet="full"): only a sliver of stage remains
      and the URL bar mangles itself across it — collapse it out with the same
-     smooth ease the desktop surfaces use (2026-07-12). Tabs + taskbar go
+     smooth ease the desktop surfaces use . Tabs + taskbar go
      with it; they share the same strip. */
   .op[data-sheet="full"] .op-urlbar {
     max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0;
@@ -2259,4 +2963,224 @@
     .op[data-surface="desktop-sandbox"] .op-taskbar,
     .op[data-surface="desktop-real"] .op-taskbar { overflow-x: auto; scrollbar-width: none; }
     .op-taskbar::-webkit-scrollbar { display: none; }
+  }
+
+  /* ── installed-PWA safe areas (Add to Home Screen) ─────────────────────────
+     viewport-fit=cover (operator.html) takes the page edge-to-edge, so in
+     standalone mode pad the frame with the device cutouts: status bar top,
+     home indicator bottom, sensor housing on landscape sides. Scoped to
+     display-mode:standalone — browser-tab layout is untouched (Safari's own
+     chrome covers those regions there). Kept at the END of the file so the
+     .op-rail override outranks the base bottom-sheet rule by source order. */
+  @media (display-mode: standalone) {
+    body.op-locked, body.op-full { box-sizing: border-box;
+      padding-top: env(safe-area-inset-top) !important;
+      padding-bottom: env(safe-area-inset-bottom) !important;
+      padding-left: env(safe-area-inset-left) !important;
+      padding-right: env(safe-area-inset-right) !important; }
+  }
+  @media (display-mode: standalone) and (max-width: 820px) {
+    /* the phone bottom sheet is fixed to the viewport edge — fixed elements
+       ignore body padding, so lift its content clear of the home indicator */
+    .op-rail { padding-bottom: calc(0.7rem + env(safe-area-inset-bottom)); }
+  }
+
+  /* ── About card : desktop click on the splash ring ─────── */
+  /* open/close ride a .open class + transitions, NOT :hover/animation state
+     (today's lesson: state that can be yanked mid-flight snaps). JS unhides,
+     forces a reflow, then adds .open; close removes .open and re-hides on
+     transitionend. */
+  .op-about-backdrop { position: fixed; inset: 0; z-index: 70;
+    background: color-mix(in srgb, #000 42%, transparent);
+    backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+    opacity: 0; transition: opacity .24s ease; }
+  .op-about-backdrop.open { opacity: 1; }
+  .op-about { position: fixed; z-index: 71; left: 50%; top: 50%;
+    transform: translate(-50%, -50%) scale(.94) translateY(6px);
+    opacity: 0;
+    transition: opacity .24s ease, transform .3s cubic-bezier(.22,1,.36,1);
+    min-width: 21rem; max-width: min(26rem, calc(100vw - 2rem));
+    text-align: left;
+    background: color-mix(in srgb, var(--bg-2) 92%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+    border-radius: 16px; padding: 1.5rem 1.5rem 1.05rem;
+    box-shadow: 0 24px 70px -24px rgba(0,0,0,.7);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .op-about.open { opacity: 1; transform: translate(-50%, -50%) scale(1) translateY(0); }
+  /* the display:flex above DEFEATS the hidden attribute (an author class rule
+     outranks the UA's [hidden]{display:none} on the tie) — without this
+     restate, the "closed" card is an invisible fixed overlay eating every
+     click under the splash center (broke 6 harness tests, 2026-07-26). */
+  .op-about[hidden], .op-about-backdrop[hidden] { display: none !important; }
+  /* no stretch anymore  — the breathing
+     room below the heading is an explicit margin matching the stretched
+     card's gap, so the spacing reads the same at the tighter height */
+  .op-about-head { display: flex; align-items: center; gap: 0.7rem;
+    margin: 0.4rem 0 1.7rem; }
+  .op-about-mark { width: 60px; height: 60px; color: var(--fg); flex: 0 0 auto; }   /* half notch up  */
+  .op-about-word { font: var(--op-wordmark-wght, 700) 2.75rem/1 'PJS Wordmark', 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -.03em; color: var(--fg); }
+  .op-about-ver { font: 550 0.85rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); margin-left: 0.3rem; align-self: center;
+    transform: translateY(0.7rem); }   /* rides the 2.75rem word's lower baseline */
+  .op-about-ver-v { margin-right: 0.13em; }
+  .op-about-rights { margin-top: 0.75rem;
+    font: 500 0.6rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    color: var(--fg-2); }
+  /* brand foot — the Fragify settings pattern: muted brands joined by a dot */
+  .op-about-foot { display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+    margin-top: 0.95rem; padding-top: 0.7rem;
+    border-top: 1px solid color-mix(in srgb, var(--fg) 9%, transparent);
+    font: 600 0.66rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted); }
+  .op-about-brand { display: inline-flex; align-items: center; gap: 0.28rem; }
+  .op-about-foot-mark { width: 12px; height: 12px; }
+  .op-about-cloud { width: 14px; height: 14px; fill: currentColor; }
+  .op-about-dot { opacity: 0.7; }
+  /* the ring is a BUTTON on desktop now too (it opens this card) */
+  .op-lp-mark { cursor: pointer; }
+
+  /* ── Mobile splash takeover  ────────
+     The launchpad was absolute z-8 inside .op while the chat bottom-sheet is
+     FIXED z-20 — so on a phone, going home painted the splash UNDER the
+     still-showing sheet (wordmark + composer squeezed above a full chat: the
+     "clusterfuck"). When the splash is on screen on mobile it now owns the
+     WHOLE viewport: fixed, above the sheet (20) and the site header (30),
+     opaque. Desktop keeps the in-cockpit absolute overlay. */
+  @media (max-width: 820px) {
+    .op-lp { position: fixed; inset: 0; z-index: 40; background: var(--bg);
+      /* clear the top control row (ring/menu) — without this the wordmark
+         rode up under the ring */
+      padding-top: calc(3.6rem + env(safe-area-inset-top)); }
+    /* the ring anchors the top-RIGHT corner on phones (its menu items slide
+       out beneath it at right 0.75rem) — the desktop 6.9rem offset landed it
+       mid-header, overlapping the wordmark */
+    .op-lp-mark { top: calc(1.1rem + env(safe-area-inset-top)); right: 0.75rem; }
+  }
+
+  /* ── Mobile splash: pinned controls + internal card scroll . iOS treats position:fixed INSIDE an overflow scroller as
+     absolute, so with .op-lp as the scroll container the top-right controls
+     rode the scroll. The splash itself no longer scrolls: the card area is
+     the scroller, so the wordmark, composer, pills, and the control row stay
+     put and only the grid moves. */
+  @media (max-width: 820px) {
+    .op-lp { overflow: hidden; }
+    /* BARE splash centers the hero : a ::before flex
+       spacer grows above the hero while the empty results area grows below —
+       symmetric, so the assembly floats at center. Selecting a pill collapses
+       the spacer (flex-grow transitions), so the hero ANIMATES up to the top
+       and the grid takes the room. The grain ::after is position:absolute, so
+       it never joins this flex layout. */
+    .op-lp::before { content: ""; flex: 0 1 0px; flex-grow: 0;
+      transition: flex-grow .42s cubic-bezier(.22,.8,.28,1); }
+    .op-lp.op-lp-collapsed::before { flex-grow: 1; }
+    .op-lp-results { flex: 1 1 auto; min-height: 0; }
+    .op-lp-results-inner { overflow-y: auto; -webkit-overflow-scrolling: touch;
+      max-height: 100%; }
+    /* single-column cards don't need the desktop grid's 2-line title
+       reservation — on one-line titles it read as a hole between title and
+       prompt  */
+    .op-lp-name { min-height: 0; }
+    /* card titles at the DESKTOP's visual proportion: mobile cards run full
+       width (~360px vs ~300px desktop), so the same 0.86rem read smaller
+       relative to the card — scale it to match */
+    .op-lp-name { font-size: 1.02rem; }
+  }
+
+  /* ── Mobile chat brow fixes  ──────────────────────────── */
+  @media (max-width: 820px) {
+    /* the home mark: base draws 52px + scale(.25)=13px for desktop; mobile
+       buttons are 28px with 16px sibling icons, so scale to match (52*.31=16).
+       Lives HERE (after the base rule) so it actually wins the cascade. */
+    .op-home-btn svg { transform: scale(0.31); }
+    /* a real seam between the brow and the conversation — there was none, and
+       on light theme the controls floated straight into the chat text */
+    .op-head { border-bottom: 1px solid var(--border);
+      padding-bottom: 0.5rem; margin-bottom: 0.15rem; }
+    /* the floating minimized status pill reads as part of the text without a
+       solid surface — give it one */
+    .op[data-status-min="1"] .op-action { background: var(--bg-2);
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 18px -8px rgba(0,0,0,.55); }
+  }
+
+  /* ── Mobile type scale  ────────────────────────────────────
+     MUST LIVE AT THE END OF THE FILE. These were originally written in the
+     mobile block up at ~line 1150, where they silently did nothing: a @media
+     query adds NO specificity, so `.op-lp-title` there ties with the base
+     `.op-lp-title` further down the file and LOSES on source order. The phone
+     kept rendering the desktop sizes. Anything overriding a base .op-lp-* rule
+     for mobile belongs here, below the rule it is overriding.
+
+     The section heading ran at the desktop 1.35rem (~23px) on a 390px screen,
+     wrapping "Things to do with Operator" onto two lines and swallowing the
+     viewport while the card titles read small — the desktop hierarchy
+     inverted. */
+  @media (max-width: 820px) {
+    /* Phones boot to the BARE splash — wordmark + composer + pills, no saved-task
+       grid . The JS already adds .op-lp-collapsed at boot and
+       the base collapse rule is intact, so this is a belt-and-braces restate:
+       whatever was re-expanding it on iOS, the phone now cannot render an open
+       grid on first paint. Tapping a category pill still expands it, as on
+       desktop. */
+    .op-lp.op-lp-collapsed .op-lp-results {
+      grid-template-rows: 0fr; opacity: 0; pointer-events: none; }
+    /* swapGrid() pins an INLINE height on .op-lp-results-inner while morphing
+       between empty/cards. If a swap runs during boot the inline value can
+       outlive the collapse and hold the grid open at its measured height, which
+       is why the phone kept booting with saved tasks showing .
+       The parent's 0fr cannot beat an inline height on the child, so pin the
+       child shut too while collapsed. */
+    .op-lp.op-lp-collapsed .op-lp-results-inner {
+      height: 0 !important; min-height: 0 !important; overflow: hidden; }
+    /* Composer dead-centre vertically, wordmark sitting lower .
+       Centring the ASSEMBLY puts the composer below middle, because the wordmark
+       above it has no counterweight below. A spacer of the hero's own height
+       under the composer balances it, so the composer lands on the true centre
+       and the wordmark drops with it. Collapsed only — the expanded splash
+       top-anchors to scroll its grid. */
+    .op-lp.op-lp-collapsed .op-lp-hero::after {
+      content: ""; display: block; pointer-events: none;
+      /* mirrors the wordmark's own clamp + the hero gap, so the balance holds
+         at every width instead of only the one it was eyeballed at */
+      height: calc(clamp(2.2rem, 10vw, 2.7rem) + 0.7rem); }
+    /* Only the SECTION HEADING gets a mobile size — it is the one thing that
+       genuinely doesn't fit (the desktop 1.35rem wrapped onto two lines on a
+       390px screen). The CARDS keep their desktop type entirely: the owner
+       2026-07-26 wants them looking the same as desktop, not rescaled into a
+       different-looking mobile variant. Only the line-clamp changes, because
+       a one-column card is wider and 2 lines is the right prompt budget. */
+    .op-lp-title { font-size: min(calc(1.08rem * var(--chat-scale)), 4.4vw); }   /* vw cap: nowrap heading must FIT a phone width */
+    .op-lp-prompt { -webkit-line-clamp: 2; }
+
+    /* ── The status ring IS the menu on mobile  ─────────────
+       A phone has no hover, so the ring's status card was unreachable and the
+       theme/X sat in a cramped row. Tapping the ring now opens the card, and
+       the theme toggle + X slide out UNDER it as a stack. Implemented purely
+       by repositioning the existing buttons — no DOM move — so their existing
+       JS handlers and desktop layout are untouched.
+       Closed by default: they only exist once .op-menu-open is on the ring. */
+    .op-lp-mark { pointer-events: auto; cursor: pointer; }
+    .op-lp-mark-tip { display: none; }
+    .op-lp-mark.op-menu-open .op-lp-mark-tip {
+      display: grid; opacity: 1; transform: none; }
+    /* hover must NOT open it on touch — only the explicit tap does */
+    .op-lp-mark:not(.op-menu-open):hover .op-lp-mark-tip { display: none; }
+    /* theme + X: hidden until the ring's menu is open, then stacked beneath it */
+    .op-lp-theme, .op-lp-close { opacity: 0; pointer-events: none;
+      transition: opacity .16s ease, transform .18s cubic-bezier(.2,1,.3,1);
+      transform: translateY(-6px); }
+    .op-lp-mark.op-menu-open ~ .op-lp-theme,
+    .op-lp-mark.op-menu-open ~ .op-lp-close { opacity: 1; pointer-events: auto;
+      transform: none; }
+    /* ONE line with the ring : ring at the corner, X and
+       theme sliding out to its LEFT on the same row. The tip card opens
+       beneath the row. */
+    /* CENTERS aligned, not tops: the ring sits at top 1.1rem with a 32px
+       box; the X's box is 40px tall, so it starts 4px higher to share the
+       centerline (measured cy 33.6/36.6/40.6 before this) */
+    .op-lp-close { top: calc(1.1rem - 4px + env(safe-area-inset-top)) !important;
+      right: calc(3.4rem + env(safe-area-inset-right)) !important;
+      display: inline-flex !important; }
+    .op-lp-theme { top: calc(1.1rem + env(safe-area-inset-top)) !important;
+      right: calc(6rem + env(safe-area-inset-right)) !important; }
   }

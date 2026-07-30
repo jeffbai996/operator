@@ -19,6 +19,9 @@ import operator_runtimes as RT
 @pytest.fixture(autouse=True)
 def fake_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # default-instance baseline: no instance CDP override leaking in from the
+    # host env (operator-fam sets OPERATOR_DEMO_CDP on its server process)
+    monkeypatch.delenv("OPERATOR_DEMO_CDP", raising=False)
     return tmp_path
 
 
@@ -182,13 +185,48 @@ def test_agy_cockpit_requires_the_visible_chrome(fake_home):
 
 
 def test_agy_resume_and_model_flags():
-    plan = RT.build_cmd("agy", _spec(resume_id="conv-3", model="Gemini 3.5 Flash (High)",
+    plan = RT.build_cmd("agy", _spec(resume_id="conv-3", model="gemini-3.6-flash",
                                      config_dir=os.path.expanduser("~/.gemini")))
     c = plan.cmd
     assert c[c.index("--conversation") + 1] == "conv-3"
-    assert c[c.index("--model") + 1] == "Gemini 3.5 Flash (High)"
+    assert c[c.index("--model") + 1] == "gemini-3.6-flash"
 
 
 def test_unknown_runtime_raises():
     with pytest.raises(KeyError):
         RT.build_cmd("mystery", _spec())
+
+
+# ── second full-function instance (operator-fam) — instance CDP override ───────
+
+_OP2_CDP = "http://127.0.0.1:9334"
+
+
+def test_claude_cockpit_honors_instance_cdp_override(fake_home, monkeypatch):
+    """operator-fam runs full-function against its OWN Chrome: the server's
+    OPERATOR_DEMO_CDP (historical name for the explicit-endpoint override)
+    must replace the default :9222 pin — explicitly, not via inheritance."""
+    monkeypatch.setenv("OPERATOR_DEMO_CDP", _OP2_CDP)
+    plan = RT.build_cmd("claude", _spec())
+    servers = json.load(open(plan.mcp_config_path))["mcpServers"]
+    env = servers["playwright"]["env"]
+    assert env["OPERATOR_DEMO_CDP"] == _OP2_CDP
+    assert env["OPERATOR_REQUIRE_CDP"] == "1"
+    assert "BROWSE_CHROME_PORT" not in env
+
+
+def test_codex_cockpit_honors_instance_cdp_override(monkeypatch):
+    monkeypatch.setenv("OPERATOR_DEMO_CDP", _OP2_CDP)
+    plan = RT.build_cmd("codex", _spec())
+    joined = " ".join(plan.cmd[:-1])
+    assert 'mcp_servers.playwright.env.OPERATOR_DEMO_CDP="' + _OP2_CDP + '"' in joined
+    assert 'mcp_servers.playwright.env.OPERATOR_REQUIRE_CDP="1"' in joined
+    assert "BROWSE_CHROME_PORT" not in joined
+
+
+def test_agy_cockpit_honors_instance_cdp_override(fake_home, monkeypatch):
+    monkeypatch.setenv("OPERATOR_DEMO_CDP", _OP2_CDP)
+    plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
+    assert plan.env["OPERATOR_DEMO_CDP"] == _OP2_CDP
+    assert plan.env["OPERATOR_REQUIRE_CDP"] == "1"
+    assert "BROWSE_CHROME_PORT" not in plan.env

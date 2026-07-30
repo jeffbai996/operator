@@ -318,3 +318,46 @@ def test_wedged_dead_thread_still_reads_not_running(runner):
     runner.state = "running"
     runner._proc = None
     assert runner.is_running() is False
+
+
+# ── agy model/effort contract (2026-07-24) ──────────────────────────────────
+# agy used to take ONE folded display string ("Gemini 3.5 Flash (High)") and had
+# no effort flag. It now exposes --effort and REJECTS the folded form alongside
+# it ("--effort is not supported for model …"), so start() must pass a bare slug
+# + a separate effort, and must NOT send effort for a slug whose tier is baked in.
+
+def _agy_start(runner, monkeypatch, **kw):
+    """Run start() for the agy-runtime bot without spawning a thread."""
+    monkeypatch.setattr(OA.threading, "Thread",
+                        lambda *a, **k: type("T", (), {"start": lambda s: None})())
+    monkeypatch.setitem(OA.AGENT_BOTS, "gemma", {**OA.AGENT_BOTS["gemma"], "runtime": "agy"})
+    runner.start("gemma", "do a thing", **kw)
+    return runner.model, runner.effort
+
+
+def test_agy_bare_slug_keeps_separate_effort(runner, monkeypatch):
+    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.6-flash", effort="medium")
+    assert model == "gemini-3.6-flash"   # no "(Medium)" folded in
+    assert effort == "medium"            # rides its own --effort flag
+
+
+def test_agy_baked_tier_slug_drops_effort(runner, monkeypatch):
+    # tier already in the slug → sending --effort too would 400 in agy
+    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.6-flash-low", effort="high")
+    assert model == "gemini-3.6-flash-low"
+    assert effort == ""
+
+
+def test_agy_display_name_entry_drops_effort(runner, monkeypatch):
+    # Claude/GPT-OSS entries keep the parenthesised display form — `agy models`
+    # prints "claude-sonnet-4-6-thinking" but --model rejects that slug.
+    model, effort = _agy_start(runner, monkeypatch,
+                               model="Claude Sonnet 4.6 (Thinking)", effort="high")
+    assert model == "Claude Sonnet 4.6 (Thinking)"
+    assert effort == ""
+
+
+def test_agy_defaults_to_current_flash_slug(runner, monkeypatch):
+    model, effort = _agy_start(runner, monkeypatch, model="", effort="")
+    assert model == "gemini-3.6-flash"
+    assert effort == "high"

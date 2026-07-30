@@ -60,6 +60,11 @@ importlib.reload(OS_MOD)   # rebind the store path under the isolated env
 # belongs to the parent host-app app; operator.html only fills its
 # `title` and `content` blocks.
 _STUB_BASE = ("<!doctype html><title>{% block title %}{% endblock %}</title>"
+              # render the favicon block: without a rendered icon link Chromium
+              # requests /favicon.ico, the harness 404s it, and every
+              # zero-console-error assertion fails (started with the real
+              # _base.html gaining a favicon block the stub lacked)
+              "{% block favicon %}{% endblock %}"
               "<style>button{padding:.4rem .7rem;display:inline-flex;gap:.4rem}</style>"
               "<div class=\"wrap\"><header class=\"site\" id=\"test-site-header\">site nav</header>"
               "<main>{% block content %}{% endblock %}</main></div>")
@@ -579,7 +584,9 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
                       centerDelta: Math.abs((r.left + r.width / 2) -
                                            (stage.left + stage.width / 2))};
             }""")
-        assert metrics["font"].startswith('"Plus Jakarta Sans"')
+        # 'PJS Wordmark' = the self-hosted weight-750 instance (2026-07-26);
+        # Jakarta remains the fallback family.
+        assert metrics["font"].startswith('"PJS Wordmark", "Plus Jakarta Sans"')
         assert 36 <= metrics["size"] <= 40
         assert metrics["tracking"] >= -0.035 * metrics["size"]
         assert metrics["centerDelta"] <= 2
@@ -603,8 +610,9 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
               return {font: parseFloat(getComputedStyle(el).fontSize),
                       placeholder: parseFloat(getComputedStyle(el, '::placeholder').fontSize),
                       centerDelta: Math.abs((r.top + r.bottom) / 2 - (c.top + c.bottom) / 2)}; }""")
-        assert input_metrics["font"] == input_metrics["placeholder"]
-        assert 11.3 <= input_metrics["font"] <= 11.6
+        # placeholder ALWAYS equals the typed size ; both at 0.76rem*scale
+        assert input_metrics["placeholder"] == input_metrics["font"]
+        assert 14.0 <= input_metrics["font"] <= 14.3
         assert input_metrics["centerDelta"] <= 1
         assembly = pg.locator("#op-lp").evaluate(
             """lp => {
@@ -650,7 +658,9 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         assert corner["themeSize"] == corner["closeSize"] == 32
         assert corner["themeRight"] < corner["closeLeft"]
         assert corner["viewport"] - corner["closeRight"] <= 20
-        assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use light mode"
+        # label names the NEXT stop of the 3-stop cycle; from default dark
+        # that's OLED black (splash joined the flat cycle, the owner 2026-07-28)
+        assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use OLED black"
         assert pg.locator("#op-lp-x svg path").count() == 1
         assert "M3 3l8 8M11 3l-8 8" in \
             pg.locator("#op-lp-x svg path").get_attribute("d")
@@ -693,9 +703,30 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         pg.locator("#op-nt-cancel").evaluate("el => el.click()")
         assert pg.locator("#op-nt-veil").is_hidden()
 
+        # splash button now walks the same 3-stop cycle as #op-flat:
+        # default dark → OLED flat → light 
         pg.click("#op-lp-theme")
+        assert "op-flat" in pg.locator("#op").get_attribute("class")
+        assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use light mode"
+        pg.click("#op-lp-theme")
+        assert "op-flat" not in pg.locator("#op").get_attribute("class")
         assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use dark mode"
-        pg.wait_for_timeout(220)
+        # Wait for the theme color TRANSITIONS to settle, not a fixed delay: a
+        # loaded box starts them late, and a fixed 220ms wait sampled surfaces
+        # mid-flight (bg read oklab(0.9729…) ≈ 97% white — the 2026-07-22
+        # flake). The three sampled surfaces settle on different clocks, so
+        # gate on ALL of them reaching their final light values.
+        pg.wait_for_function(
+            """() => { const w = 'rgb(255, 255, 255)';
+                 const comp = document.querySelector('.op-lp-composer');
+                 const pill = document.querySelector('.op-lp-cat:not(.active):not([hidden])');
+                 const card = document.querySelector('.op-lp-card');
+                 const c = getComputedStyle(card);
+                 return getComputedStyle(comp).backgroundColor === w
+                     && getComputedStyle(pill).backgroundColor === w
+                     && c.backgroundColor === w
+                     && c.borderColor === 'rgb(228, 231, 235)'; }""",
+            timeout=4000)
         light_surfaces = pg.evaluate("""() => {
           const surfaces = {
             composer: document.querySelector('.op-lp-composer'),
@@ -759,9 +790,14 @@ def test_launchpad_backdrop_collapses_results_and_theme_toggle_is_local(browser,
         assert pg.locator(".op-lp-cat.active").count() == 0
 
         pg.evaluate("document.documentElement.setAttribute('data-theme', 'dark')")
+        # 3-stop cycle: dark → OLED flat (data-theme untouched) → light → dark
+        pg.click("#op-lp-theme")
+        assert pg.locator("html").get_attribute("data-theme") == "dark"
+        assert "op-flat" in pg.locator("#op").get_attribute("class")
         pg.click("#op-lp-theme")
         assert pg.locator("html").get_attribute("data-theme") == "light"
         assert pg.evaluate("localStorage.getItem('op_theme')") == "light"
+        assert "op-flat" not in pg.locator("#op").get_attribute("class")
         pg.click("#op-lp-theme")
         assert pg.locator("html").get_attribute("data-theme") == "dark"
     finally:
@@ -1128,8 +1164,20 @@ def _collectors(pg):
     """pageerror + console-error + /operator/tasks request recorders."""
     errors, con_errors, tasks_reqs = [], [], []
     pg.on("pageerror", lambda e: errors.append(str(e)))
-    pg.on("console",
-          lambda m: con_errors.append(m.text) if m.type == "error" else None)
+
+    def _console(m):
+        if m.type != "error":
+            return
+        # OFF-ORIGIN resource failures are environment noise, not app bugs:
+        # saved-task cards fetch per-site favicons from Google's service, and
+        # any site gstatic has no icon for (e.g. nih.gov in the live task
+        # store) 404s in the console — the assertion is about OUR code.
+        loc = (m.location or {}).get("url", "")
+        if "Failed to load resource" in m.text and loc and "127.0.0.1" not in loc:
+            return
+        con_errors.append(m.text)
+
+    pg.on("console", _console)
     pg.on("request",
           lambda r: tasks_reqs.append(r.url)
           if r.url.split("?")[0].rstrip("/").endswith("/operator/tasks")
@@ -1156,6 +1204,32 @@ def test_restored_session_boot_completes_launchpad_init(browser, harness):
         assert tasks_reqs, "initLaunchpad never reached refreshLaunchpadTasks"
         assert errors == [], f"JS errors: {errors}"
         assert con_errors == [], f"console errors: {con_errors}"
+    finally:
+        ctx.close()
+
+
+def test_restored_session_starts_at_chat_bottom(browser, harness):
+    """Refreshing a long conversation opens on its newest message, after the
+    boot/layout reflow has settled."""
+    log = "".join(
+        f'<div class="op-msg bot"><div class="bubble">message {i}<br>'
+        + ("long restored line " * 12)
+        + "</div></div>"
+        for i in range(60)
+    )
+    session = dict(_SEEDED_SESSION, log=log)
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v1', "
+        + json.dumps(json.dumps(session)) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_selector("#op-log .op-msg", state="attached", timeout=8000)
+        pg.wait_for_timeout(700)
+        distance = pg.locator("#op-log").evaluate(
+            "el => el.scrollHeight - el.scrollTop - el.clientHeight")
+        assert distance <= 2, f"restored chat opened {distance}px above bottom"
     finally:
         ctx.close()
 

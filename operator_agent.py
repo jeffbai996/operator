@@ -1,19 +1,20 @@
 """operator_agent.py — run a headless Claude Code agent that drives the browser.
 
-Option 1 (2026-06-26): the operator IS the agent. We spawn `claude -p` in a
+Option 1 : the operator IS the agent. We spawn `claude -p` in a
 background thread, as the chosen persona, with the Playwright MCP pointed at the
 SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTION
 (claude reads ~/.claude/.credentials.json), zero metered API spend. We parse its
 stream-json output live: assistant text → the operator chat, browser tool calls
 → the action trail. No Discord, no live-session dependency, no spam.
 
-Only host personas that can drive: claude-a + claude-b.
+Only the host personas that can drive: claude-a + claude-b.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -38,7 +39,7 @@ from operator_prompts import (
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
 def _squad_boot_context(bot: str = "gpt") -> str:
-    """Slim app context for Operator runs (browser tasks don't need the full digest).
+    """Slim the app context for Operator runs (browser tasks don't need the full digest).
 
     Loads:
     - SQUAD.md rulebook (behavioral rules, ~5.7k tokens)
@@ -109,27 +110,27 @@ AGENT_BOTS = {
                "cwd": os.path.expanduser("~/.operator-sessions/claude-a"),
                "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     "claude-b": {"label": "claude-b", "runtime": "claude",
-              "config_dir": os.path.expanduser("~/.config-b"),
+              "config_dir": os.path.expanduser("~/.config/claude-b"),
               "cwd": os.path.expanduser("~/.operator-sessions/claude-b"),
               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
     # ~/.codex-operator/config.toml wires playwright (Operator-only home); the
     # Unlike the Claude bots, codex has no CLAUDE.md / SessionStart hook loading
-    # host-app, so we hand gpt its app self-context inline via _GPT_SELF.
+    # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
             "config_dir": os.path.expanduser("~/.codex-operator"),  # Operator-only CODEX_HOME: has playwright; the interactive gpt Discord bot uses ~/.codex (no playwright) — clean platform separation
             "cwd": os.path.expanduser("~/.operator-sessions/gpt"),
-            "persona": ("You are GPT — concise, capable." + _GPT_SELF + _BROWSER_MANDATE)},
-    # gemma drives via agy (Google Antigravity CLI) on the owner's flat Google sub —
+            "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
+    # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
     # the agy analog of the codex/ChatGPT-sub path. agy `-p` returns PLAIN TEXT
     # (no JSON event stream), so the live action-trace is unavailable; we surface
     # the final text only. Like gpt/codex, agy has no CLAUDE.md / SessionStart
-    # hook, so gemma gets its app self-context inline (host-app digest if
+    # hook, so gemma gets its the app self-context inline (host-app digest if
     # reachable, else _GEMMA_SELF).
     "gemma": {"label": "gemma", "runtime": "agy",
               "config_dir": os.path.expanduser("~/.gemini"),
               "cwd": os.path.expanduser("~/.operator-sessions/gemma"),
-              "persona": ("You are Gemma — concise, capable, decisive." + _GEMMA_SELF + _BROWSER_MANDATE)},
+              "persona": ("You are a helpful, capable computer-using assistant." + _GEMMA_SELF + _BROWSER_MANDATE)},
 }
 
 # Operator's headless agent runs use dedicated cwds (above) so their sessions don't
@@ -149,7 +150,22 @@ def _ensure_steer_hook_settings(cwd: str) -> None:
     --settings FLAG is what breaks --resume (verified 2026-07-11). Merge-
     preserving: existing keys/hooks survive; re-running with the hook already
     present writes nothing. Best-effort — a failed write only costs mid-loop
-    steering (the exit-seam still delivers)."""
+    steering (the exit-seam still delivers).
+
+    PRUNES stale entries too (2026-07-22): _STEER_HOOK_CMD is derived from
+    __file__ at import time, so any earlier run of this module from a
+    different checkout (a git worktree, a /tmp scratchpad copy, an old
+    the host repo clone) wrote a DIFFERENT absolute path here — and the old
+    match-by-exact-string dedup let those stale commands pile up forever
+    instead of being replaced, since a new path never string-equals an old
+    one. Every stale entry then failed on every single tool call once its
+    checkout was cleaned up ("python3 <deleted path>/steer_hook.py: No such
+    file or directory"), and Claude Code surfaced that stderr into the
+    transcript as a live hook error — the "unrelated hook error, broken
+    steer_hook path" the model saw mid-run on claude-a/claude-b operator runs.
+    Fix: drop every PostToolUse hook whose command targets ANY steer_hook.py
+    (by basename) before re-adding the current canonical one, so only ONE
+    steer-hook entry — pointed at THIS checkout — ever survives."""
     try:
         sp = os.path.join(cwd, ".claude", "settings.json")
         cfg: dict = {}
@@ -162,12 +178,34 @@ def _ensure_steer_hook_settings(cwd: str) -> None:
             pass
         hooks = cfg.setdefault("hooks", {})
         groups = hooks.setdefault("PostToolUse", [])
-        if any(_STEER_HOOK_CMD == h.get("command")
-               for g in groups if isinstance(g, dict)
-               for h in (g.get("hooks") or []) if isinstance(h, dict)):
-            return   # already wired — no churn
-        groups.append({"matcher": "",
-                       "hooks": [{"type": "command", "command": _STEER_HOOK_CMD}]})
+        kept = []
+        has_current = False
+        changed = False
+        for g in groups:
+            if not isinstance(g, dict) or not g.get("hooks"):
+                kept.append(g)   # foreign shape / empty group: leave untouched
+                continue
+            new_hooks = []
+            for h in g.get("hooks") or []:
+                is_steer = (isinstance(h, dict)
+                            and "steer_hook.py" in str(h.get("command", "")))
+                if not is_steer:
+                    new_hooks.append(h)   # non-steer hooks always survive
+                elif h.get("command") == _STEER_HOOK_CMD and not has_current:
+                    has_current = True
+                    new_hooks.append(h)   # the one canonical entry — keep in place
+                else:
+                    changed = True        # stale path or duplicate current — drop
+            if new_hooks:
+                kept.append({**g, "hooks": new_hooks})
+            # group emptied by pruning: drop the group itself (changed already set)
+        if not has_current:
+            kept.append({"matcher": "",
+                         "hooks": [{"type": "command", "command": _STEER_HOOK_CMD}]})
+            changed = True
+        if not changed:
+            return   # already wired, nothing stale — no churn
+        hooks["PostToolUse"] = kept
         os.makedirs(os.path.dirname(sp), exist_ok=True)
         tmp = sp + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -267,7 +305,7 @@ def _resolve_claude() -> str | None:
 
 
 def _resolve_agy() -> str | None:
-    """Google Antigravity CLI (`agy`). Drives the browser on the owner's flat Google
+    """Google Antigravity CLI (`agy`). Drives the browser on the owner flat Google
     sub (no metered API key) — the agy analog of the codex/ChatGPT-sub path."""
     from shutil import which
     a = which("agy")
@@ -320,6 +358,7 @@ class AgentRunner:
                          "operator-state.json")
             + (".demo" if os.environ.get("OPERATOR_DEMO") else ""))
         self._session_ids: dict = {}      # bot -> last claude session id (resume)
+        self._boot_sent: dict = {}        # bot -> the app boot context DELIVERED (see dispatch)
         self._transcript: list = []
         self._last_bot: str | None = None
         # #40b: armed when a run trips the overthink-loop guard; the NEXT agy
@@ -387,6 +426,7 @@ class AgentRunner:
             with open(self._state_path) as f:
                 st = json.load(f)
             self._session_ids = st.get("session_ids", {}) or {}
+            self._boot_sent = st.get("boot_sent", {}) or {}
             self._transcript = st.get("transcript", []) or []
             self._last_bot = st.get("last_bot")
         except (OSError, ValueError):
@@ -398,6 +438,7 @@ class AgentRunner:
             tmp = self._state_path + ".tmp"
             with open(tmp, "w") as f:
                 json.dump({"session_ids": self._session_ids,
+                           "boot_sent": self._boot_sent,
                            "transcript": self._transcript[-40:],
                            "last_bot": self._last_bot}, f)
             os.replace(tmp, self._state_path)
@@ -509,29 +550,37 @@ class AgentRunner:
         self.ended_ts = 0.0
         self._gate_fired = False   # §3.3: one gate/replan follow-up per start()
         self.model, self.effort = (model or '').strip(), (effort or '').strip()
-        self.demo = bool(demo)   # demo=True → sandboxed: no app context/identity
+        self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
         # default the claude runtime to Sonnet 5 / medium when nothing was picked
         # (empty model would otherwise drop the flag and use the CLI's own default).
         if b.get("runtime") == "claude":
             if not self.model:  self.model = "claude-sonnet-5"
             if not self.effort: self.effort = "medium"
         elif b.get("runtime") == "codex":
-            # gpt/codex default: 5.6 Sol / low (2026-07-09), matching the UI
+            # gpt/codex default: 5.6 Sol / low , matching the UI
             # picker default. Without the effort default, an unset effort drops the
             # -c flag and codex falls back to its config.toml default (xhigh) —
             # needless token burn for browser tasks.
             if not self.model:  self.model = "gpt-5.6-sol"
             if not self.effort: self.effort = "low"
-        # agy gets a Gemini display-string default (NOT an API id) — an empty
-        # model would otherwise build a broken `--model ""`. effort N/A for agy
-        # (it's folded into the model display string, e.g. "(High)").
+        # agy gets a model SLUG (as printed by `agy models`) — an empty model
+        # would otherwise build a broken `--model ""`.
+        #
+        # 2026-07-24: agy changed its interface. It used to take one folded
+        # display string ("Gemini 3.5 Flash (High)") and had no effort flag; it
+        # now exposes `--effort` and REJECTS the folded form alongside it
+        # ("--effort is not supported for model …"). So: pass the bare family
+        # slug and let effort ride its own flag. Entries whose tier is already
+        # fixed must dispatch WITHOUT effort: either a tier-suffixed Gemini slug
+        # (gemini-3.6-flash-low) or a parenthesised display name, which is still
+        # the only accepted form for the Claude/GPT-OSS entries — NB `agy models`
+        # prints "claude-sonnet-4-6-thinking" but --model rejects it.
         elif b.get("runtime") == "agy":
-            if not self.model:  self.model = "Gemini 3.5 Flash"
-            # agy wants one display string "Gemini X (Tier)" — fold the effort tier in.
-            _eff = (self.effort or "high").strip().capitalize()
-            if self.model and "(" not in self.model:
-                self.model = self.model + " (" + _eff + ")"
-            self.effort = ""   # agy has no separate effort flag; it is in the model string
+            if not self.model:  self.model = "gemini-3.6-flash"
+            _m = self.model.strip()
+            _baked = _m.endswith(("-low", "-medium", "-high")) or "(" in _m
+            self.model = _m
+            self.effort = "" if _baked else (self.effort or "high").strip().lower()
         self._thread = threading.Thread(target=self._run, args=(binpath, b, task),
                                         daemon=True, name="operator-agent")
         self._thread.start()
@@ -591,7 +640,7 @@ class AgentRunner:
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
         self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
                                           # tool_calls, no content) — the "overthink loop"
-                                          # counter (2026-06-30, #40)
+                                          # counter 
         self._agy_loop_warned = False    # one-shot stuck-in-a-loop warning per run
         # §2.1 runtime-agnostic repeat-action guard (per-run counters)
         self._last_action_key = ""
@@ -625,7 +674,7 @@ class AgentRunner:
         _surface = getattr(self, "surface", "browser")
         task = _prompts.wrap_task(task, _surface, getattr(self, "demo", False))
         env = dict(os.environ)
-        env["SQUAD_STORE_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["OPERATOR_SURFACE"] = _surface        # control MCP reads the surface
         if getattr(self, "_real_ok", False):
             env["OPERATOR_REAL_OK"] = "1"         # per-session desktop-real confirm
@@ -641,8 +690,16 @@ class AgentRunner:
         # codex/agy have no hook, so their first turn folds it into the prompt
         # (resumes already carry it — don't re-send).
         _boot_bot = {"codex": "gpt", "agy": "gemma"}.get(self._runtime)
-        _boot = ("" if (resume_id or getattr(self, "demo", False) or not _boot_bot)
-                 else _squad_boot_context(_boot_bot))
+        # A resume alone is NOT proof the thread ever received the app
+        # context: a thread created before this wiring existed resumes
+        # context-less forever — which is why gemma behaved like a naive bot
+        # with no the app priors . Delivery is tracked per bot
+        # in state; a resumed thread that never got it gets the context folded
+        # into THIS turn's prompt instead of never.
+        _boot = ""
+        if _boot_bot and not getattr(self, "demo", False):
+            if not (resume_id and self._boot_sent.get(_boot_bot)):
+                _boot = _squad_boot_context(_boot_bot)
         spec = operator_runtimes.RunSpec(
             binpath=binpath, bot=self.bot or "", task=task,
             persona=self._persona_for_run(b), boot_context=_boot,
@@ -668,11 +725,16 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=(os.path.expanduser("~/local-projects/operator-demo/workspace") if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
+                cmd, cwd=(os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_WORKSPACE", "~/.operator-sandbox/workspace")) if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             self._gate_pending = False   # §3.3: the follow-up turn is live now
             self._touch()   # B2: spawn is progress — don't inherit a stale heartbeat
+            if _boot and _boot_bot:
+                # the app context is in this run's prompt — record delivery so
+                # resumes stop re-sending ~26k chars every turn
+                self._boot_sent[_boot_bot] = True
+                self._save_state()
             if self._cancel_requested:
                 # a Stop landed in the pre-spawn window, when there was no
                 # process to kill — honor it the moment the process exists,
@@ -865,7 +927,7 @@ class AgentRunner:
     # again" signature) trips a one-shot trace warning + arms a consume-once
     # nudge for the NEXT turn. Every runtime can loop like this, not just agy;
     # the same pattern kills game grinds (re-clicking a dead target forever).
-    # Never auto-kills the run (same policy as the agy guard, 2026-06-30).
+    # Never auto-kills the run (same policy as the agy guard, the owner 2026-06-30).
     _REPEAT_ACTION_STREAK = 3
 
     # §3.3 evidence ledger — name fragments that classify a tool call. VISUAL
@@ -1007,10 +1069,29 @@ class AgentRunner:
     # Hard-bounded: one follow-up per start() (_gate_fired), never in demo,
     # never after a stop/token-cap/handoff. Kill-switch OPERATOR_COMPLETION_GATE=0.
     _GATE_EVIDENCE_WINDOW = 2   # consequential acts allowed after the last look
-    _BAIL_MARKERS = ("unable to", "cannot ", "can't ", "couldn't", "i'll stop",
-                     "stopping here", "give up", "giving up", "not possible",
-                     "failed to complete", "blocked by", "take over",
-                     "please intervene")
+    # Bail detection is FIRST-PERSON ANCHORED (2026-07-22 tune, "auto-replan a
+    # bit too aggressive"): the old bare substrings ("can't ", "cannot ",
+    # "unable to", …) live inside successful answers all the time — the live
+    # false positive was a finished passport-research summary whose CONTENT
+    # said "under-16 passports can't be renewed", which burned a whole replan
+    # turn on a done task. A genuine bail is self-referential ("I couldn't…",
+    # "I was unable to…"), so the negation markers only count with a
+    # first-person subject in front; the unambiguous surrender phrases
+    # ("give up", "take over", …) still match bare.
+    _BAIL_RE = re.compile(
+        # first-person negation: "I can't/cannot/couldn't/was unable/am
+        # blocked/am stuck/'ll stop …"
+        r"\bi(?:'m| am| was| have been|'ve been)? *(?:still +)?"
+        r"(?:can(?: *no|')t|cannot|could *n[o']t|unable(?: to)?|"
+        r"not able to|blocked|stuck|giving up)\b"
+        # explicit surrender, still self-referential ("stop by/in/at" is the
+        # visiting idiom, not a surrender — exclude it)
+        r"|\bi(?:'ll| will| must|'m going to| have to) stop(?! (?:by|in|at)\b)\b"
+        r"|\bstopping here\b|\bgiv(?:e|ing) up\b"
+        r"|\bfailed to complete\b"
+        r"|\bthis (?:is|was|seems|appears)(?: to be)? not possible\b"
+        r"|\b(?:please |you(?:'ll| will)? (?:need to|have to) )take over\b"
+        r"|\bplease intervene\b")
     _GATE_VERIFY_PROMPT = _prompts.GATE_VERIFY_PROMPT
     _GATE_REPLAN_PROMPT = _prompts.GATE_REPLAN_PROMPT
 
@@ -1028,7 +1109,12 @@ class AgentRunner:
             return ""               # chat/read-only turn — nothing to verify
         final = next((m["text"] for m in reversed(self.messages)
                       if m.get("role") == "assistant" and m.get("text")), "")
-        if any(k in final.lower() for k in self._BAIL_MARKERS):
+        # Bail-replan is OPT-IN (2026-07-28): even first-person-anchored, the
+        # regex can't tell "I couldn't find a cheaper fare, so I booked X"
+        # (done) from a real bail — second live false positive killed it.
+        # Re-enable with OPERATOR_BAIL_REPLAN=1; the verify gate below stays.
+        if (os.environ.get("OPERATOR_BAIL_REPLAN", "0") == "1"
+                and self._BAIL_RE.search(final.lower())):
             self._gate_fired = True
             self.messages.append({"ts": time.time(), "role": "error",
                 "text": ("🔁 Auto-replan — the run ended sounding blocked; "

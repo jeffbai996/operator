@@ -139,3 +139,65 @@ def test_stop_noise_lines_are_dropped():
 
 def test_all_noise_yields_empty(ecmd=None):
     assert AGY.filter_stop_noise("Error: request was aborted") == ""
+
+
+# ── Flash 3.6 duplicates its final answer  ──────────────────
+# "the last message of her tool trace is the message she outputs, so there's a
+# duplication going on not to mention it spams the thinking trace"
+#
+# Flash 3.6 rides its narration in `content`. On a step that ALSO carries
+# tool_calls that content is CoT → role="thinking" (correct). But it then
+# repeats the SAME text on the final, tool_call-less step → role="assistant".
+# So the identical paragraph renders twice: once as the last trace step, once
+# as the reply bubble.
+
+def _planner(step, content=None, thinking=None, tool_calls=None):
+    o = {"step_index": step, "source": "MODEL", "type": "PLANNER_RESPONSE"}
+    if content is not None:
+        o["content"] = content
+    if thinking is not None:
+        o["thinking"] = thinking
+    if tool_calls is not None:
+        o["tool_calls"] = tool_calls
+    return o
+
+
+def _write_traj(tmp_path, steps, name="t.jsonl"):
+    p = tmp_path / name
+    p.write_text("\n".join(json.dumps(s) for s in steps) + "\n")
+    return str(p)
+
+
+ANSWER = "I checked the page and the login form is on the right."
+
+
+def test_final_answer_is_not_also_left_in_the_thinking_trace(tmp_path):
+    """The duplicated paragraph must appear ONCE, as the assistant reply."""
+    sink = _Sink()
+    traj = _write_traj(tmp_path, [
+        _planner(0, content=ANSWER,
+                 tool_calls=[{"name": "browser_navigate", "args": {"url": "u"}}]),
+        _planner(1, content=ANSWER),          # same text again, no tool_calls
+    ])
+    assert AGY.parse_trajectory(traj, sink) is True
+
+    texts = [(m["role"], m["text"]) for m in sink.messages]
+    assert ("assistant", ANSWER) in texts, f"the reply must survive: {texts}"
+    dupes = [t for r, t in texts if r == "thinking" and t == ANSWER]
+    assert not dupes, f"answer also left in the thinking trace: {texts}"
+
+
+def test_genuine_narration_before_a_different_answer_is_kept(tmp_path):
+    """Only the DUPLICATE is dropped. Real CoT that differs from the answer is
+    the whole value of the trace — it must stay."""
+    sink = _Sink()
+    traj = _write_traj(tmp_path, [
+        _planner(0, content="Let me open the page first.",
+                 tool_calls=[{"name": "browser_navigate", "args": {"url": "u"}}]),
+        _planner(1, content=ANSWER),
+    ], "t2.jsonl")
+    assert AGY.parse_trajectory(traj, sink) is True
+
+    texts = [(m["role"], m["text"]) for m in sink.messages]
+    assert ("thinking", "Let me open the page first.") in texts, texts
+    assert ("assistant", ANSWER) in texts, texts
