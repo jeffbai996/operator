@@ -140,4 +140,34 @@ def spec_from_map(m: dict, frame_size: tuple) -> list:
             region = None                 # whole frame
         spec.append({"kind": "text", "label": o.get("label", "text"),
                      "region": region, "min_conf": float(o.get("min_conf", 40.0))})
+    # grids -> one STATIC target per cell (label from the pattern, position =
+    # the cell center inside the scaled region). This is what makes a chess
+    # board playable by name: click_target "e4" instead of per-move pixel math.
+    #   grids:
+    #     squares:
+    #       region: board                # region name or [x, y, w, h]
+    #       cols: [a,b,c,d,e,f,g,h]      # left -> right
+    #       rows: ["8","7","6","5","4","3","2","1"]   # top -> bottom
+    #       label: "{col}{row}"          # optional, default "{col}{row}"
+    for gname, g in (m.get("grids") or {}).items():
+        region = g.get("region")
+        if isinstance(region, str):
+            region = scale_region(m, region, frame_size)
+        elif isinstance(region, (list, tuple)) and len(region) == 4:
+            region = _scale(region, m["viewport"], frame_size)
+        else:
+            raise MapError(f"grid {gname!r}: region must be a region name or [x,y,w,h]")
+        cols = [str(c) for c in (g.get("cols") or [])]
+        rows = [str(r) for r in (g.get("rows") or [])]
+        if not cols or not rows:
+            raise MapError(f"grid {gname!r}: needs non-empty cols and rows")
+        pattern = g.get("label") or "{col}{row}"
+        rx, ry, rw, rh = region
+        cw, ch = rw / len(cols), rh / len(rows)
+        for ri, row in enumerate(rows):
+            for ci, col in enumerate(cols):
+                spec.append({"kind": "static",
+                             "label": pattern.format(col=col, row=row),
+                             "x": int(round(rx + (ci + 0.5) * cw)),
+                             "y": int(round(ry + (ri + 0.5) * ch))})
     return spec
