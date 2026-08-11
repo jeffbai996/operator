@@ -607,12 +607,21 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         assert composer["radius"] >= composer["height"] / 2 - 1
         input_metrics = pg.locator("#op-lp-input").evaluate(
             """el => { const r = el.getBoundingClientRect(); const c = el.parentElement.getBoundingClientRect();
-              return {font: parseFloat(getComputedStyle(el).fontSize),
+              const was = el.value; el.value = 'x';
+              const typed = parseFloat(getComputedStyle(el).fontSize);
+              el.value = was;
+              return {font: parseFloat(getComputedStyle(el).fontSize), typed: typed,
                       placeholder: parseFloat(getComputedStyle(el, '::placeholder').fontSize),
                       centerDelta: Math.abs((r.top + r.bottom) / 2 - (c.top + c.bottom) / 2)}; }""")
-        # placeholder ALWAYS equals the typed size ; both at 0.76rem*scale
-        assert input_metrics["placeholder"] == input_metrics["font"]
-        assert 14.0 <= input_metrics["font"] <= 14.3
+        # The SPLASH placeholder is deliberately LARGER than the typed text
+        # (the owner 2026-07-30). The old equality rule existed to end the
+        # oversized-placeholder ride-high class; that property is now held
+        # directly — the empty box grows its own font AND its 1.3em clamp
+        # together, so the line box stays proportional, and centerDelta below
+        # is what actually catches a ride. `font` is read on an EMPTY box and
+        # is therefore the placeholder's size; `typed` is the one to pin.
+        assert input_metrics["placeholder"] > input_metrics["typed"]
+        assert 14.0 <= input_metrics["typed"] <= 14.3
         assert input_metrics["centerDelta"] <= 1
         assembly = pg.locator("#op-lp").evaluate(
             """lp => {
@@ -695,7 +704,7 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         assert 10.5 <= modal_type["typed"] <= 11.2
         assert modal_type["placeholder"] == modal_type["typed"]
         assert pg.locator('label[for="op-nt-sites"]').text_content() == \
-            "Websites and tools Operator can use"
+            "What websites and tools would you like Operator to use?"
         pg.fill("#op-nt-sites", "doordash.com")
         pg.press("#op-nt-sites", "Enter")
         assert pg.locator('.op-nt-pill[data-v="doordash.com"] > span').first.text_content() == \
@@ -704,7 +713,7 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         assert pg.locator("#op-nt-veil").is_hidden()
 
         # splash button now walks the same 3-stop cycle as #op-flat:
-        # default dark → OLED flat → light 
+        # default dark → OLED flat → light (the owner 2026-07-28)
         pg.click("#op-lp-theme")
         assert "op-flat" in pg.locator("#op").get_attribute("class")
         assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use light mode"
@@ -796,7 +805,7 @@ def test_launchpad_backdrop_collapses_results_and_theme_toggle_is_local(browser,
         assert "op-flat" in pg.locator("#op").get_attribute("class")
         pg.click("#op-lp-theme")
         assert pg.locator("html").get_attribute("data-theme") == "light"
-        assert pg.evaluate("localStorage.getItem('op_theme')") == "light"
+        assert pg.evaluate("localStorage.getItem('squad_theme')") == "light"
         assert "op-flat" not in pg.locator("#op").get_attribute("class")
         pg.click("#op-lp-theme")
         assert pg.locator("html").get_attribute("data-theme") == "dark"
@@ -941,6 +950,15 @@ def test_launchpad_composer_grows_and_shrinks_for_multiline_drafts(browser, harn
           input:document.getElementById('op-lp-input').getBoundingClientRect().height,
           composer:document.querySelector('.op-lp-composer').getBoundingClientRect().height})""")
 
+        # One TYPED line is the row unit. The EMPTY box is deliberately taller
+        # than a typed line — the splash grows its own font while the
+        # placeholder shows, and the 1.3em clamp grows with it — so the empty
+        # baseline understates the rows and would fake-fail the growth assert.
+        pg.fill("#op-lp-input", "one")
+        pg.wait_for_timeout(80)
+        row = pg.evaluate("() => document.getElementById('op-lp-input')"
+                          ".getBoundingClientRect().height")
+
         pg.fill("#op-lp-input", "one\ntwo\nthree\nfour\nfive")
         pg.wait_for_timeout(80)
         expanded = pg.evaluate("""() => {
@@ -951,7 +969,7 @@ def test_launchpad_composer_grows_and_shrinks_for_multiline_drafts(browser, harn
             client:input.clientHeight, scroll:input.scrollHeight,
             sendBottom:composer.bottom-send.bottom};
         }""")
-        assert expanded["input"] >= baseline["input"] * 4.5
+        assert expanded["input"] >= row * 4.5
         assert expanded["composer"] >= baseline["composer"] + 40
         assert expanded["scroll"] <= expanded["client"] + 1
         assert 4 <= expanded["sendBottom"] <= 7
@@ -1010,7 +1028,8 @@ def test_chat_composer_expands_and_shrinks_for_multiline_drafts(browser, harness
 
 
 def test_saved_pill_is_permanent_with_a_minimal_empty_state(browser, harness):
-    """Saved is a PERMANENT category : an empty account keeps the pill and
+    """Saved is a PERMANENT category (the owner 2026-07-19, superseding the
+    appears-after-first-save contract): an empty account keeps the pill and
     its view reads "No saved tasks"; the first save fills it in place."""
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     ctx.add_init_script(
@@ -1356,7 +1375,7 @@ def test_restored_session_touch_activation(browser, harness):
 
 def test_trash_clear_returns_to_opaque_splash(browser, harness):
     """Trashing a conversation lands on the SOLID splash, not the translucent
-    over-the-feed blur ."""
+    over-the-feed blur (the owner 2026-07-18, superseding the 07-17 blur note)."""
     ctx = _restored_ctx(browser, viewport={"width": 1440, "height": 900})
     pg = ctx.new_page()
     errors, con_errors, _ = _collectors(pg)

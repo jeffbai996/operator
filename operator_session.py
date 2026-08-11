@@ -1,15 +1,26 @@
-"""operator_session — the ONE shared cockpit session, persisted server-side.
+"""operator_session — the cockpit's conversations, persisted server-side.
 
 The chat log / mode / picker state used to live only in each browser's
-localStorage, so every device had its own unrelated history. The live cockpit
-is a single-user, single-session product : whoever opens it,
-on whatever device, should see the same conversation. This module owns that
-state: a small JSON file with a monotonic revision counter the client uses to
-decide whether the server copy supersedes its local cache.
+localStorage, so every device had its own unrelated history. v1.0.11 moved it
+to one shared server-side session: whoever opens the cockpit, on whatever
+device, sees the same conversation.
 
-Deliberately NOT multi-session — one file, last write wins. Concurrent-viewer
-live sync is out of scope (1.0.15 multi-viewer territory); this covers
-"walk from the desk to the couch and the chat is still there".
+One was not enough (the owner 2026-08-06). Every task landed in the same
+transcript, an unrelated errand's context rode along inside it, and the only
+way to get a clean start was the trash can, which destroyed what was there.
+So this module now owns a MAP of conversations plus which one is active, and
+the cockpit gets a switcher. What it deliberately does NOT change is the
+single-session contract the client already speaks: `load()` and `save()` still
+read and write "the session", they just mean the ACTIVE one. A cockpit that
+never learns about conversations keeps working exactly as before.
+
+On-disk shape (v2), with a single monotonic `rev` across the whole file
+because that is what the client's adopt-if-newer check compares:
+
+    {"rev": 12, "active": "<id>",
+     "sessions": {"<id>": {"title": str, "updated_ts": float, "data": {...}}}}
+
+A v1 file ({"rev", "data"}) migrates into one conversation on first read.
 """
 from __future__ import annotations
 
@@ -18,13 +29,18 @@ import logging
 import os
 import threading
 import tempfile
+import time
+import uuid
 
 log = logging.getLogger("operator.session")
 
 # the session payload mirrors the client's localStorage shape (log HTML, mode,
 # bot/model/effort) — the log dominates. The client trims its log to ~80
 # nodes; 1MB is far above any legitimate payload and far below abuse size.
+# Applies PER CONVERSATION: one runaway chat can't be saved, the others are
+# unaffected.
 MAX_BYTES = 1_000_000
+TITLE_LIMIT = 80
 
 # .demo backstop: same-user demo server must never read/write the owner's
 # session (routes are 403 in demo, but the suffix removes the shared file too).
@@ -36,50 +52,204 @@ _PATH = os.environ.get(
 _LOCK = threading.Lock()
 
 
-def load() -> dict:
-    """Return {rev, data}; {rev: 0, data: None} when absent or unreadable."""
-    with _LOCK:
+_LEGACY_ID = "legacy"
+
+
+def _new_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _mtime() -> float:
+    """The session file's own mtime — a migrated conversation should carry the
+    time it was last written, not the time it happened to be read."""
+    try:
+        return os.path.getmtime(_PATH)
+    except OSError:
+        return time.time()
+
+
+def _blank() -> dict:
+    return {"rev": 0, "active": "", "sessions": {}}
+
+
+def _read_unlocked() -> dict:
+    """The whole store in v2 shape. Absent, corrupt or v1 files all resolve to
+    something usable — a bad session file must never be a dead cockpit."""
+    try:
+        with open(_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return _blank()
+    except Exception as e:  # noqa: BLE001 — corrupt file ≠ dead cockpit
+        log.warning("session file unreadable (%s) — starting fresh", e)
+        return _blank()
+    if not isinstance(raw, dict):
+        return _blank()
+    rev = raw.get("rev") if isinstance(raw.get("rev"), int) else 0
+    sessions = raw.get("sessions")
+    if isinstance(sessions, dict):
+        clean = {k: v for k, v in sessions.items() if isinstance(v, dict)}
+        active = raw.get("active") if raw.get("active") in clean else ""
+        if not active and clean:
+            active = _newest(clean)
+        return {"rev": rev, "active": active, "sessions": clean}
+    # v1 → v2: the one shared session becomes the first conversation, keeping
+    # its rev so a client mid-flight doesn't see the counter go backwards.
+    # Its id is FIXED, not generated: migration happens on every read until
+    # something writes, and a fresh random id per read means a client can list
+    # a conversation and then 404 activating it a second later (caught live,
+    # 2026-08-06).
+    data = raw.get("data")
+    if isinstance(data, dict):
+        return {"rev": rev, "active": _LEGACY_ID,
+                "sessions": {_LEGACY_ID: {"title": "", "updated_ts": _mtime(),
+                                          "data": data}}}
+    return {"rev": rev, "active": "", "sessions": {}}
+
+
+def _newest(sessions: dict) -> str:
+    return max(sessions, key=lambda k: sessions[k].get("updated_ts") or 0)
+
+
+def _write_unlocked(state: dict) -> int:
+    """Atomic (tmp+rename) so a crash mid-write can't corrupt what was there."""
+    state["rev"] = int(state.get("rev") or 0) + 1
+    os.makedirs(os.path.dirname(_PATH), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(_PATH),
+                               prefix=".session-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+        os.replace(tmp, _PATH)
+    finally:
         try:
-            with open(_PATH, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            if isinstance(raw, dict) and isinstance(raw.get("rev"), int):
-                return {"rev": raw["rev"], "data": raw.get("data")}
+            os.unlink(tmp)
         except FileNotFoundError:
             pass
-        except Exception as e:  # noqa: BLE001 — corrupt file ≠ dead cockpit
-            log.warning("session file unreadable (%s) — starting fresh", e)
-        return {"rev": 0, "data": None}
+    return state["rev"]
+
+
+def _clip_title(text: str) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= TITLE_LIMIT else text[: TITLE_LIMIT - 1] + "…"
+
+
+# ── the single-session contract the client already speaks ───────────────
+
+def load() -> dict:
+    """{rev, data} for the ACTIVE conversation; {rev: 0, data: None} when the
+    store is empty. Unchanged shape — the pre-conversations client still works."""
+    with _LOCK:
+        st = _read_unlocked()
+        sess = st["sessions"].get(st["active"]) or {}
+        return {"rev": st["rev"], "data": sess.get("data")}
 
 
 def save(data: dict) -> int:
-    """Persist the session payload; returns the new revision. Atomic
-    (tmp+rename) so a crash mid-write can't corrupt the previous session.
-    Raises ValueError when the payload exceeds MAX_BYTES."""
+    """Persist into the active conversation; returns the new revision. Creates
+    the first conversation if there is none. Raises ValueError over MAX_BYTES."""
     if not isinstance(data, dict):
         raise ValueError("session data must be an object")
-    blob_probe = json.dumps(data, ensure_ascii=False)
-    if len(blob_probe.encode("utf-8")) > MAX_BYTES:
+    if len(json.dumps(data, ensure_ascii=False).encode("utf-8")) > MAX_BYTES:
         raise ValueError(f"session payload exceeds {MAX_BYTES} bytes")
     with _LOCK:
-        rev = 0
-        try:
-            with open(_PATH, "r", encoding="utf-8") as f:
-                prev = json.load(f)
-            if isinstance(prev, dict) and isinstance(prev.get("rev"), int):
-                rev = prev["rev"]
-        except Exception:  # noqa: BLE001 — absent/corrupt → rev restarts
-            pass
-        rev += 1
-        os.makedirs(os.path.dirname(_PATH), exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(_PATH),
-                                   prefix=".session-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"rev": rev, "data": data}, f, ensure_ascii=False)
-            os.replace(tmp, _PATH)
-        finally:
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-        return rev
+        st = _read_unlocked()
+        sid = st["active"] or _new_id()
+        prev = st["sessions"].get(sid) or {"title": ""}
+        st["sessions"][sid] = {"title": prev.get("title") or "",
+                               "updated_ts": time.time(), "data": data}
+        st["active"] = sid
+        return _write_unlocked(st)
+
+
+# ── conversations ───────────────────────────────────────────────────────
+
+def _is_empty(sess: dict) -> bool:
+    data = sess.get("data")
+    return not isinstance(data, dict) or not (data.get("log") or "").strip()
+
+
+def listing() -> dict:
+    """{rev, active, sessions:[{id, title, updated_ts, empty}]}, newest first."""
+    with _LOCK:
+        st = _read_unlocked()
+        rows = [{"id": sid, "title": s.get("title") or "",
+                 "updated_ts": s.get("updated_ts") or 0, "empty": _is_empty(s)}
+                for sid, s in st["sessions"].items()]
+        rows.sort(key=lambda r: r["updated_ts"], reverse=True)
+        return {"rev": st["rev"], "active": st["active"], "sessions": rows}
+
+
+def create(title: str = "") -> dict:
+    """Start a new, empty conversation and make it active. {id, rev}."""
+    with _LOCK:
+        st = _read_unlocked()
+        sid = _new_id()
+        st["sessions"][sid] = {"title": _clip_title(title),
+                               "updated_ts": time.time(), "data": None}
+        st["active"] = sid
+        return {"id": sid, "rev": _write_unlocked(st)}
+
+
+def activate(sid: str) -> dict:
+    """Switch conversations. Returns {rev, data} so the caller can paint the
+    chat in the same round trip. KeyError if the id is unknown."""
+    with _LOCK:
+        st = _read_unlocked()
+        if sid not in st["sessions"]:
+            raise KeyError(sid)
+        st["active"] = sid
+        rev = _write_unlocked(st)
+        return {"rev": rev, "data": st["sessions"][sid].get("data")}
+
+
+def rename(sid: str, title: str) -> int:
+    with _LOCK:
+        st = _read_unlocked()
+        if sid not in st["sessions"]:
+            raise KeyError(sid)
+        st["sessions"][sid]["title"] = _clip_title(title)
+        return _write_unlocked(st)
+
+
+def delete(sid: str) -> dict:
+    """Drop a conversation. Deleting the active one falls through to the most
+    recent survivor; deleting the last one leaves a fresh empty conversation,
+    so the cockpit always has somewhere to write. {active, rev}."""
+    with _LOCK:
+        st = _read_unlocked()
+        if sid not in st["sessions"]:
+            raise KeyError(sid)
+        st["sessions"].pop(sid)
+        if st["active"] == sid or st["active"] not in st["sessions"]:
+            if st["sessions"]:
+                st["active"] = _newest(st["sessions"])
+            else:
+                new = _new_id()
+                st["sessions"][new] = {"title": "", "updated_ts": time.time(),
+                                       "data": None}
+                st["active"] = new
+        return {"active": st["active"], "rev": _write_unlocked(st)}
+
+
+def title_if_unset(text: str) -> None:
+    """Name the active conversation after the first task dispatched into it.
+
+    Titling server-side rather than in the client because the server is where
+    the task text is known for certain — the client's copy is HTML by then.
+    Best-effort: a titling failure must never break a dispatch.
+    """
+    try:
+        title = _clip_title(text)
+        if not title:
+            return
+        with _LOCK:
+            st = _read_unlocked()
+            sid = st["active"]
+            sess = st["sessions"].get(sid)
+            if not sess or (sess.get("title") or "").strip():
+                return
+            sess["title"] = title
+            _write_unlocked(st)
+    except Exception as e:  # noqa: BLE001
+        log.warning("session auto-title failed (run unaffected): %s", e)

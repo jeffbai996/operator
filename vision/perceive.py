@@ -298,6 +298,17 @@ def build_world_state(frame, spec) -> WorldState:
             ms = find_color_blobs(rgb, s["lo"], s["hi"],
                                   min_area=s.get("min_area", 60), label=label)
             targets.extend(m.as_dict() for m in ms)
+        elif kind == "static":
+            # derived geometry (e.g. a map grid cell center) — no detection,
+            # always present. Lets click_target address fixed board squares by
+            # name ("e4") instead of the model doing pixel math per move.
+            # Tagged kind:static so the world-state cap can exempt them (a map
+            # author declared them deliberately; they must not crowd out or be
+            # crowded out by detection hits).
+            t = Match(x=int(s["x"]), y=int(s["y"]),
+                      score=float(s.get("score", 1.0)), label=label).as_dict()
+            t["kind"] = "static"
+            targets.append(t)
         elif kind == "text":
             hs = read_text(rgb, region=s.get("region"),
                            min_conf=s.get("min_conf", 40.0), label=label)

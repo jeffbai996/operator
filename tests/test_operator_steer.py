@@ -247,6 +247,9 @@ def test_settings_writer_idempotent_and_merge_safe(store, tmp_path, monkeypatch)
     hooks = cfg["hooks"]["PostToolUse"]
     assert any("steer_hook.py" in h["command"]
                for grp in hooks for h in grp["hooks"])
+    pre_hooks = cfg["hooks"]["PreToolUse"]
+    assert any("operator_restart_guard.py" in h["command"]
+               for grp in pre_hooks for h in grp["hooks"])
     before = sp.read_text()
     OA._ensure_steer_hook_settings(str(cwd))     # second call: no churn
     assert sp.read_text() == before
@@ -255,6 +258,39 @@ def test_settings_writer_idempotent_and_merge_safe(store, tmp_path, monkeypatch)
     sp.write_text(json.dumps(cfg))
     OA._ensure_steer_hook_settings(str(cwd))
     assert json.loads(sp.read_text())["model"] == "claude-sonnet-5"
+
+
+def test_settings_writer_repairs_restart_guard_without_erasing_other_hooks(
+        store, tmp_path):
+    """Operator drivers can use a non-default Claude config directory.
+
+    The guard therefore belongs in the Operator workspace's project settings,
+    not only the default user-level settings.json.
+    """
+    import operator_agent as OA
+    cwd = tmp_path / "botcwd"
+    cwd.mkdir()
+    sp = cwd / ".claude" / "settings.json"
+    sp.parent.mkdir(parents=True)
+    sp.write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "some-other-hook"},
+            {"type": "command", "command":
+             "python3 /tmp/old/scripts/operator_restart_guard.py"},
+        ]},
+    ]}}))
+
+    OA._ensure_steer_hook_settings(str(cwd))
+
+    cfg = json.loads(sp.read_text())
+    commands = [h["command"] for grp in cfg["hooks"]["PreToolUse"]
+                for h in grp["hooks"]]
+    assert commands.count(OA._RESTART_GUARD_HOOK_CMD) == 1
+    assert "python3 /tmp/old/scripts/operator_restart_guard.py" not in commands
+    assert "some-other-hook" in commands
+    before = sp.read_text()
+    OA._ensure_steer_hook_settings(str(cwd))
+    assert sp.read_text() == before
 
 
 def test_settings_writer_prunes_stale_steer_hook_paths(store, tmp_path):
@@ -272,9 +308,9 @@ def test_settings_writer_prunes_stale_steer_hook_paths(store, tmp_path):
     sp.parent.mkdir(parents=True)
     stale = {"hooks": {"PostToolUse": [
         {"matcher": "", "hooks": [{"type": "command",
-            "command": "python3 /tmp/the host repo-operator-old1/modules/operator/steer_hook.py"}]},
+            "command": "python3 /tmp/agents-operator-old1/modules/operator/steer_hook.py"}]},
         {"matcher": "", "hooks": [{"type": "command",
-            "command": "python3 /tmp/the host repo-operator-old2/modules/operator/steer_hook.py"}]},
+            "command": "python3 /tmp/agents-operator-old2/modules/operator/steer_hook.py"}]},
         {"matcher": "", "hooks": [{"type": "command", "command": "some-other-hook"}]},
     ]}}
     sp.write_text(json.dumps(stale))
@@ -306,7 +342,7 @@ def test_settings_writer_keeps_current_hook_while_pruning_stale(store, tmp_path)
     sp.write_text(json.dumps({"hooks": {"PostToolUse": [
         {"matcher": "", "hooks": [{"type": "command", "command": OA._STEER_HOOK_CMD}]},
         {"matcher": "", "hooks": [{"type": "command",
-            "command": "python3 /tmp/the host repo-operator-gone/modules/operator/steer_hook.py"}]},
+            "command": "python3 /tmp/agents-operator-gone/modules/operator/steer_hook.py"}]},
     ]}}))
     OA._ensure_steer_hook_settings(str(cwd))
     cfg = json.loads(sp.read_text())

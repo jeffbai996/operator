@@ -1,7 +1,7 @@
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark.png">
-    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.33">
+    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.35">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
@@ -74,13 +74,12 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.33** — recent highlights: the letterbox root-caused in
-> two places (re-entry to a backgrounded tab now resyncs the stage size, and a
-> viewport that flips between healthy and collapsed finally repairs instead of
-> resetting a consecutive-miss counter forever), plus a full light-mode
-> contrast pass, a chat renderer that survives malformed model output
-> (stuttered/unterminated fences, naked ASCII grids → real tables), and
-> restart-free style deploys via template hot-reload.
+> **Status:** **v1.0.35** — recent highlights: an alerts channel that carries a
+> run to your phone (one live card showing what the agent is doing right now,
+> retiring to a completion ping when it finishes), a loop-breaker that catches
+> varied-coordinate flailing rather than only exact repeats, element refs
+> preferred over stale pixel coordinates on a moving page, and **conversations**
+> — the cockpit's single chat becomes a switchable, renamable map of them.
 
 ## What it does
 
@@ -180,6 +179,29 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.35** — **the alerts channel, and a loop-breaker that sees flailing**. A run
+becomes visible without the cockpit open: it posts one live card the moment it
+starts and edits that card in place, showing what the agent is doing *right now*
+rather than a growing wall of completed steps; when the run ends the card retires
+to its final state and a separate completion ping lands as a new message with the
+final frame attached. Edits don't notify and posts do, so that is one card and
+exactly one buzz per run, and change is measured by what the agent *did* rather
+than by the clock — a silent hour costs one edit, not one per poll. The whole
+readout sits inside a single fence, clamped to the card width, with the outcome
+carried by colour instead of bold. Off entirely unless a channel is configured,
+run off the run thread, and unable to break a run by contract. The loop-breaker
+learns the failure it kept missing: a rolling window catches *varied*-coordinate
+flailing (a booking run burned ~25 calls clicking different wrong spots, which
+reset the exact-repeat streak every time), while a `browser_snapshot` clears the
+window because re-grounding on the DOM is the recovery the nudge asks for.
+Browsing gets more honest about the page underneath it — element refs beat stale
+pixel coordinates on a moving page, dialog/hover/download reachability is taught
+rather than discovered by failing, and a collapsed viewport can no longer
+calibrate a click. Also: **conversations** — the cockpit's one-and-only chat
+becomes a map of them, switchable, renamable and deletable, with an untitled chat
+taking the name of the first task run in it; and the release version stops being
+typed into three templates, collapsing to one constant injected everywhere.
 
 **v1.0.33** — **the letterbox, root-caused**. Two long-standing viewport complaints turn out to be one mechanism failing in two places, both found in the viewport flight recorder rather than reasoned about. **Re-entry:** returning to a backgrounded cockpit tab fires `visibilitychange`, not `resize`, so nothing re-beaconed the stage size — and the remote target does drift while you are away, because a force-desktop on navigation re-applies the stored target, which before any beacon has landed is `WIDTHx0` (auto height = the window's native height); `object-fit: contain` renders that as a letterbox. Re-entry now resyncs, and clears the send's no-op guard first — the stage size is normally *unchanged* across the away period, which is exactly why the old code swallowed the re-send. **Collapse:** the repair for a collapsed layout viewport required N *consecutive* gate misses, and any healthy read zeroed the counter — so a viewport flipping between healthy and collapsed (ten such flips in one recorded session) never reached the threshold, and the captured frame kept changing size under the viewer. The collapsed band now scores instead of counting: a collapsed read outweighs a healthy one, so a flip-flop converges on a repair while a lone navigation transient still decays to nothing and never reflows the real window. Also: the version line under the wordmark moves to the chat face.
 

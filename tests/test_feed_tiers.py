@@ -113,7 +113,7 @@ def test_grab_emulated_body_minwidth_page_grows_clip_to_view():
     viewport is view/zoom, but google.com hard-sizes its body to the full
     override width — the clip must grow to the body extent (capped at the view
     target) or the right/bottom of REAL content is cut (the gmail/avatar
-    corner, the owner "cuts off google")."""
+    corner, the owner's "cuts off google")."""
     metrics = {"layoutViewport": {"pageX": 0, "pageY": 0,
                                   "clientWidth": 1280, "clientHeight": 1140},
                "cssLayoutViewport": {"pageX": 0, "pageY": 0,
@@ -392,6 +392,40 @@ def test_do_action_without_page_does_not_poke():
     res = asyncio.run(st._do_action({"kind": "click"}))
     assert not res["ok"]
     assert st._eager_evt is None or not st._eager_evt.is_set()
+
+
+# ── adaptive idle cadence + duplicate publication ───────────────────────────────
+
+def test_publish_frame_advances_id_only_when_pixels_change(monkeypatch):
+    """Static captures stay healthy without becoming new network payloads."""
+    ticks = iter([10.0, 11.0, 12.0])
+    monkeypatch.setattr(OV.time, "monotonic", lambda: next(ticks))
+    st = OV._Streamer()
+
+    assert st._publish_frame(b"frame-a") is True
+    assert (st.frame, st.frame_id, st.frame_ts) == (b"frame-a", 1, 10.0)
+
+    assert st._publish_frame(b"frame-a") is False
+    assert (st.frame, st.frame_id, st.frame_ts) == (b"frame-a", 1, 11.0)
+
+    assert st._publish_frame(b"frame-b") is True
+    assert (st.frame, st.frame_id, st.frame_ts) == (b"frame-b", 2, 12.0)
+
+
+def test_capture_cadence_falls_to_three_fps_only_after_quiet_window():
+    st = OV._Streamer()
+    st._motion_until = 20.0
+
+    assert st._capture_interval(now=19.9, busy=False) == OV.FRAME_INTERVAL
+    assert st._capture_interval(now=20.1, busy=False) == OV.IDLE_FRAME_INTERVAL
+    assert 0.3 <= OV.IDLE_FRAME_INTERVAL <= 0.4
+
+
+def test_busy_capture_cadence_keeps_existing_cdp_share_limit():
+    """The data saver must not increase contention with an active agent."""
+    st = OV._Streamer()
+    st._motion_until = 999.0
+    assert st._capture_interval(now=1.0, busy=True) == 0.45
 
 
 class _WheelSpyPage:

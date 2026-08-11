@@ -206,7 +206,7 @@ class OperatorMCP:
                  surface_factory=get_surface) -> None:
         self.surface_name = surface_name or os.environ.get(
             "OPERATOR_SURFACE", "browser")
-        self.bot = bot or os.environ.get("OPERATOR_BOT", "") or "operator"
+        self.bot = bot or os.environ.get("SQUAD_STORE_BOT", "") or "operator"
         self._factory = surface_factory
         self._surface = None
         self._emu = None            # lazy EmuInput (sandbox game harness)

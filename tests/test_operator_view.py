@@ -18,6 +18,8 @@ Run (same shape as the sibling operator tests) from modules/operator:
 import importlib
 import os
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -37,7 +39,7 @@ _STUB_BASE = ("<!doctype html><title>{% block title %}{% endblock %}</title>"
 
 
 def test_streamer_defaults_to_soft_zoom_and_desktop_width() -> None:
-    # zoom default is 0.8 — two notches under neutral . The
+    # zoom default is 0.8 — two notches under neutral (the owner 2026-07-19). The
     # real "fits the screen" lever is view_w, which reflows the layout without
     # crossing responsive mobile breakpoints; zoom fine-tunes on top.
     s = OV._Streamer()
@@ -144,7 +146,8 @@ def test_model_picker_preserves_selected_label_width_for_caret_position() -> Non
 
 def test_native_select_click_uses_in_page_overlay() -> None:
     # native <select> popups are OS-drawn and unreachable over CDP; a click on
-    # one renders an in-page, CDP-clickable option overlay instead .
+    # one renders an in-page, CDP-clickable option overlay instead (the owner
+    # 2026-07-21, regressed when clicks moved to raw Input.dispatchMouseEvent).
     src = (Path(__file__).resolve().parents[1] / "operator_view.py").read_text(encoding="utf-8")
     assert "_SELECT_SHIM_JS" in src
     assert "async def _maybe_open_select" in src
@@ -202,7 +205,8 @@ def test_ios_page_zoom_remains_available_over_operator_stage_and_input() -> None
 
 
 def test_ios_input_anti_zoom_tracks_picker_and_single_shrinks_placeholder() -> None:
-    # "Message Operator size got bumped way down again and misaligned" . Mechanism: the composer computes 16px
+    # "Message Operator size got bumped way down again and misaligned" (the owner
+    # 2026-07-22, second occurrence). Mechanism: the composer computes 16px
     # (anti-focus-zoom) and is painted down by transform: scale(--op-ipt). The
     # regression was the ::placeholder keeping its OWN 0.74·--chat-scale
     # font-size inside the transformed element — shrunk twice (font-size, then
@@ -245,11 +249,11 @@ def test_splash_category_pills_never_clip_the_first_pill_at_low_zoom() -> None:
     # plain `justify-content: center` centers the overflow and pushes the first
     # pill (Browse) past the flex-START edge, which overflow-scroll can never
     # reach (scrollLeft can't go negative) — so Browse is permanently clipped
-    # and Saved clips off the right . `safe center` falls back
+    # and Saved clips off the right (the owner 2026-07-23). `safe center` falls back
     # to flex-start on overflow, so the row only ever spills off the scrollable
     # END. Pin it in both templates' CSS.
     root = Path(__file__).resolve().parents[1]
-    for path in ("static/operator.css",):
+    for path in ("static/operator.css", "templates/operator_demo.html"):
         css = (root / path).read_text(encoding="utf-8")
         rule = css[css.index(".op-lp-cats {"):]
         rule = rule[:rule.index("}")]
@@ -260,13 +264,13 @@ def test_splash_category_pills_never_clip_the_first_pill_at_low_zoom() -> None:
 
 def test_no_text_input_focus_zooms_on_ios() -> None:
     # "Tapping on the finish-up textbox zooms iOS in, eliminate this for all
-    # text inputs on operator" . iOS focus-zooms any editable
+    # text inputs on operator" (the owner 2026-07-23). iOS focus-zooms any editable
     # computing < 16px. Every operator text input must either compute 16px
     # (roomy controls) or paint-scale from 16px (compact ones) — none may keep
     # a raw sub-16px font on a coarse pointer. This pins BOTH escape hatches so
     # a future carve-out can't silently re-open the zoom.
     root = Path(__file__).resolve().parents[1]
-    for tpl in ("static/operator.css",):
+    for tpl in ("static/operator.css", "templates/operator_demo.html"):
         css = (root / tpl).read_text(encoding="utf-8")
         ios = css[css.index("@supports (-webkit-touch-callout: none)"):]
         # the finish-up box — the specific complaint — is NO LONGER excluded
@@ -282,7 +286,14 @@ def test_no_text_input_focus_zooms_on_ios() -> None:
         # blanket 16px (they used to ACCEPT the zoom): the pill input gets an
         # explicit 16px, and the modal text inputs fall into the blanket
         # selector now that :not(.op-nt-input) is gone from it.
-        assert ".op-nt-pill-in { font-size: 16px !important; }" in ios
+        # Property, not formatting: the pill field still computes at 16px so
+        # iOS never focus-zooms. It gained a paint-scale on 2026-07-31 (it was
+        # rendering at a raw 16px next to 0.68rem labels), so the rule is no
+        # longer a one-liner — pinning the literal line broke on a change that
+        # kept the zoom kill perfectly intact.
+        pill = ios[ios.index(".op-nt-pill-in {"):]
+        pill = pill[:pill.index("}") + 1]
+        assert "font-size: 16px !important;" in pill
         blanket = ios[ios.index("#op textarea:not(#op-input)"):]
         blanket = blanket[:blanket.index("{")]
         assert ":not(.op-nt-input)" not in blanket   # modal inputs now covered
@@ -291,25 +302,27 @@ def test_no_text_input_focus_zooms_on_ios() -> None:
 
 
 def test_slash_palette_removed_saved_tasks_live_on_launchpad() -> None:
-    # The "/" saved-task palette stopped working; removed outright . Saved tasks remain reachable via launchpad cards + the save
+    # The "/" saved-task palette stopped working; removed outright (the owner
+    # 2026-07-22). Saved tasks remain reachable via launchpad cards + the save
     # modal — this pins both the removal and the survivors.
     root = Path(__file__).resolve().parents[1]
     js = (root / "static/js/operator.js").read_text(encoding="utf-8")
     css = (root / "static/operator.css").read_text(encoding="utf-8")
     live = (root / "templates/operator.html").read_text(encoding="utf-8")
-    demo = (root / "templates/operator.html").read_text(encoding="utf-8")
+    demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
 
     for blob in (js, live, demo):
         assert 'id="op-pal"' not in blob
         assert "_opPalKeydown" not in blob
-    assert ".op-pal {" not in css
+    assert ".op-pal {" not in css and ".op-pal {" not in demo
     assert "type / for saved tasks" not in css        # composer empty-state tip gone too
     # survivors: the shared runner the launchpad cards dispatch through, the
     # save modal, and its veil positioning (nearly lost in the removal sweep —
     # .op-veil sat adjacent to the palette CSS but belongs to the modal).
     assert "window._opRunSavedTask = async function(t){" in js
     assert 'id="op-nt-veil"' in live
-    assert ".op-veil { position: fixed; inset: 0;" in css
+    for blob in (css, demo):
+        assert ".op-veil { position: fixed; inset: 0;" in blob
 
 
 def test_splash_is_the_initial_html_boot_surface() -> None:
@@ -324,6 +337,8 @@ def test_splash_is_the_initial_html_boot_surface() -> None:
     assert "hidden" not in splash_open
     # the COLLAPSED assembly ships in the markup (1.0.26): initLaunchpad() runs
     # post-paint, so an expanded first paint flashed the tabs/grid on refresh.
+    demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
+    assert '<div class="op-lp op-lp-collapsed" id="op-lp"' in demo
     assert ".op.op-booting .op-lp { display: flex !important; }" in css
     assert ".op.op-booting .op-urlbar" in css
     assert "classList.remove('op-booting')" in js
@@ -362,7 +377,7 @@ def test_welcome_launchpad_defaults_to_two_rows_and_standalone_add() -> None:
     assert '<span class="op-lp-title" id="op-lp-title">Things to do with Operator</span>' in template
     for label in ("Browse", "Food", "Local", "Shop", "Travel", "Research", "Media", "Saved"):
         assert f'>{label}</button>' in template
-    # Saved is a PERMANENT category : always visible, an empty
+    # Saved is a PERMANENT category (the owner 2026-07-19): always visible, an empty
     # list renders the minimal "No saved tasks" state instead of hiding the tab
     assert 'id="op-lp-tasks-toggle" aria-pressed="false" title="show saved tasks">' in template
     assert 'title="show saved tasks" hidden' not in template
@@ -409,6 +424,41 @@ def test_operator_full_bleed_does_not_strip_the_shared_header_gutter() -> None:
     assert "margin-left: auto; margin-right: auto;" in css
 
 
+@pytest.mark.skip(reason="pins the private repo's README ladder and rev cache-busters; the public README is a prose changelog")
+def test_release_version_and_demo_placeholder_stay_in_sync() -> None:
+    root = Path(__file__).resolve().parents[1]
+    live = (root / "templates/operator.html").read_text(encoding="utf-8")
+    demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
+
+    # ONE version, injected (2026-08-05). The three copies used to be typed into
+    # the template and pinned here a fourth time, so a bump meant four edits and
+    # a red suite when you forgot one. What's left to assert is that nobody
+    # types a literal back in, and that the changelog carries the number on
+    # screen.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", OV.OP_VERSION)
+    assert f"| v{OV.OP_VERSION} |" in readme, "README ladder has no row for this version"
+    assert '<span class="op-ver">{{ OP_VERSION }}</span>' in live
+    assert '<span class="op-lp-mark-ver">v{{ OP_VERSION }}</span>' in live
+    assert ('<span class="op-about-ver"><span class="op-about-ver-v">v</span>'
+            '{{ OP_VERSION }}</span>') in live
+    assert not re.search(r'class="op-ver">\d', live), "hardcoded version is back"
+    # the generated demo keeps its " demo" suffix on whatever the source carries
+    assert '<span class="op-ver">{{ OP_VERSION }} demo</span>' in demo
+    assert "operator.css') }}?rev=v1162" in live   # v1156: midnight code wells to #000 (2026-08-05)
+    assert "js/operator.js') }}?rev=v1155" in live
+    assert "js/operator.js') }}?rev=v1155" in demo
+    assert readme.count("| v1.0.23 |") == 1
+    assert readme.count("| v1.0.25 |") == 1
+    assert readme.count("| v1.0.26 |") == 1
+    assert "the agent drives the browser you're watching" in readme
+    assert 'schedule picker\'s empty state reads "None"' in readme
+    assert "original 10px fullscreen panel margin without zoom drift" in readme
+    assert "controls initialize independently from model discovery" in readme
+    assert "Both splash and rail composers expand" in readme
+    assert "separates into wiring, rendering, and visibility layers" in readme
+    assert "Live demo — contact the administrator for access." in demo
+
 
 def test_example_library_is_large_varied_and_site_backed() -> None:
     root = Path(__file__).resolve().parents[1]
@@ -421,7 +471,7 @@ def test_example_library_is_large_varied_and_site_backed() -> None:
     categories = re.findall(
         r"category: '(delivery|local|shopping|travel|research|media)'", pool)
 
-    # doubled 2026-07-22 
+    # doubled 2026-07-22 (the owner: category ↻ was a no-op at ~6 per category)
     assert 165 <= len(names) <= 220
     assert len(names) == len(set(names))
     assert len(sites) == len(names)
@@ -524,6 +574,7 @@ class FakeStreamer:
         self.status = "idle"
         self.detail = ""
         self.frame = None
+        self.frame_id = 0
         self.frame_ts = 0.0
         self.cur_url = ""
         self.vw = 0
@@ -584,7 +635,7 @@ def _patch_streamer(monkeypatch, mod, fs):
 # 1. DEMO-mode gating — the public-demo / live-cockpit security boundary
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Saved-task routes are live in BOTH flavors  — the demo runs
+# Saved-task routes are live in BOTH flavors (the owner 2026-07-09) — the demo runs
 # them against a demo-scoped store (OPERATOR_TASKS_PATH) and fails closed (404)
 # if that env is missing, so a visitor can never reach the owner's store.
 TASK_ROUTES = [
@@ -691,7 +742,7 @@ def test_unseen_is_zero_in_demo(demo):
 def test_drivers_generic_in_demo(demo):
     client, _ = demo
     dj = client.get("/operator/drivers").get_json()
-    assert dj == {"drivers": [{"key": "bot", "label": "bot"}]}   # no the app names leak
+    assert dj == {"drivers": [{"key": "bot", "label": "bot"}]}   # no squad names leak
 
 
 def test_drivers_named_in_live(live):
@@ -748,7 +799,7 @@ def test_dispatch_demo_forces_gemma_and_default_model_and_demo_true(demo, fake_r
     assert call["bot"] == "gemma"                          # forced, client bot ignored
     assert call["model"] == "gemini-3.6-flash-low"       # off-list model → default
     assert call["effort"] == ""                            # lock owns effort (tier in model string)
-    assert call["demo"] is True                            # strips the app context
+    assert call["demo"] is True                            # strips squad context
 
 
 def test_dispatch_demo_honors_sonnet_alt(demo, fake_runner, monkeypatch):
@@ -767,7 +818,7 @@ def test_dispatch_demo_honors_sonnet_alt(demo, fake_runner, monkeypatch):
 
 
 def test_dispatch_demo_sandbox_surface_forces_sonnet(demo, fake_runner, monkeypatch):
-    # Flash has no computer-use tools : a demo sandbox run
+    # Flash has no computer-use tools (the owner 2026-07-09): a demo sandbox run
     # always gets Sonnet, even when the visitor picked (or defaulted to) Flash.
     client, mod = demo
     _patch_streamer(monkeypatch, mod, FakeStreamer())
@@ -926,7 +977,8 @@ def test_status_happy_path_shape(live, monkeypatch):
     resp = client.get("/operator/status")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert set(body) == {"status", "detail", "has_frame", "vw", "vh", "url", "click", "surface"}
+    assert set(body) == {"status", "detail", "has_frame", "vw", "vh", "url", "click",
+                         "surface", "browser_up"}   # browser_up: Chrome reachability, separate from the feed (the owner 2026-08-02)
     assert body["status"] == "live"
     assert body["url"] == "https://example.test"
     assert body["vw"] == 1280 and body["vh"] == 800
@@ -1107,7 +1159,7 @@ def test_current_driver_masks_bot_name_in_demo(demo, monkeypatch):
     monkeypatch.setattr(mod, "_recent_events",
                         lambda n=8: [{"bot": "claude-a", "action": "click", "ts": now}])
     drv = mod._current_driver()
-    assert drv["bot"] == "assistant"        # never leak the real the app bot name
+    assert drv["bot"] == "assistant"        # never leak the real squad bot name
 
 
 def test_assistant_text_extracts_from_content_blocks(live):
@@ -1167,6 +1219,12 @@ def test_operator_page_renders_and_is_no_store(live):
     assert 'data-kind="extensions"' in resp.get_data(as_text=True)
 
 
+def test_demo_page_does_not_expose_extensions_launcher(demo):
+    client, _ = demo
+    resp = client.get("/operator")
+    assert resp.status_code == 200
+    assert 'data-kind="extensions"' not in resp.get_data(as_text=True)
+
 
 def test_standalone_flag_hides_the_squad_store_chrome(live, monkeypatch):
     """operator-fam: OPERATOR_STANDALONE=1 renders the cockpit full-viewport
@@ -1195,19 +1253,70 @@ def test_frame_serves_placeholder_before_first_capture(live, monkeypatch):
     assert r.mimetype == "image/jpeg"
     assert r.headers["Cache-Control"] == "no-store"
     assert r.headers["X-Operator-Frame"] == "placeholder"
+    assert r.headers["X-Operator-Frame-ID"] == "browser:0"
 
 
 def test_frame_serves_newest_live_frame(live, monkeypatch):
     client, mod = live
     fs = FakeStreamer()
     fs.frame = b"\xff\xd8fake-jpeg-bytes\xff\xd9"
+    fs.frame_id = 7
     _patch_streamer(monkeypatch, mod, fs)
     mod._active_surface["name"] = "browser"
     r = client.get("/operator/frame")
     assert r.status_code == 200
     assert r.headers["X-Operator-Frame"] == "live"
+    assert r.headers["X-Operator-Frame-ID"] == "browser:7"
     assert r.data == fs.frame
     assert fs.last_view > 0     # a pull counts as viewing (feeds the idle-stop)
+
+
+def test_frame_returns_no_jpeg_when_client_already_has_current_frame(live, monkeypatch):
+    client, mod = live
+    fs = FakeStreamer()
+    fs.frame = b"\xff\xd8same-frame\xff\xd9"
+    fs.frame_id = 4
+    _patch_streamer(monkeypatch, mod, fs)
+    mod._active_surface["name"] = "browser"
+
+    r = client.get("/operator/frame?since=browser:4&wait=0")
+
+    assert r.status_code == 204
+    assert r.data == b""
+    assert r.headers["X-Operator-Frame-ID"] == "browser:4"
+    assert fs.last_view > 0
+
+
+def test_waiting_frame_pull_wakes_as_soon_as_pixels_change(live, monkeypatch):
+    client, mod = live
+    fs = FakeStreamer()
+    fs.frame = b"\xff\xd8old\xff\xd9"
+    fs.frame_id = 2
+    _patch_streamer(monkeypatch, mod, fs)
+    mod._active_surface["name"] = "browser"
+
+    def publish() -> None:
+        time.sleep(0.04)
+        fs.frame = b"\xff\xd8new\xff\xd9"
+        fs.frame_id = 3
+        fs.frame_ts = time.monotonic()
+
+    threading.Thread(target=publish, daemon=True).start()
+    started = time.monotonic()
+    r = client.get("/operator/frame?since=browser:2&wait=300")
+    elapsed = time.monotonic() - started
+
+    assert r.status_code == 200
+    assert r.data == fs.frame
+    assert r.headers["X-Operator-Frame-ID"] == "browser:3"
+    assert elapsed < 0.2
+
+
+def test_client_long_polls_by_frame_id_and_handles_empty_updates():
+    js = (Path(__file__).parents[1] / "static/js/operator.js").read_text()
+    assert "wait=900" in js
+    assert "X-Operator-Frame-ID" in js
+    assert "r.status === 204" in js
 
 
 # ── feed self-heal: cycle a decayed sandbox stream ───────────────────────────
@@ -1325,7 +1434,7 @@ def test_mark_animations_complete_whole_rotations() -> None:
                     return css[start:i + 1]
         raise AssertionError(f"unterminated @keyframes {name}")
 
-    # Split tracks : the turn is one
+    # Split tracks (the owner 2026-07-27 "halt in the middle"): the turn is one
     # continuous from->to whole revolution on the `rotate` property; the swell
     # rides `scale` so easing the breath can't stall the rotation.
     greet = keyframes("op-mark-greet-turn")
@@ -1343,13 +1452,13 @@ def test_mobile_type_overrides_win_the_cascade() -> None:
     # A @media query adds NO specificity, so a mobile `.op-lp-title` written
     # ABOVE the base `.op-lp-title` ties on specificity and loses on source
     # order — the phone silently keeps rendering desktop sizes. That shipped
-    # broken for two rounds . Every mobile
+    # broken for two rounds (the owner 2026-07-26: "still not fixed"). Every mobile
     # override of these must sit after the base rule it overrides.
     css = (Path(__file__).resolve().parents[1] / "static/operator.css").read_text(encoding="utf-8")
     # anchor on the base rules by their actual font declarations, which are
     # unique, rather than on indentation (2-space also matches inside 4-space).
     # .op-lp-name deliberately has NO mobile override any more — the cards are
-    # meant to look identical to desktop  — so only the section
+    # meant to look identical to desktop (the owner 2026-07-26) — so only the section
     # heading, the one thing that genuinely doesn't fit, is checked here.
     for selector, base_decl in (
         (".op-lp-title", ".op-lp-title { font: 700 calc(1.35rem"),
@@ -1393,7 +1502,7 @@ def test_chat_task_spinner_is_the_operator_mark_and_yields_to_the_checkmark() ->
     hide_rule = css[css.index(hide):css.index("}", css.index(hide))]
     assert "display: none" in hide_rule
     # and the finished marks still exist to take its place — geometric masked
-    # strokes now, not font glyphs 
+    # strokes now, not font glyphs (the owner 2026-07-26)
     done = css.index('.op-task[data-busy="0"] .op-task-head .ico::before')
     done_rule = css[done:css.index("}", done)]
     assert "mask: url(\"data:image/svg+xml" in done_rule
@@ -1403,7 +1512,7 @@ def test_chat_task_spinner_is_the_operator_mark_and_yields_to_the_checkmark() ->
     assert '.op-task[data-busy="1"] .op-task-head .ico .op-ico-hooks' in css
     assert "@keyframes op-mark-halt" in css
 
-    # No outer ring on this one  — the splash badge wears the
+    # No outer ring on this one (the owner 2026-07-25) — the splash badge wears the
     # ring; the spinner is bare hooks that fill the box.
     ring = css[css.index(".op-task-head .ico .op-ico-ring {"):]
     assert "display: none" in ring[: ring.index("}")]
@@ -1420,7 +1529,7 @@ def test_chat_task_spinner_is_the_operator_mark_and_yields_to_the_checkmark() ->
     assert "em" in ico[: ico.index("}")]
 
 
-# ── collapsed-viewport repair scoring  ──────────────────────
+# ── collapsed-viewport repair scoring (the owner 2026-07-29) ──────────────────────
 # The flight recorder caught the real shape of "the viewport went super narrow":
 # ten `vp-walk 1024->651` events in one session, i.e. the layout viewport
 # FLIPPING between healthy (1024) and collapsed (651) rather than walking. The
@@ -1470,7 +1579,8 @@ def test_reentry_resyncs_the_stage_size_beacon() -> None:
     """Coming back to a backgrounded cockpit tab fires visibilitychange, not
     resize, so nothing re-beaconed and the remote viewport kept whatever it had
     drifted to — before any beacon lands that target is `WIDTHx0`, auto height,
-    which object-fit:contain renders as a letterbox .
+    which object-fit:contain renders as a letterbox (the owner 2026-07-29: "whenever
+    i re-open operator browser after being away, i get a letterboxed one").
 
     Clearing _last is the half that matters: the stage size is normally
     UNCHANGED across the away period, so the send's own no-op guard swallowed
@@ -1482,3 +1592,201 @@ def test_reentry_resyncs_the_stage_size_beacon() -> None:
     assert ".observe(st)" not in js          # still no stage ResizeObserver
     resync = js[js.index("const resync ="):js.index("const resync =") + 120]
     assert "_last = ''" in resync, "re-entry must clear the no-op guard"
+
+
+def test_launchpad_mark_turns_once_when_it_settles() -> None:
+    """the owner 2026-07-30: "when the green ring loading finishes and it becomes
+    Ready ... do a spin animation".
+
+    The settle already ran a decelerating lap on .op-lp-mark-spin, and nothing
+    about it was broken — it was simply invisible. The settle closes the sweep
+    into a FULL ring first, and a full ring is identical at every angle, so
+    there was no way to see the turn. (The CSS says so in its own comment,
+    which is why this is pinned rather than "fixed" in the spin rule.)
+
+    The glyph is asymmetric, so it is the thing that can show a rotation. It
+    must animate `rotate`, not `transform` — op-mark-settle owns transform for
+    the scale, and a second transform animation would overwrite it rather than
+    compose, dropping the cross-fade's scale.
+    """
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/operator.css").read_text(encoding="utf-8")
+
+    rule = css[css.index(".op-mark-settled .op-lp-mark-glyph { opacity: 1;"):]
+    rule = rule[:rule.index("}") + 1]
+    assert "op-mark-settle " in rule, "the existing cross-fade must survive"
+    assert "op-mark-glyph-turn" in rule
+    assert "transform" not in rule, (
+        "use the individual `rotate` property — a transform animation here "
+        "overwrites op-mark-settle's scale instead of composing with it")
+
+    kf = css[css.index("@keyframes op-mark-glyph-turn"):]
+    kf = kf[:kf.index("}", kf.index("to")) + 1]
+    assert "rotate: 0deg" in kf and "rotate: 360deg" in kf
+
+    # the spin wrapper's own settle lap is left exactly as it was
+    assert "animation: op-mark-spin-settle 1.15s cubic-bezier(.25,.8,.3,1) 1 forwards;" in css
+
+    # reduced motion keeps the cross-fade but drops the turn. Anchor on the
+    # block that silences the spinner — there are several reduced-motion
+    # blocks and the nearest one after the keyframes is the error-sweep.
+    rm = css[css.index(".op-lp-mark-spin { animation: none; }"):]
+    rm = rm[:rm.index("}\n") + 400]
+    assert ".op-mark-settled .op-lp-mark-glyph" in rm, \
+        "reduced motion must re-state the glyph rule without the turn"
+    assert "op-mark-glyph-turn" not in rm
+
+
+def test_launchpad_mark_reports_connected_not_ready() -> None:
+    """Renamed by the owner 2026-07-30. The tip is CSS `content`, driven off
+    #op's state — there is no JS string to grep, which is why it gets a pin."""
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/operator.css").read_text(encoding="utf-8")
+    assert '.op-mark-settled .op-lp-mark-tip::before { content: "Connected"; }' in css
+    assert 'content: "Ready"' not in css
+
+
+def _streamer_with_view(view_w, vw=1280, vh=1050):
+    """A bare streamer stand-in — _usable_click_basis only touches these."""
+    s = OV._Streamer.__new__(OV._Streamer)
+    s.view_w, s.view_h = view_w, 0
+    s.vw, s.vh = vw, vh
+    return s
+
+
+def test_a_collapsed_viewport_is_refused_as_a_click_basis() -> None:
+    """Clicks are normalized 0..1 and multiplied by the CSS viewport, so the
+    basis IS the pointer's calibration. _accept_viewport's floor is 320 —
+    written to keep single-digit garbage out of the frame clip — and a
+    collapsed-but-plausible read sails through it.
+
+    The recorder caught `vp-walk 1024->651` twice on 2026-07-31 while the owner was
+    reporting "clicks arent landing in the right place": a click aimed at the
+    right edge would land at 651/1024 = 64% of the way across. The frame path
+    refuses anything under REPAIR_HARD_FLOOR_W; this makes the click path
+    agree."""
+    s = _streamer_with_view(1024)
+    assert s._usable_click_basis(1024, 900)          # healthy
+    assert not s._usable_click_basis(651, 900)       # the logged collapse
+    assert not s._usable_click_basis(320, 900)       # passes the OLD floor
+
+
+def test_a_refused_click_basis_does_not_poison_the_cached_dims() -> None:
+    """_accept_viewport writes self.vw/self.vh as a side effect, and those are
+    the last-resort fallback in _viewport_dims. If a collapsed read reached it,
+    rejecting the read still left the collapse cached for the next caller — so
+    the floor check has to run FIRST."""
+    s = _streamer_with_view(1024, vw=1024, vh=900)
+    assert not s._usable_click_basis(651, 900)
+    assert (s.vw, s.vh) == (1024, 900), "collapsed read must not be cached"
+
+
+def test_click_basis_floor_never_exceeds_the_view_target() -> None:
+    """A deliberately small target (a phone-sized stage) must not have every
+    read rejected by an 800px floor built for desktop."""
+    s = _streamer_with_view(420)
+    assert s._usable_click_basis(420, 800)
+    assert not s._usable_click_basis(300, 800)   # still under MIN_VIEWPORT_W
+
+
+def test_click_basis_without_a_view_target_keeps_the_old_floor() -> None:
+    """Before the first beacon there is no target to measure against; falling
+    back to the permissive floor is better than refusing every click."""
+    s = _streamer_with_view(0)
+    assert s._usable_click_basis(651, 900)
+
+
+def test_save_modal_single_line_fields_are_paint_scaled_like_the_textarea() -> None:
+    """The save dialog's zoom-kill left its two SINGLE-LINE fields at a raw
+    16px while the prompt textarea was painted back to 0.68rem — so the task
+    name and the sites/tools field towered over their own labels (the owner
+    2026-07-31: "placeholder too big in task name, Websites and tools").
+
+    Measured on the iOS declarations injected into Chromium (the @supports
+    gate is WebKit-only and this box has no WebKit runtime deps, so the GATE
+    is not what's pinned here — the geometry inside it is):
+        before   label 10.92 | name 16.00 | prompt 10.88 | sites 16.00
+        after    label 10.92 | name 10.88 | prompt 10.88 | sites 10.88
+
+    The chip field is a FLEX item and deliberately gets only the paint half of
+    the trick — widening a flex child fights its basis, which is what the
+    original "no transform (flex item)" note was right about.
+    """
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/operator.css").read_text(encoding="utf-8")
+
+    gate = css.index("@supports (-webkit-touch-callout: none)")
+    blk = css[gate:gate + 5200]
+
+    name = blk[blk.index("input.op-nt-input {"):]
+    name = name[:name.index("}") + 1]
+    assert "font-size: 16px !important;" in name      # the zoom kill stays
+    assert "transform: scale(var(--op-nts))" in name  # ...painted back down
+    assert "width: calc(100% / var(--op-nts));" in name
+    assert "margin-bottom:" in name, "must reclaim the phantom height"
+
+    pill = blk[blk.index(".op-nt-pill-in {"):]
+    pill = pill[:pill.index("}") + 1]
+    assert "font-size: 16px !important;" in pill
+    assert "transform: scale(0.68)" in pill
+    assert "transform-origin: left center" in pill, \
+        "the chip row centres its items; a top origin lifts the text off the line"
+    assert "width:" not in pill and "flex:" not in pill, \
+        "a flex child must not be widened — that fights its basis"
+
+
+def test_save_modal_sites_label_asks_a_question() -> None:
+    """Matched to its sibling 'What would you like Operator to do?' (the owner
+    2026-07-31). Both templates — the demo mirror ships to the public port."""
+    root = Path(__file__).resolve().parents[1]
+    for tpl in ("templates/operator.html", "templates/operator_demo.html"):
+        html = (root / tpl).read_text(encoding="utf-8")
+        assert "What websites and tools would you like Operator to use?" in html, tpl
+        assert "Websites and tools Operator can use" not in html, tpl
+
+
+# ── browser-up probe: the launchpad must be able to tell a dead browser from an
+# idle feed. /operator/status reports the STREAMER, which rests at 'idle' either
+# way, so the mark settled into its healthy pose over a browser that was gone
+# (the owner 2026-08-02). ─────────────────────────────────────────────────────────
+
+def test_status_reports_browser_reachability_separately_from_the_feed(live, monkeypatch) -> None:
+    client, mod = live
+    monkeypatch.setattr(mod, "_cdp_up_cached", lambda: False)
+    d = client.get("/operator/status").get_json()
+    # the feed is idle (no streamer running in tests) yet the browser is down —
+    # the whole point is that these two are allowed to disagree
+    assert d["browser_up"] is False
+    assert d["status"] != "error", "streamer state must be reported unchanged"
+
+
+def test_cdp_probe_never_blocks_the_status_request(live, monkeypatch) -> None:
+    """A WEDGED Chrome is exactly when _cdp_alive() burns its full timeout, so
+    the probe must run off the request path."""
+    client, mod = live
+    mod._cdp_probe.update(up=None, ts=0.0, running=False)
+
+    calls = {"n": 0}
+
+    def _slow_probe():
+        calls["n"] += 1
+        raise AssertionError("probe must not run inline on the request thread")
+
+    monkeypatch.setattr(mod._streamer, "_cdp_alive", _slow_probe)
+    # First call kicks off a background probe and returns immediately with the
+    # not-yet-known value; the assertion inside _slow_probe would only fire on
+    # the worker thread, so the request itself must still succeed.
+    d = client.get("/operator/status").get_json()
+    assert d["browser_up"] is None, "unprobed state is None, not a guessed False"
+
+
+def test_probe_is_cached_not_refired_every_poll(live, monkeypatch) -> None:
+    client, mod = live
+    import time as _t
+    mod._cdp_probe.update(up=True, ts=_t.monotonic(), running=False)
+    calls = {"n": 0}
+    monkeypatch.setattr(mod._streamer, "_cdp_alive",
+                        lambda: (calls.__setitem__("n", calls["n"] + 1), True)[1])
+    for _ in range(5):
+        client.get("/operator/status")
+    assert calls["n"] == 0, "a fresh cache entry must serve every poll"

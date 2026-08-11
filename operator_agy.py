@@ -26,7 +26,7 @@ from operator_trace import (action_label, clean_gemma_text, extract_handoff,
 # `content` is pure scratch reasoning (agy "thinking out loud" without acting).
 # A long unbroken run of these is the stuck-in-a-loop pattern (#40, e.g. Flash
 # 3.5 re-describing a PDF instead of scrolling it). Warn once when the streak
-# crosses this; never auto-kill the run .
+# crosses this; never auto-kill the run (the owner 2026-06-30).
 LOOP_WARN_STREAK = 6   # consecutive no-progress planner steps
 
 
@@ -151,7 +151,7 @@ def _drop_duplicate_thinking(r, raw_content: str, answer: str) -> None:
     tool_calls that's CoT and we tag it "thinking" — correct. But Flash then
     repeats the SAME text on the final tool_call-less step, which becomes the
     answer, so the identical paragraph rendered twice: last trace step AND
-    reply bubble .
+    reply bubble (the owner 2026-07-29).
 
     Can't be prevented on the way in — the thinking copy is emitted live,
     before we know an identical answer is coming — so it's dropped when the
@@ -249,14 +249,14 @@ def parse_trajectory(path: str, r) -> bool:
                     # impossible for raw thinking/work-summary text — including any
                     # checklist + file:// links — to become the user-visible reply if
                     # the turn ends (or is cut off mid-loop) before a real `content`
-                    # answer ever arrives .
+                    # answer ever arrives (the owner 2026-06-30, #37/#40).
                     r.messages.append({"ts": time.time(), "role": "thinking",
                                           "text": _ck})
             _had_tool_calls = bool(o.get("tool_calls"))
             ans = o.get("content")
             _has_content = isinstance(ans, str) and bool(ans.strip())
             if _has_content and _had_tool_calls:
-                # FLASH-3.5 SHAPE : Gemini Flash rides its
+                # FLASH-3.5 SHAPE (the owner 2026-07-22): Gemini Flash rides its
                 # per-step planning line in `content` WITH the step's
                 # tool_calls attached — other agy models put it in `thinking`
                 # and keep content empty until the final answer. Narration

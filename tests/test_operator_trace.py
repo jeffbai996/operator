@@ -155,7 +155,7 @@ def test_ascii_table_gets_fenced():
 
 # ── strip_plan_scaffold ──────────────────────────────────────────────────────
 # Flash 3.6 dumped its whole running Plan:/Status: scratchpad into the FINAL
-# answer content  — the leading scaffold blocks must be shed
+# answer content (the owner 2026-07-28) — the leading scaffold blocks must be shed
 # so only the real answer reaches the reply bubble.
 
 _FLASH_DUMP = (

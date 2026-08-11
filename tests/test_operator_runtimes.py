@@ -79,11 +79,13 @@ def test_claude_demo_is_playwright_only(fake_home):
     assert "env" not in servers["playwright"]   # demo attaches via OPERATOR_DEMO_CDP
 
 
-def test_claude_cockpit_requires_the_visible_chrome(fake_home):
-    """A cockpit run refuses the invisible headless fallback: if the feed's
-    Chrome is unreachable, the MCP fails loudly instead (2026-07-20)."""
+def test_claude_cockpit_pins_the_operator_chrome(fake_home):
+    """The bot-Chrome split (218e807) flipped the shared launcher's default to
+    :9224; a cockpit run must pin the browser the feed streams (:9222) and
+    refuse the invisible headless fallback (wrong-browser regression 2026-07-20)."""
     plan = RT.build_cmd("claude", _spec())
     servers = json.load(open(plan.mcp_config_path))["mcpServers"]
+    assert servers["playwright"]["env"]["BROWSE_CHROME_PORT"] == "9222"
     assert servers["playwright"]["env"]["OPERATOR_REQUIRE_CDP"] == "1"
 
 
@@ -125,15 +127,16 @@ def test_codex_desktop_surface_disables_playwright():
 def test_codex_demo_wraps_in_sandbox_and_isolated_home():
     plan = RT.build_cmd("codex", _spec(demo=True))
     assert plan.cmd[0] == "bash" and plan.cmd[1].endswith("sandbox.sh")
-    assert "operator-sandbox/codex" in plan.env["CODEX_HOME"]
+    assert "operator-demo/codex" in plan.env["CODEX_HOME"]
     assert "mcp_servers.playwright.enabled=false" not in plan.cmd
     assert not any("BROWSE_CHROME_PORT" in a for a in plan.cmd)   # demo: no pin
 
 
-def test_codex_cockpit_requires_the_visible_chrome():
-    """codex scrubs the env it hands MCP servers, so the contract must ride
-    the per-server config overrides."""
+def test_codex_cockpit_pins_the_operator_chrome():
+    """codex scrubs the env it hands MCP servers, so the :9222 pin must ride
+    the per-server config overrides (see test_claude_cockpit_pins...)."""
     plan = RT.build_cmd("codex", _spec())
+    assert 'mcp_servers.playwright.env.BROWSE_CHROME_PORT="9222"' in plan.cmd
     assert 'mcp_servers.playwright.env.OPERATOR_REQUIRE_CDP="1"' in plan.cmd
 
 
@@ -175,10 +178,12 @@ def test_agy_browser_run_strips_stale_control_entry(fake_home):
     assert servers["user-server"]["command"] == "keep-me"   # others preserved
 
 
-def test_agy_cockpit_requires_the_visible_chrome(fake_home):
-    """agy inherits its process env into stdio MCPs, so the contract rides
-    plan.env — and stays OUT of the shared ~/.gemini config."""
+def test_agy_cockpit_pins_the_operator_chrome(fake_home):
+    """agy inherits its process env into stdio MCPs, so the :9222 pin rides
+    plan.env — and must stay OUT of the shared ~/.gemini config, which plain
+    gemma bot sessions also read (those keep the bots' :9224 default)."""
     plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
+    assert plan.env["BROWSE_CHROME_PORT"] == "9222"
     assert plan.env["OPERATOR_REQUIRE_CDP"] == "1"
     servers = json.load(open(_agy_cfg(fake_home)))["mcpServers"]
     assert "env" not in servers["playwright"]

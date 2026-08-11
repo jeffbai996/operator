@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6.4 6.4 11.2 11.2" fill="none"
+     shape-rendering="geometricPrecision">
+  <!-- Operator favicon = the splash-spinner logo (.op-act-mark), on
+       transparency. the owner 2026-07-25: thinner line weight, WHITE not green.
+
+       White reads on the dark tab strip and stays neutral against the green
+       host-app roundel, so the two are told apart by SHAPE (spiral vs ring)
+       and not by fighting for the same colour.
+
+       Structure (the owner 2026-07-26, the "bump on top"): the outer ring is drawn
+       ONCE as a circle, not as two capped half-arcs. The old paths stacked a
+       round start cap + an arc end + an inner-arc start all at the exact apex
+       (12,7.2) — triple stroke coverage whose accumulated alpha rendered as a
+       brighter, fatter nub at the top of the ring. The spirals now start ~14°
+       off the junction points so their caps sit clear of the circle's band.
+       Stroke 1.3 (down from 1.4) per the same note. -->
+  <g fill="none" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round">
+    <circle cx="12" cy="12" r="4.8"/>
+    <path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"/>
+    <path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"/>
+  </g>
+</svg>

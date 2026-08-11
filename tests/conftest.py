@@ -15,6 +15,11 @@ os.environ.setdefault("OPERATOR_HISTORY_PATH", os.path.join(_tmp, "history.db"))
 os.environ.setdefault("OPERATOR_SESSION_PATH", os.path.join(_tmp, "session.json"))
 os.environ.setdefault("OPERATOR_STEER_PATH", os.path.join(_tmp, "steer.ndjson"))
 os.environ.setdefault("OPERATOR_TASKS_PATH", os.path.join(_tmp, "tasks.json"))
+# Run-completion pings hang off the same terminal transition as the ledger, so
+# any test that walks a runner to done would post to the real alerts channel on
+# a host that has this exported. Blank (not setdefault) — the whole point is to
+# beat an inherited value.
+os.environ["OPERATOR_PING_CHANNEL"] = ""
 # NOTE: no OPERATOR_STATE_PATH here — several suites isolate the runner's
 # state file by monkeypatching HOME per-test, and a suite-wide env override
 # outranks that (one shared state file = cross-test transcript pollution;
