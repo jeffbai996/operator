@@ -1,0 +1,38 @@
+# pokemon_emerald.yaml — Pokémon Emerald (GBA) on fraggames/EmulatorJS, run
+# FULLSCREEN in the operator sandbox (calibrated 2026-07-21 against a live
+# 960×768 capture; the EJS player fullscreen button makes the game canvas fill
+# the viewport at 0,0 → 960×712, so region coords ARE screen coords).
+#
+# INPUT — read this before wiring a macro. EmulatorJS binds keydown on the DOM,
+# so raw X11 keys to the window (the `key` computer action / surface.key) do
+# NOT reliably reach the emulator. The game IS driven through the emulator's
+# own gameManager.simulateInput(player, buttonId, value) — verified live: it
+# advanced the title → NEW GAME/OPTION menu when X11 Enter did nothing. Button
+# ids (EmulatorJS GBA, dumped from window.EJS_emulator.controls[0]):
+#   0=A  8=B  2=Select  3=Start  4=Up  5=Down  6=Left  7=Right  10=L  11=R
+# The default keyboard bindings, if a key path is ever needed: A=X B=Z
+# Start=Enter Select=V dpad=arrows L=Q R=E.
+#
+# So this map is perception-only (region OCR + menu-cursor color). The action
+# side belongs in an emulator-input helper, not click_target — a chess board
+# is click-addressable; a GBA game is button-driven.
+game: pokemon_emerald
+viewport: [960, 768]
+regions:
+  # whole game canvas in EJS fullscreen (letterboxed top/bottom by ~28px)
+  screen: [0, 28, 960, 656]
+  # GBA native is 240x160 (3:2). Centered inside the letterboxed screen the
+  # active image is ~984 wide clamped to 960 → these are the play-field thirds
+  top: [0, 28, 960, 219]
+  middle: [0, 247, 960, 218]
+  bottom: [0, 465, 960, 219]
+  # dialogue/textbox sits across the bottom quarter in the overworld
+  textbox: [40, 520, 880, 150]
+colors:
+  # the light menu-selection box (Emerald's white highlighted row) — lets a
+  # perceive pass report WHICH menu row is selected without OCR
+  menu_hi: {lo: [0, 0.0, 0.85], hi: [40, 0.12, 1.0], min_area: 3000}
+ocr:
+  - {label: textbox, region: textbox, min_conf: 45}
+  - {label: screen, region: screen, min_conf: 40}
+templates: {}

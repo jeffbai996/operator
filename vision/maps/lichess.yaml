@@ -3,7 +3,7 @@
 # the expected squares with these rects). The old seed was measured for the
 # 1280×800 browser surface and never re-checked in the sandbox — that plus an
 # empty template set is why perceive returned zero targets ("lichess harness
-# not working", 2026-07-21).
+# not working", Jeff 2026-07-21).
 #
 # The board grid emits 64 STATIC targets a1..h8 (White at the bottom, the
 # lichess default for the White side) — so game_macro can `click_target "e2"`
