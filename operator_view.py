@@ -263,7 +263,13 @@ class _Streamer:
         owner = self._vp_owner
         if not owner or cid == owner:
             return True
-        ts = self._vp_seen.get
+        # Read the OWNER's last frame-pull. `self._vp_seen.get` without the key
+        # binds the dict method: never None, so the comparison below ran
+        # float - builtin and raised TypeError on the only path that can
+        # release a stale owner. The aspect was therefore never handed over and
+        # the stage stayed letterboxed — the symptom v1.0.33 added this
+        # ownership machinery to fix (caught 2026-08-11, shipped since 1.0.33).
+        ts = self._vp_seen.get(owner)
         return ts is None or time.monotonic() - ts > VP_OWNER_IDLE_S
 
     def _vp_log(self, kind: str, detail: str = "") -> None:
