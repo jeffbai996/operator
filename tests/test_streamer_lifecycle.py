@@ -198,6 +198,30 @@ def test_first_viewer_demand_starts_closed_chrome(monkeypatch):
     assert s._user_closed is False
 
 
+def test_chrome_attach_script_honors_launcher_override(monkeypatch):
+    """operator-fam's CDP lives on :9333 via its own scheduled-task launcher
+    (opfam-chrome.sh) -- generic chrome-attach.sh defaults to :9222 with no
+    way to know it should target :9333, so it silently no-ops ("already
+    running" on the WRONG port) instead of ever starting the fam browser
+    (the owner 2026-08-03: "connecting to the operator page didn't trigger a
+    restart"). OPERATOR_CHROME_LAUNCHER must win over both DEMO and the
+    chrome-attach.sh default."""
+    monkeypatch.setenv("OPERATOR_CHROME_LAUNCHER", "~/local-projects/operator-fam/opfam-chrome.sh")
+    import os
+    assert OV._Streamer._chrome_attach_script() == os.path.expanduser(
+        "~/local-projects/operator-fam/opfam-chrome.sh")
+
+
+def test_chrome_attach_script_falls_back_without_override(monkeypatch):
+    monkeypatch.delenv("OPERATOR_CHROME_LAUNCHER", raising=False)
+    import os
+    expected = (
+        "~/local-projects/operator-demo/op-demo-chrome.sh" if OV.DEMO
+        else "~/agents/browse/chrome-attach.sh"
+    )
+    assert OV._Streamer._chrome_attach_script() == os.path.expanduser(expected)
+
+
 def test_closed_chrome_stays_closed_without_operator_demand(monkeypatch):
     """Constructing the module streamer/server must not eagerly launch Chrome."""
     launches = []
@@ -302,6 +326,37 @@ def test_attach_fallback_page_leaves_about_blank(monkeypatch, streamer):
     assert navs and navs[0]["url"] == OV._NEWTAB_DATA_URL, \
         f"fallback page must be navigated to the landing URL: {ctx.sess.sent}"
     assert streamer.status == "live"
+
+
+def test_attach_existing_blank_page_lands_on_home(monkeypatch, streamer):
+    """A freshly launched Chrome already has ONE tab — its own default
+    new-tab page — so `ctx.pages` is non-empty and the code takes the
+    'reuse existing pages' branch, never reaching the no-pages fallback
+    above. That existing page sits on about:blank and nothing navigates
+    it (the owner 2026-08-04, reproduced live: 'right now it lands in
+    about:blank' after auto-heal relaunches Chrome). The fix must treat a
+    blank EXISTING page the same as having no page at all: land it on the
+    same landing URL as the true no-pages case, not leave it inert."""
+    ctx = FakeCtx(n_pages=1)          # FakePage defaults .url = "about:blank"
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+    asyncio.run(streamer._attach())
+    assert ctx.new_pages == 0, "must reuse the existing tab, not open a second one"
+    navs = [p for m, p in ctx.sess.sent if m == "Page.navigate"]
+    assert navs and navs[0]["url"] == OV._NEWTAB_DATA_URL, \
+        f"the sole existing page is blank and must be navigated home: {ctx.sess.sent}"
+
+
+def test_attach_existing_real_page_is_left_alone(monkeypatch, streamer):
+    """The counterpart to the test above: a page that's actually showing
+    something must NEVER be redirected out from under the user on attach."""
+    ctx = FakeCtx(n_pages=1)
+    ctx.pages[0].url = "https://example.com/dashboard"
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+    asyncio.run(streamer._attach())
+    navs = [p for m, p in ctx.sess.sent if m == "Page.navigate"]
+    assert not navs, f"a real page must not be navigated away on attach: {navs}"
 
 
 def test_attach_forces_desktop_identity(monkeypatch, streamer):
@@ -686,7 +741,8 @@ def test_walked_zone_never_repairs_only_collapse_band_does(streamer):
 def test_agent_run_rising_edge_reasserts_clobbered_view_metrics(monkeypatch, streamer):
     """Run START: the agent's Playwright MCP attaches to the shared Chrome and
     its emulation defaults drop our device-metrics override, so the canvas
-    snaps back to the window's native width the instant a task begins .
+    snaps back to the window's native width the instant a task begins (the owner
+    2026-07-29).
 
     The repair loop cannot catch this — its gate only fires BELOW
     REPAIR_HARD_FLOOR_W and an attach makes the page WIDER — so the rising edge
@@ -774,3 +830,170 @@ def test_run_start_reassert_stays_quiet_when_viewport_already_matches(
     kinds = [e["kind"] for e in streamer._vp_events]
     assert "run-start-reassert" not in kinds, \
         f"viewport already matches — must not touch emulation: {kinds}"
+
+
+# ------------------------------------------------- active-tab following ----
+# the owner 2026-07-29: "the issue where the operator browser doesn't focus on the
+# tab that the bot is working on is still present" — after fixes on 07-08,
+# 07-22 and 07-27. Root cause was a false premise, not a missing patch:
+# _follow_active_tab decided foreground with document.visibilityState, and on
+# the operator's CDP-driven Chrome EVERY tab answers 'visible' (measured: 4
+# tabs, all 'visible', all hasFocus()==true, because an unfocused automation
+# window never computes per-tab occlusion). So the `cur_vis == "visible"`
+# early-return always matched and the view froze. Note FakePage.evaluate
+# already returns "visible" unconditionally — the stub reproduces the real
+# browser faithfully, which is why these tests are meaningful.
+#
+# The fix reads Chrome's own target list (/json/list, most-recently-activated
+# first). These tests pin that behavior so the class can't come back.
+
+
+def _follow_setup(monkeypatch, streamer, n_pages, active_index, busy=True):
+    """Wire a streamer onto n fake tabs and declare which one is REALLY front."""
+    ctx = FakeCtx(n_pages=n_pages)
+    streamer._browser = FakeBrowser(ctx)
+    for i, p in enumerate(ctx.pages):
+        p.url = f"https://tab{i}.test/"
+    streamer._page = ctx.pages[0]
+    # stable synthetic target ids, and an active id pointing at active_index
+    ids = {p: f"TARGET{i}" for i, p in enumerate(ctx.pages)}
+
+    async def _pid(self, pg):
+        return ids.get(pg)
+    monkeypatch.setattr(OV._Streamer, "_page_target_id", _pid)
+    monkeypatch.setattr(
+        OV._Streamer, "_active_target_id",
+        lambda self: (f"TARGET{active_index}" if active_index is not None else None))
+
+    class _Runner:
+        def is_running(self):
+            return busy
+    monkeypatch.setattr(OV.operator_agent, "runner", _Runner())
+    monkeypatch.setattr(streamer, "_update_viewport", lambda: None)
+
+    async def _force(pg):
+        return None
+    monkeypatch.setattr(streamer, "_force_desktop_page", _force)
+    return ctx
+
+
+def test_follows_the_real_front_tab_when_every_tab_claims_visible(
+        monkeypatch, streamer):
+    """The regression itself: same URLs, no navigation, agent on tab 2."""
+    ctx = _follow_setup(monkeypatch, streamer, n_pages=3, active_index=2)
+    # prime _tab_urls so the url-diff heuristic sees NO movement — the only
+    # thing that can move the view here is the active-target check.
+    streamer._tab_urls = {p: p.url for p in ctx.pages}
+    asyncio.run(streamer._follow_active_tab())
+    assert streamer._page is ctx.pages[2], (
+        "must stream the tab Chrome reports as active; visibilityState says "
+        "'visible' for all three so it cannot be the deciding signal")
+
+
+def test_no_churn_when_already_on_the_front_tab(monkeypatch, streamer):
+    """Idempotent: already correct → no page swap, no emulation reset."""
+    ctx = _follow_setup(monkeypatch, streamer, n_pages=3, active_index=0)
+    streamer._tab_urls = {p: p.url for p in ctx.pages}
+    streamer._cdp = object()
+    sentinel = streamer._cdp
+    asyncio.run(streamer._follow_active_tab())
+    assert streamer._page is ctx.pages[0]
+    assert streamer._cdp is sentinel, "no-op check must not drop the CDP session"
+
+
+def test_falls_back_to_visibility_when_target_list_unreachable(
+        monkeypatch, streamer):
+    """A wedged/unreachable CDP HTTP endpoint must not break following.
+
+    active_index=None makes _active_target_id return None; behavior then
+    reverts to the old visibility probe (a no-op where all tabs claim visible,
+    which is exactly the pre-existing behavior — never worse)."""
+    ctx = _follow_setup(monkeypatch, streamer, n_pages=2, active_index=None)
+    streamer._tab_urls = {p: p.url for p in ctx.pages}
+    asyncio.run(streamer._follow_active_tab())
+    assert streamer._page is ctx.pages[0], "fallback path must not crash"
+
+
+def test_target_id_cache_drops_closed_tabs(monkeypatch, streamer):
+    """The id cache is bounded by LIVE tabs, not by every tab ever opened."""
+    ctx = _follow_setup(monkeypatch, streamer, n_pages=2, active_index=0)
+    streamer._tab_urls = {p: p.url for p in ctx.pages}
+    # a page that is gone from ctx.pages still sitting in the cache
+    ghost = FakePage(ctx)
+    streamer._target_ids[ghost] = "TARGET_GHOST"
+    for p in ctx.pages:
+        streamer._target_ids[p] = "x"
+    asyncio.run(streamer._follow_active_tab())
+    assert ghost not in streamer._target_ids, \
+        "closed-tab entries must be pruned so the cache can't grow unbounded"
+
+
+# ---- dead-driver self-heal (the 2026-08-10 operator-fam incident) ----------
+# The Playwright node driver died (uncaught CRPage frame-detach race on
+# Google's cookie-rotation page). The old run_action posted coroutines onto
+# the DEAD loop object left behind by the abnormal exit, so every click hung
+# the full 30s and the cockpit read "browser disconnected" until a manual
+# page refresh outlived the relaunch backoff.
+
+def test_run_action_refuses_dead_loop_and_forces_reattach(streamer, monkeypatch):
+    calls = []
+    monkeypatch.setattr(streamer, "ensure_running", lambda: calls.append(1))
+    # a loop that exists but is not running == the post-crash state
+    dead = asyncio.new_event_loop()
+    dead.close()
+    streamer._loop = dead
+    streamer._running = True
+    streamer._backoff_until = time.monotonic() + 60   # deep in backoff
+    out = streamer.run_action({"kind": "click_at", "x": 1, "y": 1})
+    assert out["ok"] is False
+    assert "reconnecting" in out["error"]
+    # the force path must clear the backoff so the relaunch is immediate
+    assert streamer._backoff_until == 0.0
+    assert calls, "ensure_running was not invoked"
+
+
+def test_run_action_driver_death_error_forces_reattach(streamer, monkeypatch):
+    monkeypatch.setattr(streamer, "ensure_running", lambda: None)
+    loop = asyncio.new_event_loop()
+    import threading as _t
+    t = _t.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    try:
+        streamer._loop = loop
+        streamer._running = True
+
+        async def dies(action):
+            raise RuntimeError("Target page, context or browser has been closed")
+        monkeypatch.setattr(streamer, "_do_action", dies)
+        streamer._backoff_until = time.monotonic() + 60
+        out = streamer.run_action({"kind": "click_at", "x": 1, "y": 1})
+        assert out["ok"] is False
+        assert "reconnecting" in out["error"]
+        assert streamer._backoff_until == 0.0
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2)
+
+
+def test_run_action_ordinary_errors_do_not_force_reattach(streamer, monkeypatch):
+    monkeypatch.setattr(streamer, "ensure_running", lambda: None)
+    loop = asyncio.new_event_loop()
+    import threading as _t
+    t = _t.Thread(target=loop.run_forever, daemon=True)
+    t.start()
+    try:
+        streamer._loop = loop
+        streamer._running = True
+
+        async def fails(action):
+            return {"ok": False, "error": "element not found"}
+        monkeypatch.setattr(streamer, "_do_action", fails)
+        streamer._backoff_until = 0.0
+        marker = time.monotonic() + 60
+        streamer._backoff_until = marker
+        out = streamer.run_action({"kind": "click", "value": "nope"})
+        assert out == {"ok": False, "error": "element not found"}
+        assert streamer._backoff_until == marker   # untouched
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2)

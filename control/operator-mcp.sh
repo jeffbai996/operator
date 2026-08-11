@@ -4,7 +4,7 @@
 #
 # Registered per-run by operator_agent.py alongside the Playwright MCP. The
 # active surface arrives in OPERATOR_SURFACE (browser | desktop-sandbox |
-# desktop-real); the bot name for the trace in OPERATOR_BOT.
+# desktop-real); the bot name for the trace in SQUAD_STORE_BOT.
 #
 # Python resolution: control/venv if present (playwright + numpy + pillow +
 # pytesseract + pyyaml — see requirements.txt), else the vision venv (no

@@ -74,6 +74,11 @@ def test_browser_wrap_prepends_directive_and_keeps_task_last():
     assert out.endswith("USER REQUEST: Find the cheapest flight")
 
 
+def test_demo_browser_directive_drops_the_onepassword_hint():
+    assert "1PASSWORD" in P.build_browser_directive(demo=False)
+    assert "1PASSWORD" not in P.build_browser_directive(demo=True)
+
+
 def test_desktop_wrap_names_the_surface():
     out = P.wrap_task("open a terminal", "desktop-sandbox", False)
     assert "surface: desktop-sandbox" in out and "LIVE DESKTOP" in out
@@ -87,5 +92,41 @@ def test_persona_desktop_swap_has_no_unfilled_placeholder():
 
 
 def test_demo_persona_strips_squad_identity():
-    p = P.build_persona("You are claude-a." + P.BROWSER_MANDATE, "browser", True)
-    assert "claude-a" not in p
+    p = P.build_persona("You are Claude-a." + P.BROWSER_MANDATE, "browser", True)
+    assert "Claude-a" not in p
+
+
+# ── 2026-08-02: frozen-page and reachability gaps (the owner — bots getting stuck
+# on real sites even while screenshotting/clicking correctly). The tools
+# already existed upstream in @playwright/mcp; the agent was never told to
+# reach for them. ─────────────────────────────────────────────────────────
+
+def test_browser_directive_points_to_dialog_before_giving_up():
+    d = P.build_browser_directive(demo=False)
+    assert "browser_handle_dialog" in d
+    # the stuck-browser hand-off criterion must name the dialog check as a
+    # precondition, or the model still hands off on a dismissable dialog
+    handoff = d[d.index("BROWSER is clearly"):d.index("BROWSER is clearly") + 400]
+    assert "browser_handle_dialog" in handoff
+
+def test_browser_directive_points_to_hover_before_pixels():
+    d = P.build_browser_directive(demo=False)
+    assert "browser_hover" in d
+    # must come before the vision/pixel escalation, not after — hover is the
+    # cheaper thing to try first
+    assert d.index("browser_hover") < d.index("VISION IS YOUR FALLBACK")
+
+def test_browser_directive_warns_pixel_clicks_need_the_target_in_frame():
+    d = P.build_browser_directive(demo=False)
+    # the pre-existing "SCROLL TO FIND" paragraph already says "scroll" for
+    # DOM-mode targets, so a bare substring check here would pass without
+    # the new content — anchor on the pixel-click sentence specifically.
+    vision = d[d.index("VISION IS YOUR FALLBACK"):]
+    assert "off-screen" in vision
+
+def test_browser_directive_is_honest_about_download_reachability():
+    d = P.build_browser_directive(demo=False)
+    assert "download" in d.lower()
+    # must not tell the model to invent/guess a save path for a browser
+    # download — that's the exact failure this line exists to prevent
+    assert "invent" in d or "guess" in d

@@ -1,9 +1,10 @@
 """Browser operator — live view + full remote control of the logged-in Chrome.
 
 One self-contained surface (full-screen on an iPad over Tailscale) that shows the
-real Chrome the app computer-use drives and lets you take the wheel live —
+real Chrome the squad's computer-use drives and lets you take the wheel live —
 click, type, navigate — interleaving freely with whatever a bot is doing in the
-same browser (shared mouse; last action wins). "See it, steer it." 
+same browser (shared mouse; last action wins). "See it, steer it." (the owner
+2026-06-25; refined for click/keyboard control + more controls 2026-06-26.)
 
 Zero new deps — playwright + aiohttp are already in the host-app venv:
   - VIEW: a background thread holds a Playwright connect_over_cdp() attach to the
@@ -16,6 +17,7 @@ Zero new deps — playwright + aiohttp are already in the host-app venv:
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 from collections import deque as _deque
@@ -24,12 +26,22 @@ from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, render_template, request, send_file
 import operator_agent  # the headless-claude agent runner (option 1)
+import operator_prefs  # server-side cockpit settings (the landing page)
 import operator_tasks as operator_tasks_store  # saved-task store (#30)
 
 import os as _os_cfg
-# DEMO isolation the public demo: a second instance runs with OPERATOR_DEMO=1 and
+
+# THE release version. It used to be typed into the template three times and
+# pinned in the tests a fourth, so a bump meant four edits and a red suite when
+# you forgot one (2026-08-05: two hand-bumps in a row did exactly that). One
+# constant now, injected into every template this blueprint renders — including
+# the generated public demo, whose label appends " demo" to whatever it finds.
+# The README's version ladder must carry a row for this version; a test asserts
+# it, so the changelog cannot silently fall behind the number on screen.
+OP_VERSION = "1.0.35"
+# DEMO isolation (the public demo): a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
-# unset for the owner live cockpit (-> no behavior change); set only by demo_server.py.
+# unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
 DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
 # Standalone full-function instances (operator-fam): the cockpit is the whole
 # app — the template hides the host-app site chrome and takes the viewport.
@@ -45,10 +57,12 @@ _VIEW_FOLLOW = _os_cfg.environ.get("OPERATOR_VIEWPORT_FOLLOW", "1") != "0"
 # WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
 CDP_URL = _os_cfg.environ.get("OPERATOR_DEMO_CDP") or "http://127.0.0.1:9222"
 if DEMO:
-    # the demo may view/drive the SANDBOX surface, but never the owner container —
+    # the demo may view/drive the SANDBOX surface, but never the owner's container —
     # scope it to its own (sandbox_container.py reads this at load).
     _os_cfg.environ.setdefault("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox-demo")
-FRAME_INTERVAL = 0.066     # ~15fps 
+FRAME_INTERVAL = 0.066     # ~15fps (the owner's pick)
+IDLE_FRAME_INTERVAL = 0.35  # ~3fps after the pixels have stayed quiet
+MOTION_HOLD_S = 1.4         # keep full cadence through short UI animations
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
 # F1 adaptive frame tier — ?tier=lo (narrow viewport / Save-Data clients) gets
@@ -105,7 +119,8 @@ REPAIR_HARD_FLOOR_W = 800
 # session, the layout viewport FLIPPING between healthy and collapsed rather
 # than walking down. Alternating reads reset the counter every other frame, so
 # the repair for the collapsed band never fired and the captured frame kept
-# changing size under the viewer . Scoring instead of counting: a
+# changing size under the viewer (the owner: "the viewport went super narrow, like a
+# strip maybe 1/3 of the total viewport height"). Scoring instead of counting: a
 # collapsed read outweighs a healthy one, so a flip-flop accumulates while a
 # lone navigation transient still decays to nothing.
 COLLAPSE_HIT = 2
@@ -148,12 +163,35 @@ RUN_START_FIXUPS = 5
 # cleanly separates "watching" from "gone". At 15s, re-entering the cockpit
 # left the DEAD previous tab owning the aspect — the fresh tab's load beacon
 # was refused and the stage sat letterboxed until a manual rail drag re-fired
-# it .
+# it (the owner: "letterboxed until I move the resize bar").
 VP_OWNER_IDLE_S = 2.5
 
 bp = Blueprint("operator", __name__,
                 template_folder="templates", static_folder="static",
                 static_url_path="/operator-static")
+
+
+@bp.after_request
+def _revisioned_static_delivery(resp):
+    """Make Operator's explicit revision query a real immutable cache key.
+
+    Flask serves blueprint static files through a direct-passthrough response,
+    which also caused host-app's generic gzip hook to skip the 326KB JS and
+    246KB CSS. Revisioned text assets are safe to materialise for compression
+    and cache for a year; unrevisioned assets retain Flask's conservative
+    policy so a forgotten revision bump cannot pin stale bytes indefinitely.
+    """
+    if request.endpoint != "operator.static" or not request.args.get("rev"):
+        return resp
+    if resp.status_code < 200 or resp.status_code >= 300:
+        return resp
+    ctype = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip()
+    if ctype in ("text/css", "application/javascript", "text/javascript"):
+        # The app-level compression hook runs after this blueprint hook. Let it
+        # read the body rather than skipping Flask's send-file passthrough.
+        resp.direct_passthrough = False
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 import base64 as _b64ph
 
@@ -170,7 +208,44 @@ import base64 as _b64ph
 # custom NTP (templates/newtab.html) gone in favor of google.com; chrome://new-tab-page
 # renders blank under headless+no-GPU (see comment above), so google.com is the
 # option that actually paints. Still navigated via raw CDP Page.navigate.
-_NEWTAB_DATA_URL = "https://www.google.com"
+# google.com is now only the FALLBACK: the landing page is a setting (the owner
+# 2026-08-07, "add that to the hamburger menu settings"). operator_prefs owns
+# the stored value and the scheme guard; this constant is what you get when
+# nothing is stored.
+_NEWTAB_DATA_URL = operator_prefs.DEFAULT_HOMEPAGE
+
+
+def _op_error(e: Exception) -> str:
+    """A message the cockpit can show.
+
+    concurrent.futures.TimeoutError stringifies to the EMPTY STRING, so a tab
+    operation that ran out of time reported `{"ok": false, "error": ""}` — a
+    failure banner with no reason in it (measured 2026-08-07). Name the class
+    when the instance has nothing to say.
+    """
+    import concurrent.futures as _cf
+    if isinstance(e, (_cf.TimeoutError, asyncio.TimeoutError, TimeoutError)):
+        return f"timed out after {TAB_OP_TIMEOUT:g}s"
+    return str(e) or type(e).__name__
+
+
+def _landing_url() -> str:
+    """Where a new tab and the last-tab reset go. Read per call, so changing
+    the setting takes effect on the next tab rather than the next restart."""
+    try:
+        return operator_prefs.homepage()
+    except Exception:  # noqa: BLE001 — a broken prefs file must not block a tab
+        return _NEWTAB_DATA_URL
+
+
+# Tab open/close budget. The 8s that used to be here was SHORTER than what the
+# body could legitimately spend (a CDP navigate at 4s plus four bounded
+# Emulation sends at 3s each), so a slow-but-successful op came back ok:false
+# with an empty error — measured 2026-08-07 at exactly 8.19s per operation
+# while the tab opened and closed correctly the whole time. The outer bound
+# must exceed the inner one or it reports success as failure.
+TAB_INNER_BUDGET = 16.0
+TAB_OP_TIMEOUT = 20.0
 _DESKTOP_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
@@ -192,6 +267,7 @@ _PLACEHOLDER_JPEG = _b64ph.b64decode(
 @dataclass
 class _Streamer:
     frame: bytes | None = None
+    frame_id: int = 0               # advances only when encoded pixels change
     frame_ts: float = 0.0
     last_view: float = 0.0
     status: str = "idle"          # idle | connecting | live | error
@@ -203,7 +279,7 @@ class _Streamer:
     # zoom is CSS document zoom — fine-tuning ON TOP of the layout width below.
     # It does NOT change innerWidth (proven live 2026-07-16), so it can never
     # make a desktop-width layout fit a phone; view_w is the lever that reflows.
-    # 0.8 = two 0.1 notches under neutral . The old 0.5 was a
+    # 0.8 = two 0.1 notches under neutral (the owner 2026-07-19). The old 0.5 was a
     # band-aid that shrank content INSIDE the giant pre-view_w canvas.
     zoom: float = 0.8
     # view_w — the CSS layout width Operator forces via CDP. Keep it at or above
@@ -225,8 +301,9 @@ class _Streamer:
     _browser = None
     _cdp = None
     _metric_sessions: dict = field(default_factory=dict)
+    _target_ids: dict = field(default_factory=dict)   # page -> CDP target id (stable per page)
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
-    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch 
+    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch (the owner)
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
     # F1: frame tier, set by the feed routes (last-viewer-wins on the shared
     # frame buffer — single-user cockpit; per-viewer buffers are a 1.0.10 idea)
@@ -240,6 +317,7 @@ class _Streamer:
     _fail_streak: int = 0
     _backoff_until: float = 0.0
     _was_busy: bool = False   # agent-run edge detector (sweep emulation on end)
+    _motion_until: float = 0.0
     # viewport ownership + flight recorder (see VP_OWNER_IDLE_S above)
     _vp_owner: str = ""                    # cid of the viewer whose aspect is applied
     _vp_seen: dict = field(default_factory=dict)    # cid -> last frame-pull monotonic ts
@@ -263,12 +341,6 @@ class _Streamer:
         owner = self._vp_owner
         if not owner or cid == owner:
             return True
-        # Read the OWNER's last frame-pull. `self._vp_seen.get` without the key
-        # binds the dict method: never None, so the comparison below ran
-        # float - builtin and raised TypeError on the only path that can
-        # release a stale owner. The aspect was therefore never handed over and
-        # the stage stayed letterboxed — the symptom v1.0.33 added this
-        # ownership machinery to fix (caught 2026-08-11, shipped since 1.0.33).
         ts = self._vp_seen.get(owner)
         return ts is None or time.monotonic() - ts > VP_OWNER_IDLE_S
 
@@ -277,6 +349,31 @@ class _Streamer:
         trace (the strobe/zoom hunts took 5 rounds because nothing recorded the
         writers). Read via /operator/debug/viewport."""
         self._vp_events.append({"t": time.time(), "kind": kind, "detail": detail})
+
+    def _publish_frame(self, data: bytes) -> bool:
+        """Publish captured pixels and return whether they actually changed.
+
+        `frame_ts` is capture health, so it advances for identical screenshots.
+        `frame_id` is network identity, so it advances only when the encoded
+        JPEG changes. Keeping those clocks separate lets status stay live while
+        pull clients skip retransmitting the same 30KB frame ten times a second.
+        """
+        now = time.monotonic()
+        changed = data != self.frame
+        if changed:
+            self.frame = data
+            self.frame_id += 1
+            self._motion_until = now + MOTION_HOLD_S
+        self.frame_ts = now
+        return changed
+
+    def _capture_interval(self, *, now: float, busy: bool) -> float:
+        """Preserve the agent-sharing limit; otherwise idle at roughly 3fps."""
+        if busy:
+            return 0.45
+        if now < self._motion_until:
+            return FRAME_INTERVAL
+        return IDLE_FRAME_INTERVAL
 
     # ---- lifecycle -------------------------------------------------------
     def ensure_running(self) -> None:
@@ -323,10 +420,24 @@ class _Streamer:
     @staticmethod
     def _chrome_attach_script() -> str:
         """Path to the (re)launcher for the active mode — the demo's isolated
-        headless Chrome under DEMO, the owner logged-in GUI Chrome otherwise."""
+        headless Chrome under DEMO, the owner's logged-in GUI Chrome otherwise.
+
+        OPERATOR_CHROME_LAUNCHER overrides both: operator-fam's CDP lives on
+        :9333 (a dedicated persistent-profile Windows Chrome, launched via its
+        own "OperatorFamChrome" scheduled task — opfam-chrome.sh), but generic
+        chrome-attach.sh defaults to :9222/browse-automation-chrome with no way
+        to know it should target :9333 instead. Landing on the operator-fam
+        page found chrome-attach.sh reporting :9222 "already running" and
+        exiting — a no-op relaunch that never touched :9333 at all (the owner
+        2026-08-03, "connecting to the operator page didn't trigger a
+        restart"). Each standalone instance now points this at its own
+        launcher via env; unset falls back to the historical behavior."""
         import os
+        override = _os_cfg.environ.get("OPERATOR_CHROME_LAUNCHER")
+        if override:
+            return os.path.expanduser(override)
         if DEMO:
-            return os.path.expanduser(os.environ.get("OPERATOR_DEMO_CHROME_SCRIPT", "~/.operator-sandbox/op-demo-chrome.sh"))
+            return os.path.expanduser("~/local-projects/operator-demo/op-demo-chrome.sh")
         return os.path.expanduser("~/agents/browse/chrome-attach.sh")
 
     def _cdp_alive(self) -> bool:
@@ -341,11 +452,65 @@ class _Streamer:
         except Exception:  # noqa: BLE001 — liveness probe
             return False
 
+    def _active_target_id(self) -> "str | None":
+        """The REAL foreground tab's CDP target id, or None if unavailable.
+
+        Chrome orders /json/list most-recently-ACTIVATED first, so entry [0] is
+        the visible tab. This is the only foreground signal that actually works
+        on the operator's Chrome: `document.visibilityState` reports 'visible'
+        for EVERY tab here (verified 2026-07-29 — 4 tabs, all 'visible', all
+        hasFocus()==true), because a CDP-driven window that isn't OS-focused
+        never computes per-tab occlusion. requestAnimationFrame is equally
+        useless (fires in all tabs — renderers stay unthrottled under CDP).
+        Ordering held across three consecutive activations AND a URL-stable
+        poke, which is the case the url-diff heuristic structurally cannot see.
+
+        Blocking urllib on the streamer thread, matching _cdp_alive(); the
+        1.5s timeout keeps a wedged Chrome from stalling the grab loop."""
+        import json as _json
+        import urllib.request
+        try:
+            raw = urllib.request.urlopen(CDP_URL + "/json/list", timeout=1.5).read()
+            for t in _json.loads(raw):
+                if t.get("type") == "page":
+                    return t.get("id")
+            return None
+        except Exception:  # noqa: BLE001 — best-effort foreground probe
+            return None
+
+    async def _page_target_id(self, pg) -> "str | None":
+        """CDP target id for a Playwright page, memoized per page.
+
+        Resolving it costs a throwaway CDP session, so cache by page object —
+        a target id is stable for the page's whole life. The session is always
+        detached (a leaked one is per-target state Chrome holds until browser
+        disconnect — the same leak class as the 2026-07-23 width walker)."""
+        cache = self._target_ids
+        if pg in cache:
+            return cache[pg]
+        sess = None
+        try:
+            sess = await pg.context.new_cdp_session(pg)
+            r = await asyncio.wait_for(sess.send("Target.getTargetInfo"), timeout=0.5)
+            tid = (r.get("targetInfo") or {}).get("targetId")
+        except Exception:  # noqa: BLE001 — best-effort
+            tid = None
+        finally:
+            if sess is not None:
+                try:
+                    await sess.detach()
+                except Exception:  # noqa: BLE001
+                    pass
+        if tid:
+            cache[pg] = tid
+        return tid
+
     def _launch_chrome(self) -> None:
         """Run the existing idempotent launcher from the streamer thread.
 
         chrome-attach.sh owns a host-wide flock and re-checks CDP after taking
         it, so simultaneous first-viewer requests cannot stampede Chrome."""
+        import os
         import subprocess
         attach = self._chrome_attach_script()
         if not os.path.exists(attach):
@@ -397,6 +562,21 @@ class _Streamer:
             # drop it so nothing reuses a session for a page we didn't select.
             self._cdp = None
             self._cdp_for = None
+            # A freshly launched Chrome already has ONE tab — its own default
+            # new-tab page — so `pages` is never actually empty on a cold
+            # start, and the no-pages fallback below never fires. That
+            # existing page sat on about:blank forever with nothing to
+            # navigate it (the owner 2026-08-04, reproduced live after auto-heal
+            # relaunched Chrome: "right now it lands in about:blank"). Treat
+            # a blank EXISTING page exactly like having no page: land it on
+            # the same URL the true no-pages case already used below. Only
+            # the selected page, and only when it's genuinely blank — a real
+            # page must never be yanked out from under the user on attach.
+            if self._page.url in ("", "about:blank"):
+                try:
+                    await self._cdp_navigate(self._page, _NEWTAB_DATA_URL)
+                except Exception:  # noqa: BLE001 — landing nav is best-effort
+                    pass
         else:
             # fallback page: navigate it to the landing URL — a bare new_page()
             # sits on about:blank forever ("new tab doesn't load the home page")
@@ -486,6 +666,34 @@ class _Streamer:
         self.vw, self.vh = width, height
         return True
 
+    def _usable_click_basis(self, width, height) -> bool:
+        """A viewport good enough to MAP CLICKS against.
+
+        Deliberately stricter than _accept_viewport, whose 320px floor exists
+        to keep single-digit garbage out of the frame clip. A collapsed-but-
+        plausible read sails through that floor and then silently rescales
+        every click: the flight recorder caught `vp-walk 1024->651` twice on
+        2026-07-31, which lands a pointer at 64% of where it was aimed —
+        "clicks arent landing in the right place" (the owner, same evening).
+
+        The frame path already refuses to trust a width under
+        REPAIR_HARD_FLOOR_W. The click path has to agree with it, or the
+        picture and the pointer are working off two different viewports.
+
+        The floor check runs BEFORE _accept_viewport on purpose: that method
+        caches into self.vw/self.vh as a side effect, so letting a collapsed
+        read reach it also poisons the last-resort fallback below.
+        """
+        try:
+            w = float(width)
+        except (TypeError, ValueError):
+            return False
+        if self.view_w:
+            floor = min(float(REPAIR_HARD_FLOOR_W), float(self.view_w))
+            if w < floor:
+                return False
+        return self._accept_viewport(width, height)
+
     def _matches_view_metrics(self, width, height) -> bool:
         """True only when a usable viewport matches Operator's current target."""
         try:
@@ -532,8 +740,7 @@ class _Streamer:
                 async with self._iolock():
                     png = await self._grab(self._page)
                 if png:
-                    self.frame = png
-                    self.frame_ts = time.monotonic()
+                    self._publish_frame(png)
                     try: self.cur_url = self._page.url or ""
                     except Exception: pass
                     _misses = 0
@@ -620,7 +827,8 @@ class _Streamer:
                 # SAME Chrome over CDP, and that attach pushes Playwright's own
                 # emulation defaults — dropping our setDeviceMetricsOverride,
                 # so the canvas snaps from view_w back to the window's native
-                # width the moment a task begins . Same mechanism as the
+                # width the moment a task begins (the owner 2026-07-29 "the Operator
+                # browser suddenly resizes"). Same mechanism as the
                 # prefers-color-scheme flip handled in _force_desktop_page.
                 #
                 # The repair loop does NOT cover this: its gate only fires when
@@ -656,7 +864,8 @@ class _Streamer:
                 except Exception:  # noqa: BLE001
                     pass
             self._was_busy = busy
-            await self._pace(0.45 if busy else FRAME_INTERVAL)
+            await self._pace(self._capture_interval(
+                now=time.monotonic(), busy=busy))
 
     async def _grab(self, page):
         """Raw JPEG frame via CDP Page.captureScreenshot — no font-loading wait
@@ -675,7 +884,7 @@ class _Streamer:
             # whose device scale ≠ 1 (Windows display scaling — here 1.25),
             # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
             # the FULL device viewport so coverage is complete (no right/bottom
-            # crop — the owner "right edge cut off").
+            # crop — the owner's "right edge cut off").
             #
             # OUTPUT AT DEVICE RESOLUTION (scale=1.0), not CSS width. Click
             # accuracy does NOT depend on frame size — the frontend sends
@@ -782,7 +991,9 @@ class _Streamer:
                         # and its overrides never reach the live page — clear+
                         # apply then just perturbs the real page visibly every
                         # backoff period: the "zooms in then back out, viewport
-                        # static" pulse . Drop the
+                        # static" pulse (the owner 2026-07-23, live-diagnosed: the
+                        # streamer's session read 708x634 while a fresh session
+                        # on the same target read the true 1012x891). Drop the
                         # session so the next attempt rebuilds against the
                         # CURRENT target; after 3 dud repairs go DORMANT until
                         # a nav/tab-switch/attach resets the gate — a forever
@@ -804,7 +1015,7 @@ class _Streamer:
                             self._repair_dormant = True
                 # REGIME-AWARE CLIP (2026-07-26 rev 2 — the "chin", then the
                 # reset-view crop). Two capture regimes coexist on a
-                # display-scaled Chrome (the host WSLg 125%):
+                # display-scaled Chrome (host WSLg 125%):
                 #  * OUR OVERRIDE ACTIVE — the page lays out at
                 #    cssLayoutViewport (override/1.25) and captureScreenshot
                 #    renders it 1:1 CSS onto an override-sized canvas. The
@@ -815,7 +1026,7 @@ class _Streamer:
                 #  * NATIVE (no override — a PDF tab, or a page "Fix stuck
                 #    zoom" swept and the live-page re-apply missed) — capture
                 #    renders at device scale, so the CSS clip zooms+crops
-                #     and the device
+                #    (the owner's google.com "urgh browser issues") and the device
                 #    clip is the correct one.
                 # Which regime? Our override is active exactly when the DEVICE
                 # layout viewport equals the view target (that is what
@@ -950,10 +1161,18 @@ class _Streamer:
         not just the newest one. _refresh_active_page only switches when the tab COUNT
         changes (and always to the last tab), so an agent that flips between already-
         open tabs (clicks a link that activates an existing tab, or switches back to
-        tab 1) left the view frozen on the stale tab . Here we poll
-        each open page's document.visibilityState — only the foreground tab reports
-        'visible' — and follow it. Throttled (every ~0.8s) + bounded per check so it
-        never stalls the grab loop, and only does work when there's >1 tab."""
+        tab 1) left the view frozen on the stale tab (the owner 2026-06-30).
+
+        Foreground is decided by the CDP target list (_active_target_id), NOT by
+        document.visibilityState: this docstring used to claim "only the
+        foreground tab reports 'visible'", which is simply false on the
+        operator's Chrome — all tabs report 'visible', so the probe could never
+        distinguish them. Believing it is why this bug survived three rounds of
+        patching (2026-07-08 / -22 / -27). The visibility probe is kept only as
+        a fallback for when the target list can't be read.
+
+        Throttled (every ~0.8s) + bounded per check so it never stalls the grab
+        loop, and only does work when there's >1 tab."""
         try:
             now = time.monotonic()
             if now - getattr(self, "_tab_check_ts", 0.0) < 0.8:
@@ -965,7 +1184,7 @@ class _Streamer:
                 _busy = operator_agent.runner.is_running()
             except Exception:  # noqa: BLE001
                 _busy = False
-            # AUTO-mode focus enforcement : while a run is
+            # AUTO-mode focus enforcement (the owner 2026-07-22): while a run is
             # live, the bot browser must SHOW the streamed (= agent's) tab at
             # all times. bring_to_front of an already-front tab is a cheap
             # activation no-op (no emulation, no reflow), so re-asserting it
@@ -982,7 +1201,8 @@ class _Streamer:
                         pass
             if len(live) < 2:
                 return  # single tab → nothing to follow
-            # ACTIVITY BEATS VISIBILITY : agents drive
+            # ACTIVITY BEATS VISIBILITY (the owner 2026-07-08: "the view doesn't track
+            # the tab the bot is using — some bots, not others"): agents drive
             # pages over CDP, which never foregrounds them — the MCP picks its
             # current tab at connect independent of Chrome's focus, and navigate/
             # click never activate a target (only the explicit tab tools do). So
@@ -992,14 +1212,22 @@ class _Streamer:
             # ONLY while an agent run is live: outside a run, "URL activity" is
             # SPA churn in idle tabs (Google Travel pushStates on its own), and
             # yanking focus then kills in-page popups the USER is working with
-            # (a password manager's inline menu dies on blur) — and in manual mode a view
+            # (1Password's inline menu dies on blur) — and in manual mode a view
             # switch would re-aim the user's steer clicks at the wrong page.
             urls = {pg: pg.url for pg in live}
             prev = getattr(self, "_tab_urls", {})
             self._tab_urls = urls
+            # drop target-id cache entries for closed tabs — bounds the dict to
+            # the live tab count instead of every page the session ever opened
+            if len(self._target_ids) > len(live):
+                _liveset = set(live)
+                for _dead in [k for k in self._target_ids if k not in _liveset]:
+                    self._target_ids.pop(_dead, None)
             # A tab CREATED AND NAVIGATED between two polls has no prev entry,
             # so the url-diff never saw it — the agent's fresh MCP tab could
-            # stream-shadow behind a stale one indefinitely . While busy, a brand-new non-blank tab counts as a
+            # stream-shadow behind a stale one indefinitely (the owner 2026-07-27
+            # "isn't displaying the tab the agent is working on at ALL
+            # times"). While busy, a brand-new non-blank tab counts as a
             # mover too.
             moved = ([pg for pg in live
                       if (pg in prev and prev[pg] != urls[pg])
@@ -1048,12 +1276,40 @@ class _Streamer:
                                 await sess.detach()
                             except Exception:  # noqa: BLE001
                                 pass
-            # if the page we're on is still visible, keep it (avoid flapping)
+            # AUTHORITATIVE foreground check (the owner 2026-07-29: "the operator
+            # browser doesn't focus on the tab the bot is working on is STILL
+            # present"). The visibilityState probes below cannot answer this on
+            # our Chrome — every tab reports 'visible' (see _active_target_id),
+            # so the old `cur_vis == "visible"` early-return matched ALWAYS and
+            # froze the view on whatever tab it happened to hold. That left the
+            # url-diff heuristic above as the only mover, which by construction
+            # misses a same-URL workload (clicking/typing/reading one SPA) —
+            # precisely the trace the owner screenshotted.
+            act = self._active_target_id()
+            if act:
+                cur_tid = await self._page_target_id(self._page) \
+                    if self._page in live else None
+                if cur_tid == act:
+                    return                       # already on the real front tab
+                for pg in live:
+                    if pg is self._page:
+                        continue
+                    if await self._page_target_id(pg) == act:
+                        self._page = pg
+                        self._cdp = None
+                        self._update_viewport()
+                        await self._force_desktop_page(self._page)
+                        self._vp_log("tab-follow-active",
+                                     (urls.get(pg) or "")[:48])
+                        return
+                return   # front tab known but not ours to stream (devtools etc.)
+            # CDP target list unreachable → fall back to the visibility probe.
+            # Harmless where it works (a real focused window) and a no-op where
+            # every tab claims visible, which is the pre-existing behavior.
             if self._page in live:
                 cur_vis = await _vis(self._page)
                 if cur_vis == "visible":
                     return
-            # find a foreground tab and switch to it
             for pg in reversed(live):   # prefer the newest visible one
                 if pg is self._page:
                     continue
@@ -1092,6 +1348,7 @@ class _Streamer:
                 pass
         self._page = self._browser = self._pw = None
         self._metric_sessions.clear()
+        self._target_ids.clear()   # ids are per-browser — never reuse across attach
         # an error status (wedge, attach failure) must SURVIVE teardown — it
         # carries the user-facing message and keys the relaunch backoff
         if self.status != "error":
@@ -1170,9 +1427,9 @@ class _Streamer:
             return {"ok": False, "error": "not running"}
         try:
             fut = asyncio.run_coroutine_threadsafe(self._switch_tab(idx), self._loop)
-            return fut.result(timeout=8)
+            return fut.result(timeout=TAB_OP_TIMEOUT)
         except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": _op_error(e)}
 
     async def _switch_tab(self, idx: int) -> dict:
         lock = self._iolock()
@@ -1194,7 +1451,7 @@ class _Streamer:
                 await self._force_desktop_page(self._page)
                 fresh = await self._grab(self._page)
                 if fresh:
-                    self.frame, self.frame_ts = fresh, time.monotonic()
+                    self._publish_frame(fresh)
                 return {"ok": True}
             return {"ok": False, "error": "bad tab index"}
         except Exception as e:  # noqa: BLE001
@@ -1203,9 +1460,9 @@ class _Streamer:
     def close_tab(self, idx: int) -> dict:
         if self._loop is None: return {"ok": False, "error": "not running"}
         try:
-            return asyncio.run_coroutine_threadsafe(self._close_tab(idx), self._loop).result(timeout=8)
+            return asyncio.run_coroutine_threadsafe(self._close_tab(idx), self._loop).result(timeout=TAB_OP_TIMEOUT)
         except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": _op_error(e)}
 
     async def _close_tab(self, idx: int) -> dict:
         lock = self._iolock()
@@ -1224,26 +1481,32 @@ class _Streamer:
                 # never close the LAST tab — that kills the browser / leaves the
                 # viewer with nothing + no way to reopen. Navigate it to Google.
                 if len(pages) <= 1:
-                    # last tab: don't close it (that kills the browser) — reset it to
-                    # our own New Tab page instead of chrome://new-tab-page (which
-                    # renders blank under headless+no-GPU — see _NEWTAB_HTML comment).
+                    # last tab: don't close it (that kills the browser) — send it
+                    # home instead. chrome://new-tab-page renders blank under
+                    # headless+no-GPU (see _NEWTAB_HTML comment), so this is the
+                    # configured landing page, navigated over raw CDP.
                     self._cdp = None
                     try:
-                        await self._cdp_navigate(closing, _NEWTAB_DATA_URL)
+                        await self._cdp_navigate(closing, _landing_url())
                     except Exception:  # noqa: BLE001
                         pass
                     self._page = closing; self._cdp = None; self._update_viewport()
                     await self._force_desktop_page(self._page)
                     return {"ok": True, "reset": True}
-                await closing.close()
+                # Raw CDP first — Playwright's page.close() is the other half of
+                # the 8.19s hang measured 2026-08-07.
+                if not await self._cdp_close_tab(closing):
+                    await closing.close()
                 live = [p for p in ctx.pages if not p.is_closed()]
                 if not live:
                     # safety net: never leave zero tabs (that closes the browser) —
                     # open a fresh one so the demo/cockpit always has a live page.
                     try:
-                        newp = await ctx.new_page()
-                        self._cdp = None
-                        await self._cdp_navigate(newp, _NEWTAB_DATA_URL)
+                        newp = await self._cdp_open_tab(_landing_url())
+                        if newp is None:
+                            newp = await ctx.new_page()
+                            self._cdp = None
+                            await self._cdp_navigate(newp, _landing_url())
                         live = [newp]
                     except Exception:  # noqa: BLE001
                         live = []
@@ -1253,7 +1516,7 @@ class _Streamer:
                     await self._force_desktop_page(self._page)
                     fresh = await self._grab(self._page)
                     if fresh:
-                        self.frame, self.frame_ts = fresh, time.monotonic()
+                        self._publish_frame(fresh)
                 return {"ok": True}
             return {"ok": False, "error": "bad tab index"}
         except Exception as e:  # noqa: BLE001
@@ -1262,9 +1525,9 @@ class _Streamer:
     def new_tab(self) -> dict:
         if self._loop is None: return {"ok": False, "error": "not running"}
         try:
-            return asyncio.run_coroutine_threadsafe(self._new_tab(), self._loop).result(timeout=8)
+            return asyncio.run_coroutine_threadsafe(self._new_tab(), self._loop).result(timeout=TAB_OP_TIMEOUT)
         except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": _op_error(e)}
 
     async def _new_tab(self) -> dict:
         lock = self._iolock()
@@ -1277,9 +1540,14 @@ class _Streamer:
     async def _new_tab_locked(self) -> dict:
         try:
             ctx = self._browser.contexts[0]
-            pg = await ctx.new_page()
-            self._cdp = None
-            await self._cdp_navigate(pg, _NEWTAB_DATA_URL)
+            url = _landing_url()
+            # Fast path: raw CDP creates the target ALREADY on the landing
+            # page, so there is no second navigate to wait on.
+            pg = await self._cdp_open_tab(url)
+            if pg is None:
+                pg = await ctx.new_page()
+                self._cdp = None
+                await self._cdp_navigate(pg, url)
             self._page = pg; self._cdp = None; self._update_viewport()
             await self._force_desktop_page(self._page)
             return {"ok": True}
@@ -1287,17 +1555,48 @@ class _Streamer:
             return {"ok": False, "error": str(e)}
 
     # ---- actions ---------------------------------------------------------
+    # Driver-death fingerprints. When the Playwright node driver dies (e.g. the
+    # uncaught CRPage frame-detach race, the owner 2026-08-10 01:33 on operator-fam),
+    # every pending/future call fails with one of these. They mean the whole
+    # attach is gone — only a full reattach helps, so they must never sit out
+    # the abnormal-death backoff returning dead clicks.
+    _DRIVER_DEAD_RE = re.compile(
+        r"has been closed|connection closed|frame has been detached|"
+        r"pipe closed|browser closed|not connected", re.IGNORECASE)
+
+    def _force_reattach(self) -> None:
+        """Driver confirmed dead: clear the backoff and relaunch NOW."""
+        with self._lock:
+            self._backoff_until = 0.0
+            self._running = False
+        self.ensure_running()
+
     def run_action(self, action: dict) -> dict:
         if not self._running or self._loop is None:
             self.ensure_running()
             time.sleep(0.5)
-        if self._loop is None:
-            return {"ok": False, "error": "streamer not running"}
-        fut = asyncio.run_coroutine_threadsafe(self._do_action(action), self._loop)
+        loop = self._loop
+        # A dead loop object survives an abnormal streamer death (_run never
+        # nulls it), so actions used to be posted onto a stopped loop — the
+        # future never resolved, every click burned the full 30s timeout, and
+        # the cockpit read "browser disconnected" until a manual refresh
+        # (the owner 2026-08-10). Refuse fast and relaunch instead.
+        if loop is None or not loop.is_running():
+            self._force_reattach()
+            return {"ok": False, "error": "browser link lost — reconnecting"}
+        fut = asyncio.run_coroutine_threadsafe(self._do_action(action), loop)
         try:
-            return fut.result(timeout=30)
+            result = fut.result(timeout=30)
         except Exception as e:  # noqa: BLE001
+            if self._DRIVER_DEAD_RE.search(str(e) or type(e).__name__):
+                self._force_reattach()
+                return {"ok": False, "error": "browser link lost — reconnecting"}
             return {"ok": False, "error": str(e)}
+        if (isinstance(result, dict) and not result.get("ok")
+                and self._DRIVER_DEAD_RE.search(str(result.get("error", "")))):
+            self._force_reattach()
+            return {"ok": False, "error": "browser link lost — reconnecting"}
+        return result
 
     def _safe_url(self, p) -> str:
         """p.url is a sync property but on a desynced connect_over_cdp page it can
@@ -1313,7 +1612,7 @@ class _Streamer:
         session is bound to one target, so after a page swap a stale cache
         dispatched clicks/keys into the old (background/closed) tab while the
         capture showed the new one — taps rippled, steers returned ok, and the
-        visible page never reacted . Most
+        visible page never reacted (the owner 2026-07-12, after a tab close). Most
         _page-swap sites null the cache manually; this identity check is the
         backstop so no future swap site can reintroduce the class."""
         sess = getattr(self, "_cdp", None)
@@ -1455,7 +1754,8 @@ class _Streamer:
                 self._vp_log("apply-pdf-window",
                              f"{int(self.view_w)}x{int(self.view_h or 0)}")
                 return
-            # APPLY STORM GUARD : SPA-heavy pages fire
+            # APPLY STORM GUARD (the owner 2026-07-27 "window still randomly
+            # resizes, esp when I navigate away"): SPA-heavy pages fire
             # several frameNavigated events per nav, and each force-desktop
             # re-applied the override — with the scrollbar compensation's
             # second apply on top, one navigation produced a visible burst of
@@ -1481,7 +1781,7 @@ class _Streamer:
                 "screenHeight": int(self.view_h or 1400),
             }), timeout=3)
             self._applied_view_w = _w_apply
-            # SCROLLBAR DEFICIT : a
+            # SCROLLBAR DEFICIT (the owner 2026-07-27 "black bars left/right"): a
             # visible vertical scrollbar shaves ~15px off cssLayoutViewport, so
             # frames came back a sliver narrower than the beaconed stage and
             # object-fit pillarboxed them. setScrollbarsHidden is a no-op on a
@@ -1656,6 +1956,78 @@ class _Streamer:
             "type": "mouseWheel", "x": cx, "y": cy,
             "deltaX": float(dx or 0), "deltaY": float(dy or 0)}), timeout=4)
 
+    async def _browser_cdp(self):
+        """Browser-level CDP session, for the Target.* domain.
+
+        Page sessions cannot create or close targets — those live on the
+        browser. Cached like _cdp and dropped on any failure, since a session
+        that has gone bad stays bad.
+        """
+        sess = getattr(self, "_browser_sess", None)
+        if sess is None:
+            sess = await asyncio.wait_for(
+                self._browser.new_browser_cdp_session(), timeout=4)
+            self._browser_sess = sess
+        return sess
+
+    async def _target_id(self, p) -> str:
+        """CDP targetId for a Playwright page, asked of the page's own session."""
+        sess = await self._cdp_session(p)
+        info = await asyncio.wait_for(sess.send("Target.getTargetInfo"), timeout=3)
+        return ((info or {}).get("targetInfo") or {}).get("targetId") or ""
+
+    async def _cdp_open_tab(self, url: str):
+        """Open a tab over raw CDP and hand back the Playwright page for it.
+
+        Playwright's ctx.new_page() is the call that measured 8.19s on this
+        streamer's aged connection (0.078s on a fresh one, 0.022s over raw
+        CDP) — the same page-lifecycle desync this file routes clicks, keys and
+        navigation around. Returns None if CDP refuses, so the caller can fall
+        back rather than leaving the user with no tab.
+        """
+        before = set(self._browser.contexts[0].pages)
+        try:
+            sess = await self._browser_cdp()
+            res = await asyncio.wait_for(
+                sess.send("Target.createTarget", {"url": url}), timeout=5)
+        except Exception:  # noqa: BLE001
+            self._browser_sess = None
+            return None
+        if not (res or {}).get("targetId"):
+            return None
+        # Playwright learns about the target on its own event stream, which
+        # lands a beat after the command returns. Take the page that APPEARED
+        # rather than asking each one its targetId: that would be a CDP
+        # round-trip per open tab, and this runs under the io lock so no other
+        # operator-initiated open can be interleaving with it.
+        for _ in range(40):
+            for pg in self._browser.contexts[0].pages:
+                if pg not in before and not pg.is_closed():
+                    return pg
+            await asyncio.sleep(0.05)
+        return None
+
+    async def _cdp_close_tab(self, p) -> bool:
+        """Close a tab over raw CDP. False means the caller should fall back."""
+        try:
+            tid = await self._target_id(p)
+            if not tid:
+                return False
+            sess = await self._browser_cdp()
+            await asyncio.wait_for(
+                sess.send("Target.closeTarget", {"targetId": tid}), timeout=5)
+        except Exception:  # noqa: BLE001
+            self._browser_sess = None
+            return False
+        # The page object goes closed on Playwright's event stream, not on the
+        # command's return; give it a moment so the caller's live-page scan
+        # does not still see it.
+        for _ in range(20):
+            if p.is_closed():
+                break
+            await asyncio.sleep(0.05)
+        return True
+
     async def _cdp_navigate(self, p, url: str, timeout: float = 4) -> None:
         """Navigate via raw CDP Page.navigate, bypassing Playwright's
         page.goto()/set_content() (which wait on lifecycle events that can hang
@@ -1676,7 +2048,7 @@ class _Streamer:
                 m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"), timeout=3)
                 vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
                 w = vp.get("clientWidth"); h = vp.get("clientHeight")
-                if self._accept_viewport(w, h):
+                if self._usable_click_basis(w, h):
                     return {"w": float(w), "h": float(h)}
                 if attempt == 0:
                     await self._force_desktop_page(p)
@@ -1685,7 +2057,7 @@ class _Streamer:
         # 2) page eval (works on normal sites)
         try:
             d = await p.evaluate("({w: window.innerWidth, h: window.innerHeight})")
-            if self._accept_viewport(d.get("w"), d.get("h")):
+            if self._usable_click_basis(d.get("w"), d.get("h")):
                 return d
         except Exception:
             pass
@@ -1726,7 +2098,7 @@ class _Streamer:
                 # 2 double, 3 triple → sentence/paragraph select). Sent per physical
                 # click, so dispatch it incrementally (ramp=False). The agent's
                 # dblclick_at carries no count and keeps the full ramped sequence.
-                # NATIVE <select> shim : a real click on a
+                # NATIVE <select> shim (the owner 2026-07-21): a real click on a
                 # <select> opens an OS-drawn popup that raw CDP mouse events
                 # can't reach — the option list isn't in the page, so the
                 # follow-up option-click hits nothing and the value never
@@ -1805,7 +2177,7 @@ class _Streamer:
                 # wait_until="commit" returns as soon as the navigation COMMITS (not
                 # full load), so we don't hold the io-lock for up to 15s while the page
                 # loads — that lock starves the grab loop and froze/broke the feed on
-                # back/forward . The feed then streams the new page as it loads.
+                # back/forward (the owner). The feed then streams the new page as it loads.
                 await p.go_back(wait_until="commit", timeout=8000)
             elif kind == "forward":
                 await p.go_forward(wait_until="commit", timeout=8000)
@@ -1916,8 +2288,7 @@ class _Streamer:
                     # intermediate responsive/mobile frame.
                     fresh = await self._grab(p)
                     if fresh:
-                        self.frame = fresh
-                        self.frame_ts = time.monotonic()
+                        self._publish_frame(fresh)
                 return {"ok": True, "view": [w, h], "applied": not busy}
             elif kind == "reset_view":
                 # strip emulation overrides an agent run (or a stray
@@ -1955,6 +2326,8 @@ class _Streamer:
             # running on the streamer loop, so touching the Event here is safe.
             if self._eager_evt is None:
                 self._eager_evt = asyncio.Event()
+            self._motion_until = max(
+                self._motion_until, time.monotonic() + MOTION_HOLD_S)
             self._eager_evt.set()
 
     async def _repeat_key(self, key: str) -> None:
@@ -1988,6 +2361,48 @@ class _Streamer:
 
 
 _streamer = _Streamer()
+
+
+# ── Is the BROWSER up, independent of the feed? ──────────────────────────────
+# /operator/status reports the STREAMER's state, which on the launchpad rests at
+# 'idle' whether Chrome is healthy or stone dead — nothing has tried to connect
+# yet. So the launchpad mark settled into its "connected" pose over a browser
+# that wasn't there (the owner 2026-08-02, after an evening of exactly that).
+#
+# Probed OFF the request path on purpose: _cdp_alive() is a blocking urllib call
+# and a WEDGED Chrome is precisely the case where it burns its full timeout —
+# doing that inline would stall every status poll for 3s each. A background
+# refresh keeps the endpoint free and the answer at most _CDP_TTL seconds stale,
+# which is far better than the status quo of never knowing at all.
+_CDP_TTL = 10.0
+_cdp_probe: dict = {"up": None, "ts": 0.0, "running": False}
+_cdp_probe_lock = threading.Lock()
+
+
+def _cdp_up_cached() -> "bool | None":
+    """Last known Chrome reachability. Never blocks; None until the first probe."""
+    now = time.monotonic()
+    with _cdp_probe_lock:
+        fresh = (now - _cdp_probe["ts"]) < _CDP_TTL
+        if fresh or _cdp_probe["running"]:
+            return _cdp_probe["up"]
+        _cdp_probe["running"] = True
+        # Snapshot UNDER the lock and return that, not a post-spawn re-read: a
+        # fast probe can land between spawn and return, so re-reading makes the
+        # value non-deterministic for the same call. Callers get "what we knew
+        # when you asked"; the refresh lands on the next poll.
+        prev = _cdp_probe["up"]
+
+    def _run() -> None:
+        try:
+            up = _streamer._cdp_alive()
+        except Exception:  # noqa: BLE001 — a probe must never raise into the app
+            up = False
+        with _cdp_probe_lock:
+            _cdp_probe.update(up=up, ts=time.monotonic(), running=False)
+
+    threading.Thread(target=_run, name="operator-cdp-probe", daemon=True).start()
+    return prev
 
 
 # ── Track C: surfaces (browser / desktop-sandbox / desktop-real) ─────────────
@@ -2057,6 +2472,7 @@ class _DesktopFeed:
 
     def __init__(self) -> None:
         self.frame: bytes | None = None
+        self.frame_id: int = 0
         self.frame_ts: float = 0.0
         self.mime: str = "image/jpeg"
         self.last_view: float = 0.0
@@ -2069,6 +2485,17 @@ class _DesktopFeed:
         self._stream_dead_until = 0.0   # cooldown after an ffmpeg-stream failure
         self.tier: str = "hi"           # F1: set by the feed routes (last-viewer-wins)
         self._wake = threading.Event()  # F2: a steer poke wakes the capture loop
+
+    def _publish_frame(self, data: bytes, mime: str) -> bool:
+        """Refresh capture health without re-identifying duplicate pixels."""
+        now = time.monotonic()
+        changed = data != self.frame or mime != self.mime
+        if changed:
+            self.frame = data
+            self.mime = mime
+            self.frame_id += 1
+        self.frame_ts = now
+        return changed
 
     def _pace(self, interval: float) -> None:
         """Sleep between captures, but wake immediately on a steer poke (F2).
@@ -2104,10 +2531,9 @@ class _DesktopFeed:
                     with open(path, "rb") as f:
                         data = f.read()
                     # scrot writes PNG regardless of suffix; sniff the magic
-                    self.mime = ("image/png" if data[:8] == b"\x89PNG\r\n\x1a\n"
-                                 else "image/jpeg")
-                    self.frame = data
-                    self.frame_ts = time.monotonic()
+                    mime = ("image/png" if data[:8] == b"\x89PNG\r\n\x1a\n"
+                            else "image/jpeg")
+                    self._publish_frame(data, mime)
                     self.detail = ""
             except Exception as e:  # noqa: BLE001 — feed must idle, not die
                 self.detail = str(e)
@@ -2173,9 +2599,7 @@ class _DesktopFeed:
                 frames, tail = sb.split_jpegs(tail + chunk)
                 if frames:
                     win_n += len(frames)
-                    self.mime = "image/jpeg"
-                    self.frame = frames[-1]
-                    self.frame_ts = time.monotonic()
+                    self._publish_frame(frames[-1], "image/jpeg")
                     self.detail = ""
                 now = time.monotonic()
                 if now - win_t >= self._HEALTH_WINDOW_S:
@@ -2215,12 +2639,20 @@ _desktop_feed = _DesktopFeed()
 
 
 # ── routes ────────────────────────────────────────────────────────────────
+@bp.context_processor
+def _inject_version():
+    """OP_VERSION reaches every template rendered from this blueprint, in both
+    mounts (host-app and the standalone fam/demo servers), without each
+    render call having to remember to pass it."""
+    return {"OP_VERSION": OP_VERSION}
+
+
 @bp.route("/operator")
 def operator_page():
     from flask import make_response
-    # demo: serve the standalone, de-PII'd template (no the app chrome/nav, no owner
+    # demo: serve the standalone, de-PII'd template (no squad chrome/nav, no owner
     # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
-    _tmpl = "operator.html"   # public build: no demo template fork
+    _tmpl = "operator_demo.html" if DEMO else "operator.html"
     resp = make_response(render_template(_tmpl, standalone=STANDALONE))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -2247,6 +2679,21 @@ def _apply_feed_tier() -> None:
     tier = "lo" if request.args.get("tier") == "lo" else "hi"
     _streamer.tier = tier
     _desktop_feed.tier = tier
+
+
+def _frame_source():
+    """Return (surface, source, mime), starting only the selected feed."""
+    surface = _active_surface["name"]
+    if surface == "browser":
+        _streamer.ensure_running()
+        return surface, _streamer, "image/jpeg"
+    _desktop_feed.ensure_running(surface)
+    return surface, _desktop_feed, _desktop_feed.mime
+
+
+def _frame_token(surface: str, src) -> str:
+    """Per-surface identity prevents equal counters colliding on a switch."""
+    return f"{surface}:{getattr(src, 'frame_id', 0)}"
 
 
 @bp.route("/operator/stream")
@@ -2321,19 +2768,41 @@ def operator_frame():
     it, only then fetch the next — latency is bounded at ~1 frame in flight
     by construction, on any device or link. Fast clients still get ~10fps."""
     _apply_feed_tier()
-    if _active_surface["name"] == "browser":
-        _streamer.ensure_running()
-        src, mime = _streamer, "image/jpeg"
-    else:
-        _desktop_feed.ensure_running(_active_surface["name"])
-        src, mime = _desktop_feed, _desktop_feed.mime
+    cid = request.args.get("cid") or ""
+    since = request.args.get("since") or ""
+    try:
+        wait_ms = max(0, min(1200, int(request.args.get("wait") or 0)))
+    except (TypeError, ValueError):
+        wait_ms = 0
+
+    surface, src, mime = _frame_source()
     src.last_view = time.monotonic()
-    _streamer.vp_note_pull(request.args.get("cid") or "")
+    _streamer.vp_note_pull(cid)
+    token = _frame_token(surface, src)
+
+    # Long-poll only when the caller already owns the current pixels. The
+    # producer keeps capturing independently; this request wakes within one
+    # 20ms check when a new frame lands, or returns an empty heartbeat. One
+    # outstanding request preserves the existing backpressure guarantee.
+    deadline = time.monotonic() + wait_ms / 1000.0
+    while since and token == since and time.monotonic() < deadline:
+        time.sleep(0.02)
+        next_surface = _active_surface["name"]
+        if next_surface != surface:
+            surface, src, mime = _frame_source()
+        src.last_view = time.monotonic()
+        token = _frame_token(surface, src)
+
     f = src.frame
-    resp = Response(f or _PLACEHOLDER_JPEG,
-                    mimetype=mime if f else "image/jpeg")
+    mime = "image/jpeg" if surface == "browser" else src.mime
+    if since and token == since:
+        resp = Response(status=204)
+    else:
+        resp = Response(f or _PLACEHOLDER_JPEG,
+                        mimetype=mime if f else "image/jpeg")
     resp.headers["Cache-Control"] = "no-store"
     resp.headers["X-Operator-Frame"] = "live" if f else "placeholder"
+    resp.headers["X-Operator-Frame-ID"] = token
     return resp
 
 
@@ -2350,6 +2819,23 @@ def operator_tab_switch(idx):
 @bp.route("/operator/tab/<int:idx>/close", methods=["POST"])
 def operator_tab_close(idx):
     return jsonify(_streamer.close_tab(idx))
+
+
+@bp.route("/operator/homepage", methods=["GET", "POST"])
+def operator_homepage():
+    """The landing page for new tabs and the last-tab reset.
+
+    Server-side because Python is what opens those tabs — a localStorage
+    preference could never reach it (the owner 2026-08-07).
+    """
+    if request.method == "GET":
+        return jsonify(ok=True, homepage=operator_prefs.homepage(),
+                       default=operator_prefs.DEFAULT_HOMEPAGE)
+    try:
+        value = operator_prefs.set_homepage((request.get_json(silent=True) or {}).get("homepage", ""))
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    return jsonify(ok=True, homepage=value)
 
 
 @bp.route("/operator/tab/new", methods=["POST"])
@@ -2424,7 +2910,10 @@ def operator_status():
         click = {"x": round(lx, 4), "y": round(ly, 4), "age": round(time.monotonic() - lt, 3)}
     return jsonify(status=_streamer.status, detail=_streamer.detail,
                    has_frame=fresh, vw=_streamer.vw, vh=_streamer.vh, url=cur_url,
-                   click=click, surface=surface)
+                   click=click, surface=surface,
+                   # Real Chrome reachability, NOT the feed's state — the two
+                   # diverge exactly when it matters (idle feed, dead browser).
+                   browser_up=_cdp_up_cached())
 
 
 @bp.route("/operator/debug/viewport")
@@ -2488,6 +2977,47 @@ def operator_session():
     except ValueError as e:
         return jsonify(ok=False, error=str(e)), 413
     return jsonify(ok=True, rev=rev)
+
+
+@bp.route("/operator/sessions", methods=["GET", "POST"])
+def operator_sessions():
+    """The conversation list. GET → {ok, rev, active, sessions[]}; POST → a new
+    empty conversation, made active. Demo stays per-visitor, so it is gated
+    exactly like /operator/session."""
+    if DEMO:
+        return jsonify(ok=False, error="demo sessions are per-visitor"), 403
+    import operator_session as _sess_store
+    if request.method == "GET":
+        got = _sess_store.listing()
+        return jsonify(ok=True, **got)
+    body = request.get_json(silent=True) or {}
+    made = _sess_store.create(str(body.get("title") or ""))
+    return jsonify(ok=True, **made)
+
+
+@bp.route("/operator/sessions/<sid>", methods=["POST", "DELETE"])
+def operator_session_one(sid: str):
+    """POST {action: activate|rename, title?} / DELETE. One route because the
+    client only ever does these three things to a conversation, and three
+    near-identical routes is more surface than the feature needs."""
+    if DEMO:
+        return jsonify(ok=False, error="demo sessions are per-visitor"), 403
+    import operator_session as _sess_store
+    try:
+        if request.method == "DELETE":
+            return jsonify(ok=True, **_sess_store.delete(sid))
+        body = request.get_json(silent=True) or {}
+        action = body.get("action") or "activate"
+        if action == "rename":
+            title = body.get("title")
+            if not isinstance(title, str):
+                return jsonify(ok=False, error="rename needs a title"), 400
+            return jsonify(ok=True, rev=_sess_store.rename(sid, title))
+        if action != "activate":
+            return jsonify(ok=False, error=f"unknown action {action!r}"), 400
+        return jsonify(ok=True, **_sess_store.activate(sid))
+    except KeyError:
+        return jsonify(ok=False, error="no such conversation"), 404
 
 
 @bp.route("/operator/unseen")
@@ -2622,7 +3152,7 @@ def operator_steer():
               # _do_action always fell through to the keyword branch with val=="" (the
               # wheel handler never sends `value`) → amt defaulted to 600 (down) no
               # matter which way the wheel actually moved. That's why wheel-up did
-              # nothing while wheel-down "worked" .
+              # nothing while wheel-down "worked" (the owner 2026-06-30).
               "dx": data.get("dx"), "dy": data.get("dy"),
               # drag endpoints (kind=="drag") — were silently dropped by this
               # whitelist (same class as the dx/dy bug above), so a user drag
@@ -2644,8 +3174,8 @@ def operator_steer():
     return jsonify(_streamer.run_action(action))
 
 
-# ── Live-session driving  ──────────────────────────────────
-# Dispatch a task to one of the the host bots' real Discord sessions; the bot
+# ── Live-session driving (the owner 2026-06-26) ──────────────────────────────────
+# Dispatch a task to one of the host bots' real Discord sessions; the bot
 # runs it on the SAME shared Chrome the operator views. The browser actions are
 # surfaced via the MCP action-tap (operator-events.ndjson) which every bot's
 # playwright-mcp wrapper writes to — so the operator shows "🤖 <bot> · Clicking…"
@@ -2653,7 +3183,7 @@ def operator_steer():
 import json as _json
 import os as _os
 
-# The 5 drivers: the host bots that can take the wheel. home_channel = where the
+# The 5 drivers: host bots that can take the wheel. home_channel = where the
 # operator posts the task (the running bot picks it up as a prompt). `key` is the
 # bot name the action-tap stamps events with (must match detect_bot()).
 DRIVERS = [
@@ -2692,7 +3222,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
         return None
     last = evs[-1]
     if time.time() - last.get("ts", 0) <= window_s:
-        # demo: never leak the app bot names to a public visitor -> generic label.
+        # demo: never leak squad bot names to a public visitor -> generic label.
         _b = "assistant" if DEMO else last.get("bot")
         return {"bot": _b, "action": last.get("action"),
                 "detail": last.get("detail", "")}
@@ -2702,7 +3232,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
 @bp.route("/operator/drivers")
 def operator_drivers():
     """The pickable drivers — the operator runs them headless. In demo mode this is
-    a single generic 'gpt' driver (never leak the app bot names to a public visitor)."""
+    a single generic 'gpt' driver (never leak squad bot names to a public visitor)."""
     if DEMO:
         return jsonify(drivers=[{"key": "bot", "label": "bot"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
@@ -2930,12 +3460,12 @@ def operator_dispatch():
         # public demo: gemma/agy runtime, model locked to the 2-entry demo list
         # (off-list → Flash 3.6 Low default). The tier lives in the model string
         # ("(Thinking)"/"(Low)"), so client-sent effort is discarded — the lock
-        # owns effort. demo=True strips the app context/identity/tools.
+        # owns effort. demo=True strips squad context/identity/tools.
         bot = "gemma"
         if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
             model = OPERATOR_MODELS_DEMO[0]["value"]
         if surface == "desktop-sandbox":
-            # Flash has no computer-use tools  — a sandbox run
+            # Flash has no computer-use tools (the owner 2026-07-09) — a sandbox run
             # would just shell around. Desktop runs force Sonnet.
             model = "Claude Sonnet 4.6 (Thinking)"
         effort = ""
@@ -2944,6 +3474,12 @@ def operator_dispatch():
     else:
         r = operator_agent.runner.start(bot, task, model=model, effort=effort,
                                         surface=surface, real_ok=real_ok)
+        if r.get("ok"):
+            # An untitled conversation takes the name of the first task run in
+            # it, so the switcher reads as a list of errands rather than a
+            # column of "New chat". Best-effort by contract.
+            import operator_session as _sess_store
+            _sess_store.title_if_unset(task)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
@@ -2953,8 +3489,8 @@ def operator_dispatch():
 # preferred-sites is a prompt HINT not a hard sandbox (both deferred — see the
 # handoff spec). Persistence + slug logic live in operator_tasks.py; these routes
 # are thin wrappers that, on /run, do exactly what /operator/dispatch does.
-# DEMO : available, but against a demo-scoped store — the demo
-# instance MUST set OPERATOR_TASKS_PATH so visitors never see the app tasks.
+# DEMO (the owner 2026-07-09): available, but against a demo-scoped store — the demo
+# instance MUST set OPERATOR_TASKS_PATH so visitors never see the squad's tasks.
 # Demo saves strip bot/schedule (forced at run / scheduler never runs in demo),
 # the store is capped, and /run applies the same lock as /operator/dispatch.
 
@@ -3087,7 +3623,7 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict
     if DEMO:
         # same lock as /operator/dispatch: forced runtime, model allowlist,
         # no client effort. Saved-task runs are browser-surface, so no
-        # sandbox model force needed here. demo=True strips the app identity.
+        # sandbox model force needed here. demo=True strips squad identity.
         bot = "gemma"
         if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
             model = OPERATOR_MODELS_DEMO[0]["value"]
@@ -3164,14 +3700,14 @@ def operator_driver_status():
         since = 0.0
     reasoning = []
     bot = (request.args.get("bot") or (drv or {}).get("bot") or "").strip()
-    # in demo mode the agent has no the app transcript to tail (and we must not read
-    # any the app bot's transcript) -> the live trace comes from the agent runner only.
+    # in demo mode the agent has no squad transcript to tail (and we must not read
+    # any squad bot's transcript) -> the live trace comes from the agent runner only.
     if bot and not DEMO:
         reasoning = _tail_reasoning(bot, since)
     return jsonify(driver=drv, events=_recent_events(30), reasoning=reasoning)
 
 
-# ── Stage 2: reasoning relay  ──────────────────────────────
+# ── Stage 2: reasoning relay (the owner 2026-06-26) ──────────────────────────────
 # Tail the driving bot's live session transcript JSONL → surface its assistant
 # text (its reasoning/replies) so the operator chat shows thinking, not just
 # clicks. Per-bot transcript dir = <config_dir>/projects/<cwd-slug>/; we take the
@@ -3181,8 +3717,8 @@ import glob as _glob
 # bot → (config_dir, cwd) used to locate its transcript project dir.
 _BOT_PROJECT = {
     "claude-a":     ("~/.claude",            "~/agents/claude-a"),
-    "claude-a":  ("~/.claude",            "~/agents/claude-a"),
-    "claude-a": ("~/.claude",            "~/agents/claude-a"),
+    "claude-c":  ("~/.claude",            "~/agents/claude-c"),
+    "claude-d": ("~/.claude",            "~/agents/claude-d"),
     "claude-b":      ("~/.config/claude-b",        "~"),
     "gpt":        (None, None),  # different arch; no claude transcript
 }
@@ -3273,10 +3809,10 @@ import subprocess as _sp
 # claude-b runs from ~ so match its CLAUDE_CONFIG_DIR in the environ instead.
 _BOT_LIVE_CWD = {
     "claude-a": "/claude-agents/claude-a",
-    "claude-a": "/claude-agents/claude-a",
-    "claude-a": "/claude-agents/claude-a",
+    "claude-c": "/claude-agents/claude-c",
+    "claude-d": "/claude-agents/claude-d",
 }
-_BOT_LIVE_ENV = {"claude-b": ".config/claude-b"}
+_BOT_LIVE_ENV = {"claude-b": ".claude-alt"}
 
 
 def _live_bots() -> set:
@@ -3307,7 +3843,7 @@ def _live_bots() -> set:
     except Exception:
         pass
     # gpt is a service bot (always-on if its unit is active) — but it can't drive
-    # reliably (one MCP slot, a broker), so we don't mark it live for driving.
+    # reliably (one MCP slot, IBKR), so we don't mark it live for driving.
     return live
 
 
@@ -3320,7 +3856,7 @@ OPERATOR_MODELS = [
     {"value": "claude-sonnet-5", "label": "Sonnet 5"},
     {"value": "haiku", "label": "Haiku 4.5"},
 ]
-# claude-a-only roster : adds Fable 5 (Mythos-class, above Opus)
+# claude-a-only roster (the owner 2026-07-22): adds Fable 5 (Mythos-class, above Opus)
 # on top of the base Claude list. claude-b keeps the base roster — the models
 # endpoint branches on the driver key, so scope stays per-bot.
 OPERATOR_MODELS_CLAUDE_A = [
@@ -3336,7 +3872,7 @@ OPERATOR_MODELS_GPT = [
     {"value": "gpt-5.6-luna", "label": "GPT-5.6 Luna"},
     {"value": "gpt-5.5", "label": "GPT-5.5"},
 ]
-# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner
+# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner's
 # flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
 # ones have a fixed tier baked in (no effort). start() folds family+effort into the
 # agy --model string. Gemini families take a bare slug (agy applies --effort
@@ -3352,7 +3888,7 @@ OPERATOR_MODELS_GEMMA = [
 ]
 
 
-# public demo: LOCKED 2-model choice on the gemma/agy runtime :
+# public demo: LOCKED 2-model choice on the gemma/agy runtime (the owner 2026-07-09):
 # Flash 3.6 Low default (first = picker default + server fallback), Sonnet 4.6
 # as the heavier alt. Tier is baked into each value — the effort control is
 # hidden in the demo UI, the lock owns effort (dispatch sends effort="", so the

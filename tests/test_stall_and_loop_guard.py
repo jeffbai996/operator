@@ -32,11 +32,58 @@ def test_guard_warns_only_once_per_run(runner):
     assert len([m for m in runner.messages if m["role"] == "error"]) == 1
 
 
-def test_different_args_reset_the_streak(runner):
+def test_different_args_reset_the_exact_streak(runner):
+    """The exact-key streak still counts only IDENTICAL consecutive calls."""
     runner._note_action("browser_click", {"x": 100, "y": 200})
     runner._note_action("browser_click", {"x": 100, "y": 200})
-    runner._note_action("browser_click", {"x": 300, "y": 50})   # moved → not a loop
+    runner._note_action("browser_click", {"x": 300, "y": 50})
+    assert runner._action_repeat_streak == 1
+
+
+# ── rolling-window loop guard (2026-08-02) ─────────────────────────────────
+# The exact-key streak above misses the failure that actually happens: a run
+# clicking DIFFERENT wrong coordinates, with a screenshot between each, so
+# every call resets the streak. A Cathay booking run burned ~25 calls that way.
+# These pin the shape the window catches instead. This inverts what
+# test_different_args_reset_the_streak asserted before that change — moving
+# the cursor is no longer proof of progress.
+
+def test_varied_coordinates_still_read_as_flailing(runner):
+    for x in (100, 300, 640, 20):
+        runner._note_action("browser_click", {"x": x, "y": 200})
+    assert runner._repeat_nudge_pending is True
+    warns = [m for m in runner.messages if m["role"] == "error"]
+    assert len(warns) == 1 and "no page snapshot" in warns[0]["text"]
+
+
+def test_a_snapshot_clears_the_window(runner):
+    """Re-grounding on the DOM is exactly the recovery the nudge asks for, so
+    it must not count against the run."""
+    for x in (100, 300, 640, 20, 800, 55):
+        runner._note_action("browser_click", {"x": x, "y": 200})
+        runner._note_action("browser_snapshot", {})
+    assert runner._repeat_nudge_pending is False
+    assert runner.messages == []
+
+
+def test_clicks_landing_on_the_same_dead_spot_trip_the_window(runner):
+    """The near-click branch only decides a MIXED window: scoring needs
+    _WINDOW_SAME_TOOL calls to have accumulated, and if they are all the same
+    tool the count branch above has already fired. A hover between the pokes
+    is what makes this the deciding rule."""
     runner._note_action("browser_click", {"x": 100, "y": 200})
+    runner._note_action("browser_hover", {"x": 700, "y": 30})
+    runner._note_action("browser_click", {"x": 108, "y": 206})
+    runner._note_action("browser_click", {"x": 118, "y": 212})
+    assert runner._repeat_nudge_pending is True
+    assert "within 30px" in runner.messages[0]["text"]
+
+
+def test_a_few_clicks_far_apart_are_not_a_loop(runner):
+    """The guard must stay quiet on ordinary work — three deliberate clicks in
+    different places is a form being filled in, not a run going in circles."""
+    for x, y in ((10, 10), (500, 480), (1000, 90)):
+        runner._note_action("browser_click", {"x": x, "y": y})
     assert runner._repeat_nudge_pending is False
     assert runner.messages == []
 

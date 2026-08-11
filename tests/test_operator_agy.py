@@ -141,7 +141,7 @@ def test_all_noise_yields_empty(ecmd=None):
     assert AGY.filter_stop_noise("Error: request was aborted") == ""
 
 
-# ── Flash 3.6 duplicates its final answer  ──────────────────
+# ── Flash 3.6 duplicates its final answer (the owner 2026-07-29) ──────────────────
 # "the last message of her tool trace is the message she outputs, so there's a
 # duplication going on not to mention it spams the thinking trace"
 #

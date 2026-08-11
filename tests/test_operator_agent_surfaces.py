@@ -75,7 +75,7 @@ def test_demo_sandbox_gets_desktop_mandate_without_squad_identity(runner):
     runner.surface = "desktop-sandbox"
     p = runner._persona_for_run(OA.AGENT_BOTS["claude-a"])
     assert "LIVE COMPUTER DESKTOP" in p and "ISOLATED Linux desktop" in p
-    assert "claude-a" not in p and "{surface_flavor}" not in p
+    assert "Claude-a" not in p and "{surface_flavor}" not in p
 
 
 def test_browser_default_and_snapshot_carries_surface(runner):
@@ -126,7 +126,7 @@ def _codex_cmd_for_surface(monkeypatch, tmp_path, surface):
     """Drive the codex launch path to a stubbed Popen and return the built cmd."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(OA, "_resolve_codex", lambda: "/fake/codex")
-    # boot context hits the host-app / network — stub it out for hermeticity
+    # boot context hits the squad store / network — stub it out for hermeticity
     monkeypatch.setattr(OA, "_squad_boot_context", lambda bot="gpt": "")
     r = OA.AgentRunner()
     launched = {}
@@ -168,3 +168,35 @@ def test_stop_arms_kill_switch(runner, tmp_path):
     stop_file = tmp_path / ".cache" / "computer-use" / "operator-stop.json"
     assert stop_file.exists()
     assert json.loads(stop_file.read_text())["ts"] > 0
+
+
+# ── boot context must follow the session, not outlive it ─────────────────────
+
+def test_dropping_a_stopped_session_also_clears_its_boot_delivery(runner):
+    """A user stop pops the resume id so the NEXT turn starts a fresh thread —
+    but boot_sent stayed True, so that fresh thread never received the squad
+    context either. Result: no task memory AND no squad priors, i.e. gemma
+    asking "what would you like me to look up?" instead of searching squad
+    memory as its own prompt tells it to (the owner 2026-07-30: "doesn't seem to have
+    any context whatsoever").
+
+    boot_sent is a claim about a THREAD. Throwing the thread away has to throw
+    the claim away with it."""
+    runner._session_ids["gemma"] = "some-conversation-id"
+    runner._boot_sent["gemma"] = True
+
+    runner._forget_session("gemma")
+
+    assert "gemma" not in runner._session_ids
+    assert not runner._boot_sent.get("gemma"), \
+        "a fresh thread must be eligible for the boot context again"
+
+
+def test_forgetting_one_bot_leaves_another_alone(runner):
+    runner._session_ids.update({"gemma": "a", "gpt": "b"})
+    runner._boot_sent.update({"gemma": True, "gpt": True})
+
+    runner._forget_session("gemma")
+
+    assert runner._session_ids.get("gpt") == "b"
+    assert runner._boot_sent.get("gpt") is True

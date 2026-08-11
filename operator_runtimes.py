@@ -22,10 +22,10 @@ _CONTROL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "control")
 def _cockpit_pin_env() -> dict:
     """MCP env pinning the agent to the browser THIS cockpit's feed streams.
 
-    Default instance (host-app, /the app/operator): the :9222 GUI Chrome —
+    Default instance (host-app, /squad/operator): the :9222 GUI Chrome —
     the bot-Chrome split (218e807) flipped playwright-mcp.sh's default to
-    :9224 (the app bots' browser), and without this override the agent drove
-    a browser the feed never shows .
+    :9224 (the squad bots' browser), and without this override the agent drove
+    a browser the feed never shows (the owner 2026-07-20).
 
     Second full-function instances (operator-fam) run against their OWN Chrome:
     OPERATOR_DEMO_CDP on the server process (the name is historical — it is
@@ -48,7 +48,7 @@ class RunSpec:
     bot: str
     task: str           # fully wrapped (transcript inject + nudges + directive)
     persona: str        # demo/surface-aware, already built
-    boot_context: str   # the app boot text; '' on resume/demo/claude
+    boot_context: str   # squad boot text; '' on resume/demo/claude
     model: str
     effort: str
     surface: str
@@ -92,10 +92,10 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     Its CODEX_HOME config.toml already wires the playwright MCP, so we just
     exec it. `codex exec resume <thread_id>` threads context."""
     env: dict = {}
-    # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no owner-tool/
+    # demo: a minimal CODEX_HOME with ONLY the playwright MCP (no ibkr/vecgrep/
     # plugins) -> browser is the agent's only tool, satisfying the sandbox spec.
     if spec.demo:
-        env["CODEX_HOME"] = os.path.expanduser(os.environ.get("OPERATOR_DEMO_CODEX_HOME", "~/.operator-sandbox/codex"))
+        env["CODEX_HOME"] = os.path.expanduser("~/local-projects/operator-demo/codex")
     else:
         env["CODEX_HOME"] = spec.config_dir
         _ensure_codex_control_mcp(spec.config_dir)   # driver parity
@@ -120,7 +120,7 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
             "attempting one of those calls first.")
     # PARITY: boot context only on the first turn of a thread (resumes already
     # carry it). Kept full, not compressed: ~92% cached after turn 1, and the
-    # shared-memory awareness is worth the one-time cold cost.
+    # squad/vecgrep/store awareness is worth the one-time cold cost.
     # the bridge note goes right before the task (recency: 20k+ chars of boot
     # context otherwise sit between the note and the ask the model acts on)
     prompt = (spec.persona
@@ -129,13 +129,13 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
               + _bridge
               + "\n\nTask: " + spec.task)
     # DEMO: run codex INSIDE a bwrap FS sandbox (sandbox.sh) — tmpfs over
-    # $HOME hides ~/repos, ~/.claude, ~/.codex, the app data; only the empty
+    # $HOME hides ~/repos, ~/.claude, ~/.codex, squad data; only the empty
     # workspace + auth + browse module are bound. codex's built-in shell/file
-    # tools physically cannot reach owner/the app files. Non-demo keeps the
+    # tools physically cannot reach owner/squad files. Non-demo keeps the
     # bypass (it's the owner's trusted local cockpit). The browser MCP runs
     # as a separate subprocess and still reaches the isolated Chrome.
     if spec.demo:
-        _sandbox = os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_SCRIPT", "~/.operator-sandbox/sandbox.sh"))
+        _sandbox = os.path.expanduser("~/local-projects/operator-demo/sandbox.sh")
         cmd = ["bash", _sandbox, spec.binpath, "exec", "--json",
                "--skip-git-repo-check",
                "--dangerously-bypass-approvals-and-sandbox"]
@@ -155,7 +155,7 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     if not spec.demo and spec.surface != "browser":
         cmd += ["-c", "mcp_servers.playwright.enabled=false"]
     # codex >= 0.144 spawns MCP servers with a SCRUBBED env — the parent's
-    # OPERATOR_SURFACE / OPERATOR_REAL_OK / OPERATOR_BOT never reached the
+    # OPERATOR_SURFACE / OPERATOR_REAL_OK / SQUAD_STORE_BOT never reached the
     # control server (verified 2026-07-12 with an env-dump stub server), so it
     # silently defaulted to the browser surface: perceive watched the WRONG
     # SCREEN on sandbox runs and _tools() withheld the `computer` tool — gpt
@@ -171,7 +171,7 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
         _ctl = "mcp_servers.operator-control.env."
         cmd += ["-c", _ctl + 'OPERATOR_SURFACE="' + spec.surface + '"']
         if spec.bot:
-            cmd += ["-c", _ctl + 'OPERATOR_BOT="' + spec.bot + '"']
+            cmd += ["-c", _ctl + 'SQUAD_STORE_BOT="' + spec.bot + '"']
         if spec.real_ok:
             cmd += ["-c", _ctl + 'OPERATOR_REAL_OK="1"']
     if spec.resume_id:
@@ -217,7 +217,7 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
             "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}
         # driver parity: gemma gets the control MCP (computer/perceive/
         # game_macro) whenever a run actually drives a desktop surface. The
-        # demo IS allowed the control MCP  — its sandbox
+        # demo IS allowed the control MCP (the owner 2026-07-09) — its sandbox
         # surface routes every action through `docker exec` into the isolated
         # container, so the agent drives the container, never the host.
         if spec.surface != "browser":
@@ -238,7 +238,7 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     except OSError:
         pass
     # agy has no --append-system-prompt (a claude flag) — FOLD persona +
-    # the app self-context + task into the -p prompt (like the codex adapter),
+    # squad self-context + task into the -p prompt (like the codex adapter),
     # plus the agy-only stepwise directive (Flash one-shots its whole plan
     # otherwise and the live trace lands in a burst instead of streaming).
     prompt = (spec.persona
@@ -279,7 +279,7 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
     _op_entry = {"command": "bash",
                  "args": [os.path.join(_CONTROL, "operator-mcp.sh")],
                  "env": {"OPERATOR_SURFACE": spec.surface,
-                         "OPERATOR_BOT": spec.bot,
+                         "SQUAD_STORE_BOT": spec.bot,
                          **({"OPERATOR_REAL_OK": "1"} if spec.real_ok else {})}}
     _pw_entry = {"command": "bash",
                  "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}

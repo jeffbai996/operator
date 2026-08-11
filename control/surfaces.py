@@ -9,8 +9,9 @@ mode (direct vs macro) and surface (what screen) stay independent axes.
 
 Browser injection is raw CDP `Input.dispatchMouseEvent`/`insertText` on an
 async playwright attach running in a dedicated event-loop thread, every op
-bounded by a timeout — NEVER page.mouse/page.evaluate unbounded (high-level
-Playwright calls can block forever on a desynced connect_over_cdp handle).
+bounded by a timeout — NEVER page.mouse/page.evaluate unbounded (see the
+feed-death post-mortem in ../CLAUDE.md: high-level Playwright calls block
+forever on a desynced connect_over_cdp handle).
 
 Safety: every inject first checks the shared STOP file. The cockpit STOP button
 arms it; any armed stop newer than the surface's start kills all further
@@ -29,17 +30,16 @@ import numpy as np
 from PIL import Image
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-# computer-use/ sits one level up in the standalone layout (control/ at repo
-# root) but two levels up if this package is nested inside a monorepo module
-# dir — try both, preferring whichever actually exists on disk.
-_CU_DIR_1UP = os.path.abspath(os.path.join(_HERE, "..", "computer-use"))
-_CU_DIR_2UP = os.path.abspath(os.path.join(_HERE, "..", "..", "computer-use"))
-_CU_DIR = _CU_DIR_1UP if os.path.isdir(_CU_DIR_1UP) else _CU_DIR_2UP
+_CU_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "computer-use"))
 
 SURFACES = ("browser", "desktop-sandbox", "desktop-real")
 STOP_FILE = os.path.expanduser("~/.cache/computer-use/operator-stop.json")
 
 CDP_URL = os.environ.get("OPERATOR_CDP") or "http://127.0.0.1:9222"
+
+# Color scheme forced onto every CDP-attached page (see _force_dark_media).
+# The host browser/OS runs dark; attaching flips pages to light, so we pin it.
+_MEDIA_SCHEME = os.environ.get("OPERATOR_COLOR_SCHEME") or "dark"
 
 
 class SurfaceError(RuntimeError):
@@ -89,6 +89,11 @@ class _BaseSurface:
             raise SurfaceStopped("STOP engaged — injection halted")
 
     # capture
+    # INVARIANT (§3.2c): frame() is always a FRESH on-demand capture (CDP
+    # captureScreenshot / a new screenshot file). It must never be satisfied
+    # from the cockpit's throttled MJPEG feed — the agent reasons over what
+    # frame() returns, and a stale feed frame is how "can't find X when it's
+    # right there" happens. Audited 2026-07-09: all implementations comply.
     def frame(self) -> np.ndarray:  # RGB (H, W, 3)
         raise NotImplementedError
 
@@ -181,11 +186,48 @@ class BrowserSurface(_BaseSurface):
         if chosen is not self._page:
             self._page = chosen
             self._sess = None
+            await self._force_dark_media()
 
     async def _session(self):
         if self._sess is None:
             self._sess = await self._page.context.new_cdp_session(self._page)
         return self._sess
+
+    async def _force_dark_media(self) -> None:
+        """Re-assert dark mode on the bound page.
+
+        Attaching over CDP makes every page report
+        `prefers-color-scheme: light` even though the real Chrome (and the OS)
+        is dark — sites then render their light theme for the whole run.
+
+        The browser is NOT at fault: verified 2026-07-28 that a raw CDP
+        `Runtime.evaluate` on this same browser reports dark=True BEFORE a
+        Playwright attach, False DURING it, and dark=True again after detach.
+        Playwright pushes its own `Emulation.setEmulatedMedia` defaults on
+        attach.
+
+        Clearing the override (`features: []`) looks like the tidier fix and
+        does sometimes restore dark, but it was measured to be UNRELIABLE —
+        on an attached tab it frequently leaves the page reporting light, both
+        before and after navigation. Explicitly forcing `dark` is the only
+        variant that tested deterministic, so that is what we send. The cost
+        is that this pins dark rather than following the OS; if the host ever
+        moves to light mode, change the value here (`_MEDIA_SCHEME`).
+
+        The override is per-target, so this re-runs on every page bind: it
+        survives navigation within a tab, but a newly-bound tab starts
+        overridden again. Best-effort — a page that can't take the command
+        (privileged/blank target) is not worth failing an operator run over.
+        """
+        try:
+            sess = await self._session()
+            await asyncio.wait_for(
+                sess.send("Emulation.setEmulatedMedia",
+                          {"features": [{"name": "prefers-color-scheme",
+                                         "value": _MEDIA_SCHEME}]}),
+                timeout=2.0)
+        except Exception:  # noqa: BLE001 — cosmetic; never break capture/inject
+            self._sess = None
 
     async def _send(self, method: str, params: dict | None = None,
                     timeout: float = 4.0):

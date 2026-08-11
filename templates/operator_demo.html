@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Operator</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28.7' fill='%2308090b'/%3E%3Ccircle cx='32' cy='32' r='30.2' fill='none' stroke='%23ffffff' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='16.5' fill='none' stroke='%233fb950' stroke-width='5.5'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" sizes="192x192"
+href="{{ url_for('operator.static', filename='icons/operator-192.png') }}">
 {# Apply the saved theme BEFORE any paint so there's no flash of the wrong
    theme. Sets <html data-theme="dark|midnight|light">; DARK is the default
    (no attribute needed, but we set it explicitly for the toggle's state). #}
@@ -19,7 +20,7 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@200..800&family=Geist+Mono:wght@400..800&display=swap" rel="stylesheet">
 <style>
 
 :root {
@@ -28,6 +29,8 @@
   --bg-2: #101216;
   --bg-3: #181a1f;
   --bg-4: #212329;        /* popovers / modals / active rows */
+
+  --bg-1: var(--bg-4);
   --fg: #e7ecf3;
   --fg-2: #a6adb6;        /* secondary text — slightly grayer */
   --muted: #79828d;       /* grayer muted, blue pulled out */
@@ -56,7 +59,7 @@
   --reading-font: "Anthropic Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   --ui-font: var(--reading-font);
-  --code-font: "IBM Plex Mono", ui-monospace, "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  --code-font: "Geist Mono", ui-monospace, "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
   --mono: var(--code-font);
 
   /* type colors — solid muddy fills replaced with the rgba-tint idiom (same hue,
@@ -76,12 +79,22 @@
   --c-general-bg:   rgba(200,163,255,.12); --c-general-fg:   #c8a3ff; --c-general-bd:   rgba(200,163,255,.34);
 }
 
+/* Reviewed operational-learning cards use compact neutral/status chips across
+   their separate pages. Pending has richer variants and may override these. */
+.pill-type, .pill-countdown { display:inline-block; font-size:0.68rem;
+  font-weight:700; letter-spacing:0.03em; border-radius:5px;
+  padding:0.08rem 0.45rem; text-transform:uppercase; }
+.pill-type.t-proposal { background:rgba(163,113,247,0.16); color:#a371f7; }
+.pill-type.t-save { background:rgba(63,185,80,0.14); color:var(--ok); }
+.pill-countdown { color:var(--muted); background:var(--bg-3); }
+
 
 [data-theme="midnight"] {
-  --bg: #0a0c14;
-  --bg-2: #13161f;
-  --bg-3: #1b1f2b;
-  --bg-4: #232837;
+
+  --bg: #000000;
+  --bg-2: #0a0b0f;
+  --bg-3: #14161c;
+  --bg-4: #1d2029;
   --fg: #e7ecf3;
   --fg-2: #aab4c2;
   --muted: #7e8a9a;
@@ -135,6 +148,9 @@ body {
    don't inherit fonts into form controls, so this is the one blanket rule;
    ::placeholder inherits from its input automatically. */
 button, input, select, textarea, option, .btn { font-family: var(--ui-font); }
+
+input::placeholder, textarea::placeholder {
+  font-size: 0.92em; color: var(--muted); opacity: 0.75; font-weight: 400; }
 .wrap { max-width: 1100px; margin: 0 auto; padding: 1.25rem 1.5rem 4rem; }
 /* Bare content links (back-links like "← memory #N") default to the accent
    instead of browser-default blue+underline. Defined EARLY on purpose: every
@@ -144,10 +160,19 @@ button, input, select, textarea, option, .btn { font-family: var(--ui-font); }
 .wrap a { color: var(--fg-2); text-decoration: none; }
 .wrap a:hover { color: var(--fg); text-decoration: underline; }
 
+.wrap a.pill:hover, .wrap a.view-btn:hover, .wrap a.btn:hover,
+.wrap a.mode-btn:hover, .wrap a.filter-opt:hover, .wrap a.cold-toggle:hover,
+.wrap a.bot-badge:hover, .wrap a.chip-mini:hover {
+  text-decoration: none;
+}
+
 header.site { display: flex; justify-content: space-between; align-items: center;
               border-bottom: 1px solid var(--border); padding-bottom: 0.4rem;
               margin-bottom: 0.95rem; gap: 0.35rem 1rem; flex-wrap: wrap;
-              position: sticky; top: 0; z-index: 10; padding-top: 0.45rem;
+              /* Operator's live feed/boot canvas owns z=50. The shared nav must
+                 stay above that canvas or long dropdowns get cut in half at
+                 the browser-stage boundary. Global modals begin far above 100. */
+              position: sticky; top: 0; z-index: 100; padding-top: 0.45rem;
               background: var(--bg); }
 header.site a { color: var(--muted); text-decoration: none; font-weight: 550;
                 padding: 0.28rem 0.6rem; border-radius: 8px; font-size: 0.92rem;
@@ -234,7 +259,7 @@ header.site .nav-primary { flex: 1 1 100%; flex-wrap: nowrap; }
                       margin-top: 0.1rem; font-weight: 400; }
 .kbd { display: inline-block; background: var(--bg-3); border: 1px solid var(--border-2);
        border-bottom-width: 2px; border-radius: 4px; padding: 0 0.35rem;
-       font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.78rem;
+       font-family: var(--code-font); font-size: 0.78rem;
        color: var(--muted); }
 h1, h2, h3 { letter-spacing: -0.015em; font-weight: 500; }
 h2 { font-size: 1.4rem; margin: 0.4rem 0 0.4rem; }
@@ -300,7 +325,8 @@ a.pill:hover { color: var(--fg); border-color: var(--border-2);
    char-budget cap) nudged total width past the column. Individual pills still
    never break internally. */
 td.tags-cell, td.about-cell { overflow: hidden; }
-td.tags-cell .pill, td.about-cell .pill { white-space: nowrap; }
+
+td.tags-cell .pill, td.about-cell .pill { white-space: nowrap; margin-bottom: 0.22rem; }
 /* bot-scope badges live UNDER the about pills, one badge per bot. */
 .bot-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.3rem; }
 .bot-badges .bot-badge { margin-left: 0; }
@@ -358,7 +384,7 @@ td.tags-cell .pill, td.about-cell .pill { white-space: nowrap; }
                border: 1px solid var(--border); }
 .mode-btn { background: transparent; border: 1px solid transparent;
             color: var(--muted); padding: 0.18rem 0.55rem; border-radius: 4px;
-            font: 500 0.78rem "IBM Plex Mono", ui-monospace, monospace;
+            font: 500 0.78rem var(--code-font);
             cursor: pointer; text-transform: lowercase; letter-spacing: 0.02em;
             transition: color 80ms ease, background 80ms ease, border-color 80ms ease; }
 /* Hover lightens INACTIVE buttons only. An active button keeps its own hue —
@@ -380,7 +406,7 @@ td.tags-cell .pill, td.about-cell .pill { white-space: nowrap; }
 
 /* V / K / VK badges next to entry IDs in semantic + hybrid modes.
    Same hue family as the mode toggle: V (sky), K (emerald), VK (violet). */
-.match-badge { display: inline-block; font: 700 0.62rem "IBM Plex Mono", ui-monospace, monospace;
+.match-badge { display: inline-block; font: 700 0.62rem var(--code-font);
                padding: 0.05rem 0.32rem; border-radius: 3px;
                border: 1px solid; line-height: 1.15; vertical-align: 1px;
                margin-left: 0.18rem; letter-spacing: 0.04em; }
@@ -395,13 +421,14 @@ td.tags-cell .pill, td.about-cell .pill { white-space: nowrap; }
    --bh (author_hue server filter / window.authorHue in JS — same hues the
    digest/transcripts speaker dots use). Serves both bot-scope whitelists and
    actor attribution pills. No --bh → the old amber (hue 40) as fallback. */
+
 .bot-badge { display: inline-block; font: 600 0.62rem var(--ui-font);
-             padding: 0.05rem 0.34rem; border-radius: 3px;
+             padding: 0.05rem 0.28rem; border-radius: 3px;
              border: 1px solid hsla(var(--bh, 40), 72%, 58%, 0.42);
              background: hsla(var(--bh, 40), 72%, 58%, 0.14);
              color: hsl(var(--bh, 40), 78%, 68%);
              line-height: 1.15; vertical-align: 1px; margin-left: 0.3rem;
-             letter-spacing: 0.04em; text-transform: uppercase; }
+             letter-spacing: 0.02em; text-transform: uppercase; }
 [data-theme="light"] .bot-badge {
              border-color: hsla(var(--bh, 40), 60%, 38%, 0.4);
              background: hsla(var(--bh, 40), 65%, 45%, 0.1);
@@ -480,12 +507,19 @@ button, .btn { cursor: pointer; font-weight: 500; text-decoration: none;
 button:hover, .btn:hover { background: var(--bg-3); }
 /* subtle press feedback — a modern tactile response, not loud. */
 button:active, .btn:active { transform: translateY(1px); }
-.btn-primary { background: var(--accent); color: #fff; border: none;
-               font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.25); }
-.btn-primary:hover { background: var(--accent-hi);
-                     box-shadow: 0 3px 10px -2px color-mix(in srgb, var(--accent) 55%, transparent); }
-.btn-danger  { background: #cf222e; color: #fff; border: none; font-weight: 500; }
-.btn-danger:hover { background: #da3633; }
+
+.btn-primary { color: var(--ok);
+               background: color-mix(in srgb, var(--ok) 10%, transparent);
+               border: 1px solid color-mix(in srgb, var(--ok) 48%, var(--border));
+               font-weight: 500; box-shadow: none; }
+.btn-primary:hover { color: color-mix(in srgb, var(--ok) 82%, white);
+                     background: color-mix(in srgb, var(--ok) 18%, transparent);
+                     border-color: var(--ok); }
+.btn-danger  { background: linear-gradient(145deg, #e5534b, #cf222e); color: #fff; border: none; font-weight: 500;
+               box-shadow: inset 0 1px rgba(255,255,255,.25), 0 1px 2px rgba(0,0,0,0.25); }
+.btn-danger:hover { background: linear-gradient(145deg, #f0665e, #da3633);
+                    box-shadow: inset 0 1px rgba(255,255,255,.3),
+                                0 6px 20px -4px rgba(207,34,46,0.5); }
 .btn-ghost   { background: transparent; border: 1px solid var(--border-2); }
 .btn-ghost:hover { background: var(--bg-2); border-color: var(--accent); color: var(--accent); }
 .create-action { color: var(--ok) !important;
@@ -527,10 +561,33 @@ td.truncate a.entry { display: block; overflow: hidden; text-overflow: ellipsis;
 a.entry { color: var(--fg); text-decoration: none; font-weight: 500; }
 a.entry:hover { color: var(--accent); }
 /* ID number column: larger, tabular for alignment */
+/* A dim # before an id code. In CSS, not the markup, so a copy takes the bare
+   id — you want `ts5w` on the clipboard, not `#ts5w`. */
+.id-hash::before { content: "#"; color: var(--muted); opacity: 0.45;
+                   font-weight: 500; margin-right: 0.5px; }
+
+
+[data-copy-id] { cursor: pointer; border-radius: 4px;
+                 transition: background 0.12s, color 0.12s; }
+[data-copy-id]:hover { background: var(--bg-3); color: var(--fg); }
+[data-copy-id]:active { background: var(--bg-2); }
+
+/* Copy acknowledgement. Without it nothing on screen changes and you cannot
+   tell the click registered. */
+.sq-toast { position: fixed; left: 50%; bottom: 26px;
+  transform: translateX(-50%) translateY(8px);
+  background: var(--bg-2); border: 1px solid var(--ok); color: var(--ok);
+  padding: 8px 15px; border-radius: 8px; font-size: 13px; font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+  transition: opacity .15s ease, transform .15s ease; z-index: 400; }
+.sq-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 .id-cell { font-family: "Plus Jakarta Sans", sans-serif;
            font-variant-numeric: tabular-nums; }
-.id-cell a.entry { font-size: 1rem; }
-.id-cell strong { font-size: 1.05rem; font-weight: 600; }
+
+.id-cell a.entry { font-size: 1rem; font-weight: 800; }
+
+.id-cell strong { font-size: 1.05rem; font-weight: 800; }
 
 /* search highlight */
 mark { background: rgba(241, 196, 15, 0.25); color: inherit;
@@ -580,6 +637,18 @@ mark { background: rgba(241, 196, 15, 0.25); color: inherit;
 .markdown-body a { color: var(--accent); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
 .markdown-body table { margin: 0.6rem 0; }
+
+.markdown-body table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  width: max-content;
+}
+/* Cells stop wrapping mid-word now that the table can scroll; keep a sane
+   ceiling so one long cell cannot push the whole table off-screen. */
+.markdown-body table td, .markdown-body table th {
+  max-width: 24rem;
+}
 .markdown-body th, .markdown-body td { border: 1px solid var(--border);
                                        padding: 0.4rem 0.6rem; text-transform: none;
                                        letter-spacing: 0; font-size: 0.9rem; }
@@ -672,7 +741,7 @@ details summary::-webkit-details-marker { color: var(--muted); }
                border: 1px solid var(--border); }
 .view-btn { background: transparent; border: 1px solid transparent;
             color: var(--muted); padding: 0.3rem 0.85rem; border-radius: 6px;
-            font: 600 0.86rem "IBM Plex Mono", ui-monospace, monospace;
+            font: 600 0.86rem var(--code-font);
             cursor: pointer; text-decoration: none; white-space: nowrap;
             display: inline-flex; align-items: center; gap: 0.4rem;
             transition: color 80ms ease, background 80ms ease, border-color 80ms ease; }
@@ -684,6 +753,9 @@ details summary::-webkit-details-marker { color: var(--muted); }
                        border-color: rgba(163,113,247,0.42); }
 .view-todos.active { background: rgba(45,194,164,0.18); color: #56d4bc;
                      border-color: rgba(45,194,164,0.42); }
+
+.view-scratch.active { background: rgba(207,122,0,0.18); color: #e3a008;
+                       border-color: rgba(207,122,0,0.45); }
 .view-count { background: rgba(45,194,164,0.28); color: #7fe7d4;
               border-radius: 999px; padding: 0.02rem 0.42rem; font-size: 0.72rem;
               font-weight: 700; line-height: 1.5; }
@@ -708,9 +780,13 @@ details summary::-webkit-details-marker { color: var(--muted); }
 .filter-drop-btn .fd-label { font-size: 0.7rem; text-transform: uppercase;
                              letter-spacing: 0.04em; color: var(--muted); }
 .filter-drop-btn .fd-value { color: var(--fg); font-weight: 500; }
-/* an ACTIVE (non-default) filter reads accent so you can spot it at a glance */
-.filter-drop-btn.is-set { border-color: color-mix(in srgb, var(--accent-2) 55%, transparent); }
-.filter-drop-btn.is-set .fd-value { color: var(--accent-2); }
+/* an ACTIVE (non-default) filter stands out via the neutral selected treatment.
+   Was cyan (--accent-2) — dropped 2026-08-05 with the rest of the blue button
+   text. NOT green: --ok means "succeeded", and a set filter is a selection, not
+   a confirmation. --sel-* is the token this codebase already uses for active
+   toggles/tabs everywhere outside the top nav. */
+.filter-drop-btn.is-set { border-color: var(--sel-border); }
+.filter-drop-btn.is-set .fd-value { color: var(--sel-fg); font-weight: 600; }
 .filter-drop-menu { display: none; position: absolute; top: calc(100% + 4px);
   left: 0; z-index: 50; background: var(--bg-2); border: 1px solid var(--border-2);
   border-radius: 9px; padding: 0.3rem; min-width: 10.5rem; max-height: 19rem;
@@ -722,9 +798,11 @@ details summary::-webkit-details-marker { color: var(--muted); }
   padding: 0.42rem 0.6rem; border-radius: 6px; font-size: 0.86rem;
   cursor: pointer; font-family: var(--ui-font); white-space: nowrap; }
 .filter-opt:hover { background: var(--bg-3); }
-.filter-opt.active { background: color-mix(in srgb, var(--accent-2) 11%, var(--bg-3));
-                     color: var(--accent-2); font-weight: 500;
-                     box-shadow: inset 1.5px 0 0 var(--accent-2); }
+/* selected option in an open filter menu — neutral selected treatment, same
+   reasoning as .filter-drop-btn.is-set above (was cyan). */
+.filter-opt.active { background: var(--sel-bg);
+                     color: var(--sel-fg); font-weight: 500;
+                     box-shadow: inset 1.5px 0 0 var(--sel-border); }
 .filter-opt .fd-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 @media (max-width: 700px) {
   /* menus can outgrow a phone — pin to the viewport like the nav dropdowns */
@@ -762,10 +840,14 @@ details summary::-webkit-details-marker { color: var(--muted); }
 .todo-note { font-size: 0.84rem; font-weight: 400; color: var(--fg-2, #adbac7);
              line-height: 1.45; word-wrap: break-word; }
 .todo-note.is-empty { color: var(--muted); font-style: italic; }
+/* Auto-grows to fit its content up to --note-max (see autosize() in journal.html).
+   min-height holds the 2-row floor for an empty note; the JS sets an inline
+   height above that. Overflow only appears once the cap is hit. */
 .todo-note-input { font: inherit; font-size: 0.84rem; background: var(--bg-3);
                    border: 1px solid var(--border); border-radius: 6px;
                    padding: 0.4rem 0.55rem; color: var(--fg); width: 100%;
-                   resize: vertical; margin-top: 0.15rem; }
+                   resize: vertical; margin-top: 0.15rem;
+                   min-height: 3.4rem; max-height: 22rem; overflow-y: auto; }
 
 /* tag pills on read-view — teal, click to search */
 .todo-tags { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.15rem; }
@@ -819,11 +901,6 @@ details summary::-webkit-details-marker { color: var(--muted); }
                  color: var(--fg); height: 1.9rem; box-sizing: border-box; }
 .todo-due-input { width: 11rem; }
 .todo-tags-input { flex: 1 1 9rem; min-width: 9rem; }
-/* live note char counter — sits just LEFT of the flag (margin-left:auto pushes
-   the whole counter→flag→buttons cluster to the right edge, aligned). */
-.todo-charcount { margin-left: auto; font-size: 0.72rem; color: var(--muted);
-                  font-variant-numeric: tabular-nums; white-space: nowrap; }
-.todo-charcount.over { color: #ff7b72; }
 .todo-flag-toggle { display: inline-flex; align-items: center; gap: 0.3rem;
                     cursor: pointer; font-size: 0.8rem; color: var(--muted); user-select: none; }
 .todo-flag-toggle .todo-flag-star { font-size: 1.1rem; color: var(--border-2); transition: color 80ms ease; }
@@ -833,8 +910,37 @@ details summary::-webkit-details-marker { color: var(--muted); }
 .todo-btn-sm { padding: 0.28rem 0.7rem; font-size: 0.78rem; }
 /* delete: subtle red ghost at the far right of the control strip */
 .todo-delete-btn { background: transparent; border: 1px solid rgba(248,81,73,0.35);
-                   color: #ff7b72; border-radius: 6px; cursor: pointer; }
+                   color: #ff7b72; border-radius: 6px; cursor: pointer;
+                   display: inline-flex; align-items: center; gap: 0.32rem; }
 .todo-delete-btn:hover { background: rgba(248,81,73,0.14); border-color: rgba(248,81,73,0.6); }
+.todo-delete-btn svg { width: 0.82rem; height: 0.82rem; stroke: currentColor;
+                       stroke-width: 2; fill: none; stroke-linecap: round;
+                       stroke-linejoin: round; }
+
+
+.todo-quick-del { width: 1.35rem; height: 1.35rem; flex: 0 0 auto; padding: 0;
+                  background: transparent; border: 1.5px solid transparent;
+                  border-radius: 6px; cursor: pointer; color: var(--muted);
+                  display: inline-flex; align-items: center; justify-content: center;
+                  visibility: hidden; opacity: 0;
+                  transition: opacity 120ms ease, color 120ms ease,
+                              border-color 120ms ease, background 120ms ease; }
+.todo-card:hover .todo-quick-del { visibility: visible; opacity: 0.55; }
+.todo-quick-del:hover { opacity: 1; color: #ff7b72;
+                        border-color: rgba(248,81,73,0.45);
+                        background: rgba(248,81,73,0.12); }
+.todo-quick-del:focus-visible { visibility: visible; opacity: 1; color: #ff7b72;
+                                outline: 2px solid rgba(248,81,73,0.5); outline-offset: 1px; }
+.todo-quick-del svg { width: 0.85rem; height: 0.85rem; stroke: currentColor;
+                      stroke-width: 2; fill: none; stroke-linecap: round;
+                      stroke-linejoin: round; }
+/* An open editor already carries a full delete button in its control strip —
+   two delete affordances on one card is the jank, so hide this one. */
+.todo-card.editing .todo-quick-del { display: none; }
+/* No-hover devices never fire the reveal, so keep it faintly visible there. */
+@media (hover: none) {
+  .todo-quick-del { visibility: visible; opacity: 0.4; }
+}
 
 .todo-list, #results-container { animation: view-fade-in 160ms ease; }
 @keyframes view-fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -885,6 +991,55 @@ details summary::-webkit-details-marker { color: var(--muted); }
   .deep-head .btn-primary { flex: 1 1 100%; white-space: nowrap; text-align: center; }
 }
 
+/* ─── Dark form controls for script-built panels ──────────────────────────
+   Inputs created in JavaScript never land inside form.filters, so they miss
+   the themed styling and render as browser-default WHITE bars on a dark page.
+   #deep-search below was the first instance and got a per-ID patch;
+   /inventory/vecgrep was the second, an entire config panel of white boxes.
+   Opt-in by container rather than another per-ID rule, and opt-in rather than
+   styling every input on the site, so no existing page changes underneath us.
+   Covers the whole family — text, number, select, checkbox, time — because a
+   panel that needs one invariably has the rest. */
+.form-dark input[type="text"], .form-dark input[type="number"],
+.form-dark input[type="time"], .form-dark input[type="search"],
+.form-dark input:not([type]), .form-dark select, .form-dark textarea {
+  background: var(--bg-3); color: var(--fg);
+  border: 1px solid var(--border-2); border-radius: var(--radius);
+  padding: 0.4rem 0.6rem; font-family: var(--ui-font); font-size: 0.84rem;
+  box-sizing: border-box; width: 100%;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.form-dark select { cursor: pointer; }
+.form-dark input:focus, .form-dark select:focus, .form-dark textarea:focus {
+  outline: none; border-color: var(--accent); background: var(--bg-2);
+}
+.form-dark input:disabled, .form-dark select:disabled {
+  opacity: 0.55; cursor: not-allowed;
+  background: color-mix(in srgb, var(--bg-3) 70%, transparent);
+}
+/* Checkboxes keep their intrinsic size — stretching one to width:100% turns it
+   into a giant square, which is how the schedule row looked. accent-color
+   alone is not enough: it only tints the CHECKED state, so an unchecked native
+   box still renders as a white chip on a dark card. Draw the box ourselves. */
+.form-dark input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 15px; height: 15px; flex: 0 0 auto; padding: 0; cursor: pointer;
+  border: 1px solid var(--border-2); border-radius: 4px; background: var(--bg-3);
+  display: inline-grid; place-content: center; vertical-align: -2px;
+}
+.form-dark input[type="checkbox"]::before {
+  content: ''; width: 8px; height: 8px; border-radius: 1px;
+  transform: scale(0); transition: transform 110ms ease;
+  box-shadow: inset 1em 1em var(--accent);
+}
+.form-dark input[type="checkbox"]:checked {
+  border-color: var(--accent); background: var(--accent-soft);
+}
+.form-dark input[type="checkbox"]:checked::before { transform: scale(1); }
+.form-dark input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+
 
 #deep-search {
   background: var(--bg-3); color: var(--fg);
@@ -911,7 +1066,9 @@ details summary::-webkit-details-marker { color: var(--muted); }
 .fxc-backdrop, .fxc-backdrop button, .fxc-backdrop input,
 .fxc-backdrop select, .fxc-backdrop textarea { font-family: var(--code-font); }
 
-.fx-actions, .fx-actions button, .fx-actions select { font-family: var(--ui-font); }
+.fx-actions, .fx-actions button, .fx-actions select,
+.fx-files-modernbar, .fx-files-modernbar button,
+.fx-files-modernbar input { font-family: var(--ui-font); }
 
 /* Mobile bar (☰ + prune) — hidden on desktop, shown under 760px. */
 .fx-mobilebar { display: none; align-items: center; justify-content: space-between;
@@ -964,8 +1121,9 @@ details summary::-webkit-details-marker { color: var(--muted); }
              padding-bottom: 0.55rem; border-bottom: 1px solid var(--border); }
 
 
-.fx-actions { margin-left: 0; display: flex; gap: 0.4rem; flex: 1 1 100%; width: 100%;
-              flex-wrap: wrap; justify-content: flex-start; align-items: center; }
+.fx-actions { margin-left: auto; display: flex; gap: 0.4rem; flex: 1 1 auto;
+              min-width: 0; flex-wrap: nowrap; justify-content: flex-end;
+              align-items: center; }
 .fx-actions .btn { padding: 0.3rem 0.65rem; font-size: 0.82rem; }
 /* The segmented control is a flex child too — pin it to its content height so it
    never stretches, regardless of the parent's align. */
@@ -973,15 +1131,15 @@ details summary::-webkit-details-marker { color: var(--muted); }
 .fx-segmented, .fx-files-controls { align-items: center; }
 
 /* breadcrumb path bar */
-.fx-crumbs { display: flex; align-items: center; gap: 0.15rem; flex-wrap: wrap;
-             font-size: 0.9rem; min-width: 0; flex: 1 1 100%; }
+.fx-crumbs { display: flex; align-items: center; gap: 0.15rem; flex-wrap: nowrap;
+             font-size: 0.9rem; min-width: 0; flex: 0 1 auto; }
 .fx-crumb { background: transparent; border: none; color: var(--accent);
-            font-family: var(--ui-font); font-size: 0.9rem; cursor: pointer; padding: 0.1rem 0.3rem;
+            font-family: var(--mono); font-size: 0.9rem; cursor: pointer; padding: 0.1rem 0.3rem;
             border-radius: 5px; font-weight: 500; max-width: 14rem; overflow: hidden;
             text-overflow: ellipsis; white-space: nowrap; }
 .fx-crumb:hover { background: var(--bg-3); color: var(--accent-hi); }
 .fx-crumb.is-current { color: var(--fg); font-weight: 600; cursor: default; }
-.fx-crumb.fx-store-wordmark { font-size: 1.1rem; }
+.fx-crumb.fx-store-wordmark { font-size: 1.1rem; font-family: var(--ui-font); }
 .fx-crumb-sep { color: var(--muted); font-size: 0.85rem; padding: 0 0.05rem; }
 
 .fx-hint { font-size: 0.76rem; margin: 0.45rem 0 0.55rem; padding: 0 0.1rem; }
@@ -1047,7 +1205,7 @@ details summary::-webkit-details-marker { color: var(--muted); }
            border-radius: 6px; padding: 0.25rem 0.6rem; font-size: 0.82rem;
            font-family: var(--ui-font); cursor: pointer; flex: 0 0 auto; }
 .fx-back:hover { border-color: var(--accent); color: var(--accent); }
-.fx-file-name { font-weight: 600; font-family: "IBM Plex Mono", ui-monospace, monospace;
+.fx-file-name { font-weight: 600; font-family: var(--code-font);
                 font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;
                 white-space: nowrap; min-width: 0; flex: 1 1 8rem; }
 .fx-file-meta { font-size: 0.78rem; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
@@ -1055,7 +1213,7 @@ details summary::-webkit-details-marker { color: var(--muted); }
 .fx-file-actions .btn { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
 .fx-note { font-size: 0.76rem; margin: 0 0 0.35rem; }
 .fx-content, .fx-editor { flex: 1; overflow: auto; margin: 0;
-                          font-family: "IBM Plex Mono", ui-monospace, monospace;
+                          font-family: var(--code-font);
                           font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap;
                           word-wrap: break-word; background: var(--bg-3);
                           border: 1px solid var(--border); border-radius: 6px;
@@ -1100,7 +1258,7 @@ details summary::-webkit-details-marker { color: var(--muted); }
            border-radius: 6px; padding: 0.16rem 0.5rem; font-size: 0.76rem;
            color: var(--fg-2); white-space: nowrap; line-height: 1.4; }
 .fd-chip-muted { color: var(--muted); }
-.fd-chip-sha { font-family: "IBM Plex Mono", ui-monospace, monospace; color: var(--muted);
+.fd-chip-sha { font-family: var(--code-font); color: var(--muted);
                cursor: default; }
 .fd-chip-scope { border-color: var(--warn); color: var(--warn); }
 .fd-chip-link { text-decoration: none; color: var(--accent); border-color: var(--accent); }
@@ -1251,12 +1409,24 @@ tr.is-pinned:hover td { background: rgba(240, 198, 116, 0.08); }
 .charcount { display: block; text-align: right; color: var(--muted);
              font-size: 0.78rem; margin-top: 0.25rem;
              font-variant-numeric: tabular-nums;
-             font-family: "IBM Plex Mono", ui-monospace, monospace; }
+             font-family: var(--code-font); }
 /* Soft-max exceeded (data-charmax) — a warning tint, not an enforced block. */
 .charcount.over { color: var(--warn); font-weight: 600; }
 .toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
            margin-top: 1.25rem; padding-top: 1rem;
            border-top: 1px solid var(--border); }
+
+
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 0.9rem 1.1rem; margin-top: 1rem; }
+.field-grid .field { min-width: 0; }
+.field-grid .field > label:first-child { margin-top: 0; }
+.field-grid .f-span { grid-column: 1 / -1; }
+@media (max-width: 640px) { .field-grid { grid-template-columns: 1fr; } }
+.toolbar .btn-quiet-danger { margin-left: auto; background: transparent;
+              color: #e5534b; border: 1px solid transparent; font-weight: 500; }
+.toolbar .btn-quiet-danger:hover { border-color: #e5534b;
+              background: rgba(229, 83, 75, 0.1); }
 .toolbar .spacer { flex: 1; }
 
 /* meta line */
@@ -1337,6 +1507,33 @@ tr.is-pinned:hover td { background: rgba(240, 198, 116, 0.08); }
    - .card          — the surface (gradient, lit top bevel, soft drop shadow)
    - .card--hover    — adds a lift on hover (for clickable/list cards)
    - .card-header    — the title row with a bottom rule */
+/* ── ops tiles — SHARED. Lived in status.html until 2026-08-07; /panel
+   shows the same kind of glanceable count strip, and duplicating the
+   block would let the two pages drift apart. Kept the st- names so the
+   status markup and its tests are untouched by the move. */
+
+.st-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+            gap: 0.6rem; margin-bottom: 1.1rem; }
+
+.st-tile { display: flex; flex-direction: column; padding: 0.75rem 0.9rem;
+           border-radius: 8px; background: var(--card); border: 1px solid var(--border);
+           text-decoration: none; color: inherit;
+           transition: border-color 0.12s; }
+a.st-tile:hover { border-color: var(--accent); }
+.st-tile-v { display: block; font-size: 1.85rem; font-weight: 600;
+             font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+             line-height: 1.1; }
+.st-tile-of { font-size: 0.95rem; font-weight: 500; color: var(--muted); }
+.st-tile-l { display: block; font-size: 0.64rem; text-transform: uppercase;
+             letter-spacing: 0.05em; color: var(--muted); margin-top: auto;
+             padding-top: 0.4rem; }
+.st-tile-sub { display: block; font-size: 0.68rem; color: var(--muted);
+               margin-top: 0.2rem; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
+.st-tile.warn-t { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); }
+.st-tile.warn-t .st-tile-v { color: var(--warn); }
+.st-tile .st-dot { margin-right: 0.3rem; position: relative; top: -0.12rem; }
+
 .card { background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.12)), var(--card);
   border: 1px solid var(--border); border-top-color: var(--border-2); border-radius: 12px;
   box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 8px 22px -16px rgba(0,0,0,0.85);
@@ -1377,6 +1574,12 @@ tr.is-pinned:hover td { background: rgba(240, 198, 116, 0.08); }
 .fcard-label { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.09em;
   text-transform: uppercase; color: var(--muted); flex: 0 0 auto; min-width: 4.6rem; }
 .fcard .spacer { flex: 1; }
+
+.ico-summarize { width: 1.05em; height: 1.05em; vertical-align: -0.16em;
+  margin-right: 0.34rem; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; }
+button:hover .ico-summarize { opacity: 0.9; }
+
 .chip-set { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
 .chip-toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .chip-toggle span { display: inline-flex; align-items: center; gap: 0.4rem;
@@ -1384,16 +1587,32 @@ tr.is-pinned:hover td { background: rgba(240, 198, 116, 0.08); }
   padding: 0.26rem 0.72rem; border: 1px solid var(--border); border-radius: 999px;
   font-size: 0.82rem; cursor: pointer; color: var(--fg-2); background: var(--bg-2);
   user-select: none; transition: background 120ms, border-color 120ms, color 120ms; }
-.chip-toggle span:hover { border-color: var(--border-2); color: var(--fg); }
+
+.chip-toggle span:hover { border-color: var(--border-2); color: var(--fg);
+  background: var(--bg-3, var(--bg-2)); transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.16); }
+.chip-toggle span:active { transform: translateY(0); box-shadow: none; }
+.chip-toggle input:focus-visible + span { outline: 2px solid var(--sel-border);
+  outline-offset: 2px; }
+.chip-toggle span { transition: background 120ms, border-color 120ms, color 120ms,
+  transform 120ms, box-shadow 120ms; }
+.chip-toggle span:hover .chip-dot { box-shadow: 0 0 0 3px hsl(var(--chue, 212) 55% 58% / 0.22); }
+.chip-dot { transition: box-shadow 140ms; }
 
 .chip-toggle input:checked + span { background: var(--sel-bg);
-  border-color: var(--sel-border); color: var(--sel-fg); }
+  border-color: var(--sel-border); color: var(--sel-fg);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04); }
+.chip-toggle input:checked + span .chip-dot {
+  box-shadow: 0 0 0 2px hsl(var(--chue, 212) 55% 58% / 0.30); }
 .chip-dot { width: 7px; height: 7px; border-radius: 50%; flex: none;
   background: hsl(var(--chue, 212), 55%, 58%); }
 .chip-mini { background: none; border: 1px solid var(--border); color: var(--muted);
   border-radius: 7px; font-size: 0.72rem; padding: 0.16rem 0.55rem; cursor: pointer;
   transition: color 120ms, border-color 120ms; }
-.chip-mini:hover { color: var(--fg); border-color: var(--border-2); }
+.chip-mini:hover { color: var(--fg); border-color: var(--border-2);
+  background: var(--bg-2); transform: translateY(-1px); }
+.chip-mini:active { transform: translateY(0); }
+.chip-mini { transition: color 120ms, border-color 120ms, background 120ms, transform 120ms; }
 a.chip-mini { text-decoration: none; display: inline-flex; align-items: center; }
 .chip-mini.active { color: var(--sel-fg); background: var(--sel-bg); border-color: var(--sel-border); }
 .stat-strip { display: flex; gap: 0.55rem; flex-wrap: wrap; align-items: stretch;
@@ -1425,18 +1644,27 @@ a.chip-mini { text-decoration: none; display: inline-flex; align-items: center; 
     display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem;
     background: var(--bg-2); border: 1px solid var(--border);
     border-radius: 10px; padding: 0.7rem 0.8rem; margin-bottom: 0.55rem; }
+
+  table.with-pin tr.entry-row.is-pinned {
+    background: rgba(240, 198, 116, 0.03);
+    border-color: var(--border);
+    box-shadow: inset 2px 0 0 0 rgba(240, 198, 116, 0.55); }
   table.with-pin tr.entry-row:hover td { background: transparent; }
   table.with-pin tr.entry-row > td {
     display: inline-flex; align-items: center; border: 0; padding: 0;
     width: auto; max-width: 100%; }
-  table.with-pin tr.entry-row > td.expand-cell { display: none !important; }
-  table.with-pin .id-cell { order: 0; width: auto !important; padding: 0 !important; }
-  table.with-pin .pin-cell { order: 1; width: auto !important; padding: 0 !important; }
-  table.with-pin .type-col { order: 2; width: auto !important; padding: 0 !important; }
-  table.with-pin .row-actions { order: 3; margin-left: auto; width: auto; padding: 0 !important; }
+
+  table.with-pin tr.entry-row > td.expand-cell {
+    order: 0; width: auto !important; padding: 0 0.15rem 0 0 !important; }
+  table.with-pin .id-cell { order: 1; width: auto !important; padding: 0 !important; }
+  table.with-pin .pin-cell { order: 2; width: auto !important; padding: 0 !important; }
+  table.with-pin .type-col { order: 3; width: auto !important; padding: 0 !important; }
+  table.with-pin .row-actions { order: 4; margin-left: auto; width: auto; padding: 0 !important; }
   table.with-pin tr.entry-row > td.name-cell { order: 4; flex: 1 1 100%; }
   table.with-pin td.about-cell, table.with-pin td.date { display: none !important; }
-  table.with-pin td.tags-cell { order: 5; flex: 1 1 100%; flex-wrap: wrap; }
+  table.with-pin td.tags-cell { order: 5; flex: 1 1 100%; display: flex; flex-wrap: wrap;
+    column-gap: 0.25rem; row-gap: 0.4rem; }
+  table.with-pin td.tags-cell .pill { margin: 0; }
   table.with-pin tr.expand-row { display: block; border: 0; background: transparent; }
   table.with-pin tr.expand-row[hidden] { display: none; }
   table.with-pin tr.expand-row > td { display: block; padding: 0 !important; border: 0 !important; }
@@ -1538,7 +1766,8 @@ a.chip-mini { text-decoration: none; display: inline-flex; align-items: center; 
 
 
   #semantic-hint { display: none !important; }
-  .result-count .live-budget { display: none; }
+  .result-count .live-budget .lb-tail { display: none; }
+  .result-count .live-budget::after { content: " tok"; }
   .result-count { display: flex; flex-wrap: wrap; align-items: center;
                   gap: 0.5rem 0.8rem; }
   .result-count .cold-toggle,
@@ -1565,6 +1794,11 @@ a.chip-mini { text-decoration: none; display: inline-flex; align-items: center; 
     background: var(--bg-2); border: 1px solid var(--border);
     border-radius: 10px; padding: 0.7rem 0.8rem; margin-bottom: 0.55rem;
   }
+  /* Same pinned treatment at the narrower breakpoint. */
+  table.with-pin tr.entry-row.is-pinned {
+    background: rgba(240, 198, 116, 0.03);
+    border-color: var(--border);
+    box-shadow: inset 2px 0 0 0 rgba(240, 198, 116, 0.55); }
   table.with-pin tr.entry-row:hover td { background: transparent; }
   table.with-pin tr.entry-row > td {
     display: inline-flex; align-items: center; border: 0; padding: 0;
@@ -1574,13 +1808,16 @@ a.chip-mini { text-decoration: none; display: inline-flex; align-items: center; 
      its own full-width line. The display:none rules need !important because the
      generic `> td { display: inline-flex }` rule above has equal-or-higher
      specificity (extra element selector) and would otherwise win. */
-  table.with-pin tr.entry-row > td.expand-cell { display: none !important; }  /* tap name to expand */
-  table.with-pin .id-cell { order: 0; width: auto !important; padding: 0 !important; }
+
+  table.with-pin tr.entry-row > td.expand-cell {
+    order: 0; width: auto !important; padding: 0 0.15rem 0 0 !important; }
+  table.with-pin .id-cell { order: 1; width: auto !important; padding: 0 !important; }
   table.with-pin .id-cell a.entry { font-size: 0.95rem; }
-  table.with-pin .pin-cell { order: 1; width: auto !important; padding: 0 !important; }
+  table.with-pin .pin-cell { order: 2; width: auto !important; padding: 0 !important; }
   table.with-pin .pin-cell .pin-wrap { gap: 0.45rem; }
-  table.with-pin .tier-dot { width: 9px; height: 9px; }
-  table.with-pin .type-col { order: 2; width: auto !important; padding: 0 !important; }
+
+  table.with-pin .tier-dot::before { width: 9px; height: 9px; }
+  table.with-pin .type-col { order: 3; width: auto !important; padding: 0 !important; }
   table.with-pin .type-col .pill { font-size: 0.7rem; padding: 0.12rem 0.5rem; max-width: none; }
   table.with-pin .row-actions { order: 3; margin-left: auto; width: auto; padding: 0 !important; }
   table.with-pin .row-delete-btn { opacity: 0.6; }
@@ -1596,9 +1833,14 @@ a.chip-mini { text-decoration: none; display: inline-flex; align-items: center; 
      expand panel. !important to beat the generic `> td` display rule. */
   table.with-pin td.about-cell, table.with-pin td.date { display: none !important; }
   table.with-pin td.tags-cell {
-    order: 5; flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 0.25rem;
+
+    order: 5; flex: 1 0 100%; display: flex; flex-wrap: wrap;
+    column-gap: 0.25rem; row-gap: 0.4rem;
     white-space: normal; overflow: visible;
   }
+  /* the pills' own margin-right double-counts against the flex column-gap and
+     margin-bottom is nil — zero them so the cell's gap is the single source. */
+  table.with-pin td.tags-cell .pill { margin: 0; }
   /* expand panel: full-width block beneath the card when opened. */
   table.with-pin tr.expand-row { display: block; border: 0; background: transparent;
                                  margin: -0.2rem 0 0.55rem; }
@@ -1841,6 +2083,18 @@ a.chip-mini { text-decoration: none; display: inline-flex; align-items: center; 
 }
 tr:hover .row-delete-btn { opacity: 0.6; }
 .row-delete-btn:hover { color: #ff7b72; background: rgba(207, 34, 46, 0.12); opacity: 1; }
+/* Destructive controls arm in place on the first tap. The width is allowed to
+   grow while armed so a cryptic right-rail ✕ can become an unambiguous
+   `confirm?` without opening a modal or shifting the whole row permanently. */
+[data-delete-tap].delete-armed,
+form[data-delete-confirm] .delete-armed {
+  width: auto !important; min-width: 4.6rem; opacity: 1 !important;
+  visibility: visible !important; color: #ff7b72 !important;
+  background: rgba(248,81,73,0.14) !important;
+  border: 1px solid rgba(248,81,73,0.5) !important;
+  border-radius: 5px; font-size: 0.7rem; font-weight: 650;
+  line-height: 1; white-space: nowrap;
+}
 /* Touch devices (iPad, phones) have no hover, so the hover-gated reveal above
    never fires — the ✕ stayed invisible/untappable at viewports >480px (the old
    mobile rule only caught phones). Show it always on any no-hover device. */
@@ -1892,7 +2146,7 @@ tr:hover .row-delete-btn { opacity: 0.6; }
   border: 1px solid var(--border); }
 .subtab { background: transparent; border: 1px solid transparent;
   color: var(--muted); padding: 0.3rem 0.85rem; border-radius: 6px;
-  font: 600 0.86rem "IBM Plex Mono", ui-monospace, monospace; text-decoration: none;
+  font: 600 0.86rem var(--code-font); text-decoration: none;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease; }
 .subtab:not(.active):hover { color: var(--fg); }
 .subtab.active { color: var(--sel-fg); background: var(--sel-bg);
@@ -1940,18 +2194,18 @@ tr:hover .row-delete-btn { opacity: 0.6; }
 /* deep CRUD — header actions + new/edit forms */
 .deep-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 1rem; }
 .deep-head-count { margin: 0; }
-.deep-head-path { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.78rem; }
+.deep-head-path { font-family: var(--code-font); font-size: 0.78rem; }
 .deep-search-input { width: 100%; margin-bottom: 1rem; }
 .deep-undobar-subject { color: var(--fg); }
 .deep-undo-form { margin: 0; }
 .deep-noresults { margin-top: 1rem; }
 .deep-inline-form { display: inline; margin: 0; }
 .deep-file-meta { margin: 0.2rem 0 1rem; }
-.deep-file-path { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.82rem; }
+.deep-file-path { font-family: var(--code-font); font-size: 0.82rem; }
 .deep-file-mtime { font-size: 0.8rem; }
 /* new/edit/promote forms share this back-link + heading spacing */
 .deep-back-link { margin: 0 0 0.6rem; }
-.deep-heading-mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.9rem; }
+.deep-heading-mono { font-family: var(--code-font); font-size: 0.9rem; }
 .deep-promote-hint { font-size: 0.85rem; max-width: 70ch; }
 .deep-file-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0.2rem 0 0.4rem; }
 .deep-file-actions { display: flex; gap: 0.4rem; }
@@ -2156,13 +2410,25 @@ table.with-pin th.type-col { width: 7rem; }
 
 
 
+
+  @font-face {
+    font-family: 'PJS Wordmark';
+    font-style: normal;
+    font-weight: 750;
+    font-display: swap;
+    src: url('fonts/pjs-wordmark-750.woff2') format('woff2');
+  }
+
+  .op { color-scheme: dark; }
+  [data-theme="light"] .op { color-scheme: light; }
   .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
-    --chat-font: 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* chat content + input font — Anthropic Sans (2026-07-21) */
+    --chat-font: 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
     --live:#3fb950; --live-glow:rgba(63,185,80,.6);
     --rail-w: minmax(248px, 300px);   /* allow a very narrow chat so the browser can maximize */
-    display: grid; grid-template-columns: var(--rail-w) 1fr; gap: 0.7rem;
+    --op-gap: 0.7rem;   /* rail↔browser gutter — the resizer centers on it, keep in sync */
+    display: grid; grid-template-columns: var(--rail-w) 1fr; gap: var(--op-gap);
     margin: 12px 0; box-sizing: border-box; position: relative;
     height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 380px;
     -webkit-user-select: none; user-select: none; }   /* app chrome: not selectable */
@@ -2198,6 +2464,10 @@ table.with-pin th.type-col { width: 7rem; }
     --bg: #000; --bg-2: #060708; --bg-3: #0c0e11; --bg-4: #14171c;
     --border: rgba(255,255,255,.10); --border-2: rgba(255,255,255,.14); }
   .op.op-flat .op-rail, .op.op-flat .op-browser, .op.op-flat .op-tabs { background: #000 !important; backdrop-filter: none !important; }
+
+  .op.op-flat .op-lp:not(.op-lp-over) { background: #000; backdrop-filter: none; }
+  .op.op-flat .op-lp::after { display: none; }
+  [data-theme="light"] .op.op-flat .op-lp:not(.op-lp-over) { background: #eef1f5; }
   [data-theme="light"] .op.op-flat {
     --bg: #eef1f5; --bg-2: #e4e8ee; --bg-3: #dde2e9; --bg-4: #d3d9e2;
     --border: rgba(0,0,0,.14); --border-2: rgba(0,0,0,.20); }
@@ -2244,7 +2514,7 @@ table.with-pin th.type-col { width: 7rem; }
 
     body.op-locked .op { flex: 1 1 auto; min-height: 0; min-width: 0;
       width: 100%; max-width: 100%; height: auto !important; margin: 0 !important;
-      gap: 8px; padding: 8px; box-sizing: border-box; background: var(--bg); }
+      --op-gap: 8px; gap: var(--op-gap); padding: 8px; box-sizing: border-box; background: var(--bg); }
   }
 
   /* full-window: hide the site header + let the operator page own the viewport */
@@ -2252,10 +2522,12 @@ table.with-pin th.type-col { width: 7rem; }
   body.op-full main, body.op-full .container, body.op-full .wrap {
     max-width: none !important; margin: 0 !important; padding: 0 !important; }
   body.op-full { overflow: hidden; background: #0c0e13; }
+
+  :root[data-theme="light"] body.op-full { background: #eef1f5; }
   body.op-full:has(.op-flat) { background: #000; }
   body.op-full .op { position: fixed; inset: 0; width: auto; height: auto;
     min-width: 0; min-height: 0; margin: 0; box-sizing: border-box;
-    border-radius: 0; gap: 8px; padding: 8px; background: var(--bg); z-index: 50;
+    border-radius: 0; --op-gap: 8px; gap: var(--op-gap); padding: 8px; background: var(--bg); z-index: 50;
     overflow: hidden; }
   body.op-full .op.op-flat { background: #000; }
   body.op-full .op-rail, body.op-full .op-browser { border-radius: 10px; }
@@ -2289,7 +2561,7 @@ table.with-pin th.type-col { width: 7rem; }
      MAN/AUTO crowded right up against the wordmark before anything hid and
      the two stages fired 16px apart — reads as panic, not design. New timing
      sheds ahead of pressure: stage 1 drops the brand caret (+ surface chip)
-     with ~40px of air still left, stage 2 minimizes the wordmark (scale, not
+     with ~20px of air still left, stage 2 minimizes the wordmark (scale, not
      clip — no letter chopped mid-word) ~15px before the caret-less collision,
      with a ~35-40px drag interval between stages so each reads as deliberate.
      Thresholds are rail CONTENT-box px, CALIBRATED PER MEDIA LAYOUT (mobile
@@ -2297,7 +2569,7 @@ table.with-pin th.type-col { width: 7rem; }
      desktop ≈ 223px; titlewrap 80px full / 66px caret-less. Minimizing costs
      the surface-menu button below stage 2 — accepted tradeoff. */
   @media (max-width: 820px) {
-    @container rail (max-width: 420px) {
+    @container rail (max-width: 400px) {
       .op-head { gap: 0.16rem; }
       .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }   /* tighten MAN/AUTO labels */
       .op-fontpill button { width: 17px; }
@@ -2312,7 +2584,7 @@ table.with-pin th.type-col { width: 7rem; }
     }
   }
   @media (min-width: 821px) {
-    @container rail (max-width: 344px) {
+    @container rail (max-width: 324px) {
       .op-head { gap: 0.16rem; }
       .op-mode-btn { padding-left: 0.34rem; padding-right: 0.34rem; }
       .op-fontpill button { width: 17px; }
@@ -2329,7 +2601,11 @@ table.with-pin th.type-col { width: 7rem; }
   #op-clear { margin-left: auto; }   /* push the icon group to the right edge */
   /* nudge the trash glyph up + right a hair to center it optically in its box */
   #op-clear svg { display: block; transform: translate(0.3px, 0px); transform-origin: center; }   /* nudged left 0.25 */
-  #op-flat svg { display: block; transform: translate(-0.25px, 0.5px); transform-origin: center; }   /* contrast: down + left */
+  /* contrast nudge: down + left. NO `display` here — the ID selector (1,0,1)
+     outguns every class rule, and with the 3-stop icons it forced all three
+     svgs visible at once (the 2026-07-28 side-by-side row). Visibility belongs
+     to the svg.op-lp-theme-* rules alone. */
+  #op-flat svg { transform: translate(-0.25px, 0.5px); transform-origin: center; }
   #op-full { transform: translate(0.75px, 0.75px); }   /* fullscreen glyph: down + right */
   /* no hover zoom — just a smooth shake on clear. keyframes KEEP the base translate so
      the can doesn't drift lower-left, and rotate around its own center. */
@@ -2348,9 +2624,12 @@ table.with-pin th.type-col { width: 7rem; }
     min-width: 0; overflow: hidden; }   /* tight header (low zoom): clip the wordmark instead of letting the MAN/AUTO pill paint over the version */
   .op-brand-text { display: inline-flex; flex-direction: column; justify-content: center;
     flex: 0 0 auto; white-space: nowrap; }   /* fixed wordmark — never let the flex row squeeze it to 0 */
-  .op-ver { font: 600 0.46rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted);
+
+  .op-ver { font: 600 0.48rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
-  .op-title { font: 700 0.9rem/1 'Plus Jakarta Sans', sans-serif; color: var(--fg);
+
+  .op { --op-wordmark-wght: 750; }
+  .op-title { font: var(--op-wordmark-wght) 0.9rem/1 'PJS Wordmark', 'Plus Jakarta Sans', sans-serif; color: var(--fg);
     letter-spacing: -.01em; margin-right: 0.15rem; white-space: nowrap; }
   .op-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex:0 0 auto;
     transition: background .3s, box-shadow .3s; }
@@ -2400,7 +2679,10 @@ table.with-pin th.type-col { width: 7rem; }
   .op-settings { position: fixed; z-index: 200;
     background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
     padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.5rem;
-    box-shadow: 0 8px 24px -8px rgba(0,0,0,.6); min-width: 170px; }
+    box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
+    /* wide enough for a URL field, capped so a narrow phone viewport
+       cannot push it off the right edge */
+    min-width: 232px; max-width: min(19rem, calc(100vw - 1.5rem)); }
   .op-settings[hidden] { display: none; }   /* the class's display:flex beats [hidden] — same trap as the palette rows */
   /* history popover (1.0.11) — same surface as settings, sized for a list */
   .op-history { position: fixed; z-index: 200; background: var(--bg-2);
@@ -2409,6 +2691,42 @@ table.with-pin th.type-col { width: 7rem; }
     box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
     width: min(340px, calc(100vw - 24px)); overflow-y: auto; }
   .op-history[hidden] { display: none; }    /* same display-beats-[hidden] trap */
+  /* conversations switcher (2026-08-06) — deliberately the SAME popover shell
+     as history: the rail is narrow, and a permanent sidebar column would take
+     its width from the chat, which is the thing you are actually reading. */
+  .op-chats { position: fixed; z-index: 200; background: var(--bg-2);
+    border: 1px solid var(--border-2); border-radius: 10px;
+    padding: 0.55rem 0.6rem; display: flex; flex-direction: column; gap: 0.4rem;
+    box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
+    width: min(340px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; }
+  .op-chats[hidden] { display: none; }
+  .op-chat-head { display: flex; align-items: center; justify-content: space-between;
+    font: 700 0.72rem 'JetBrains Mono', ui-monospace, monospace;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
+  .op-chat-newbtn { font: 600 0.64rem 'JetBrains Mono', ui-monospace, monospace;
+    letter-spacing: 0.04em; color: var(--accent); background: transparent;
+    border: 1px solid var(--border-2); border-radius: 6px; padding: 0.16rem 0.4rem;
+    cursor: pointer; text-transform: none; }
+  .op-chat-newbtn:hover { border-color: var(--accent); }
+  .op-chat-list { display: flex; flex-direction: column; gap: 0.25rem;
+    font-size: 0.78rem; color: var(--muted); }
+  .op-chat-row { display: flex; align-items: stretch; gap: 0.2rem;
+    border: 1px solid var(--border); border-radius: 8px; }
+  /* the active row is marked by its LEFT EDGE, not a fill: a filled row reads
+     as hover/pressed, and the list is scanned by title, not by colour. */
+  .op-chat-row.is-active { border-color: var(--border-2);
+    box-shadow: inset 2px 0 0 var(--accent); }
+  .op-chat-open { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline;
+    gap: 0.5rem; background: transparent; border: 0; cursor: pointer;
+    padding: 0.4rem 0.5rem; color: var(--fg-2); text-align: left; font: inherit; }
+  .op-chat-open .t { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .op-chat-open .w { flex: 0 0 auto; font: 500 0.62rem 'JetBrains Mono', monospace;
+    color: var(--muted); }
+  .op-chat-act { flex: 0 0 auto; width: 1.6rem; background: transparent; border: 0;
+    color: var(--muted); cursor: pointer; font-size: 0.72rem; border-radius: 0 8px 8px 0; }
+  .op-chat-act:hover { color: var(--fg); background: var(--bg-3); }
+  .op-chat-del:hover { color: var(--bad); }
   .op-hist-head { font: 700 0.72rem 'JetBrains Mono', ui-monospace, monospace;
     color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
   .op-hist-list { display: flex; flex-direction: column; gap: 0.3rem;
@@ -2446,6 +2764,46 @@ table.with-pin th.type-col { width: 7rem; }
   .op.op-no-glide .op-agent-cursor { transition: opacity .4s; }   /* cursor jumps instead of gliding */
   .op-set-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
     font: 600 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; color: var(--fg-2); }
+
+  .op-set-head { font: 700 0.55rem/1 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+    padding: 0.1rem 0.1rem 0; }
+  .op-set-sep { height: 1px; background: var(--border); margin: 0.15rem 0; }
+  .op-set-row label { cursor: pointer; }
+  .op-set-row.is-stacked { flex-direction: column; align-items: stretch; gap: 0.3rem; }
+  .op-set-field { display: flex; gap: 0.3rem; align-items: stretch; }
+  /* min-width:0 or the input's intrinsic width pushes the popover wider than
+     its own max — the same trap the telemetry date picker hit. */
+  .op-set-field input[type=url] { flex: 1 1 auto; min-width: 0;
+    background: var(--bg-3); color: var(--fg); border: 1px solid var(--border-2);
+    border-radius: 6px; padding: 0.3rem 0.4rem; box-sizing: border-box;
+    font: 500 0.66rem/1.2 'JetBrains Mono', monospace; }
+  .op-set-field input[type=url]:focus { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+  .op-set-field input[type=url].is-bad { border-color: #f47067; }
+  .op-set-field button { flex: 0 0 auto; background: var(--bg-4); color: var(--fg-2);
+    border: 1px solid var(--border-2); border-radius: 6px; cursor: pointer;
+    padding: 0 0.45rem; font: 600 0.6rem/1 'Plus Jakarta Sans', sans-serif;
+    transition: background .12s ease, color .12s ease; }
+  .op-set-field button:hover { background: var(--bg-3); color: var(--fg); }
+  .op-set-note { margin: 0; font: 500 0.58rem/1.35 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); }
+  .op-set-note.is-bad { color: #f47067; }
+  .op-set-note.is-ok { color: var(--live); }
+  /* Real switches instead of the OS checkbox, which rendered at three
+     different sizes across the machines this cockpit is opened from. */
+  .op-switch { appearance: none; -webkit-appearance: none; margin: 0;
+    flex: 0 0 auto; width: 30px; height: 17px; border-radius: 999px;
+    background: var(--bg-4); border: 1px solid var(--border-2);
+    position: relative; cursor: pointer;
+    transition: background .16s ease, border-color .16s ease; }
+  .op-switch::after { content: ""; position: absolute; top: 1px; left: 1px;
+    width: 13px; height: 13px; border-radius: 50%; background: var(--muted);
+    transition: transform .16s ease, background .16s ease; }
+  .op-switch:checked { background: color-mix(in srgb, var(--accent) 42%, transparent);
+    border-color: var(--accent); }
+  .op-switch:checked::after { transform: translateX(13px); background: var(--accent); }
+  .op-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .op-pt { font: 700 0.6rem/1 'JetBrains Mono', monospace; color: var(--live);
     flex: 0 0 auto; min-width: 2.4em; text-align: right; }
   .op-set-row input[type=range] { flex: 1 1 auto; accent-color: var(--accent); }
@@ -2486,13 +2844,17 @@ table.with-pin th.type-col { width: 7rem; }
     gap: 0.55rem; width: auto; align-self: flex-start; display: flex; align-items: center; }
   @media (min-width: 821px) { .op[data-status-min="1"] .op-action { gap: 0.32rem; } }   /* desktop: tighter minimized-pill gap; mobile keeps 0.55 (works as-is) */   /* tighter gap for the minimized pill */
   .op-action > div { transition: opacity .18s ease; }
-  .op[data-status-min="1"] .op-action > div { display: none; }   /* no flex gap when collapsed (see operator.css) */
-  /* minimized-card action emoji (see operator.css) */
+
+  .op[data-status-min="1"] .op-action > div { display: none; }
+
+
+
   .op-min-emoji { display: inline-flex; align-items: center; justify-content: center;
     max-width: 0; opacity: 0; overflow: hidden; font-size: 0.86rem; height: 1.4em;
-    flex: 0 0 auto; pointer-events: none;
-    transition: max-width .18s ease, opacity .18s ease; }
-  .op[data-status-min="1"][data-busy="1"] .op-min-emoji { max-width: 1.6em; opacity: 1; }
+    flex: 0 0 auto; pointer-events: none; margin-left: -0.55rem;
+    transition: max-width .18s ease, opacity .18s ease, margin-left .18s ease; }
+  .op[data-status-min="1"][data-busy="1"] .op-min-emoji {
+    max-width: 1.6em; opacity: 1; margin-left: 0; }
   .op-min-emoji.op-card-swap { animation: op-sub-cycle .34s cubic-bezier(.22,1,.36,1); }
   /* minimized: float the pill top-left so the rest of its row is transparent and the
      message log reclaims the full width underneath it. */
@@ -2507,10 +2869,8 @@ table.with-pin th.type-col { width: 7rem; }
   .op-action-ico::before { content:""; position:absolute; inset:0; border-radius:50%;
     border: 2px solid var(--border-2);
     transition: border-color .3s cubic-bezier(.4,0,.2,1), box-shadow .3s ease; }
-  .op[data-busy="1"] .op-action-ico::before {
-    border: 2px solid color-mix(in srgb, var(--live) 35%, transparent); border-top-color: var(--live);
-    box-shadow: 0 0 6px -2px var(--live);   /* soft modern glow on the active ring */
-    animation: op-spin .8s cubic-bezier(.65,.05,.36,1) infinite; }
+
+  .op[data-busy="1"]:not(.op-signal-lost) .op-action-ico::before { display: none; }
   /* CONNECTING → yellow spinning ring (not green), even while busy=1 on cold start */
   .op[data-state="connecting"]:not(.op-signal-lost) .op-action-ico::before {
     border: 2px solid #d2a30f !important; border-top-color: #f0cf6a !important;
@@ -2528,6 +2888,24 @@ table.with-pin th.type-col { width: 7rem; }
   .op.op-signal-lost .op-action-ico::before { animation: none; }
   @keyframes op-spin{
     0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+
+  .op-action-ico .op-act-mark { position: absolute; inset: 0; display: block;
+    overflow: visible; opacity: 0; transition: opacity .2s ease; }
+  .op-action-ico .op-act-hooks { fill: none; stroke: var(--fg-2); stroke-width: 1.28;
+    stroke-linecap: round; transform-origin: center; transform-box: fill-box; }
+  /* only while a task is actually running — an idle card keeps the bare ring,
+     and the done-state ✓ (::after) owns the box when it lands. */
+  .op[data-busy="1"]:not(.op-signal-lost) .op-action-ico .op-act-mark { opacity: 1; }
+  .op[data-busy="1"]:not(.op-signal-lost) .op-action-ico .op-act-hooks {
+    stroke: var(--live);
+    animation: op-spin .8s cubic-bezier(.65,.05,.36,1) infinite; }
+  /* connecting keeps its amber, same as the ring it replaced */
+  .op[data-state="connecting"]:not(.op-signal-lost) .op-action-ico .op-act-hooks {
+    stroke: #d2a30f; animation-duration: .85s; }
+  .op[data-mode="man"] .op-action-ico .op-act-hooks { stroke: #f0883e; }
+  .op[data-agent="done"] .op-action-ico .op-act-mark { opacity: 0; }
+  @media (prefers-reduced-motion: reduce) {
+    .op[data-busy="1"] .op-action-ico .op-act-hooks { animation: none; } }
   /* constant-speed spinner: paired with `linear` timing (no accel/decel). */
   /* animated checkmark when a task completes — a centered ✓ glyph */
   .op-action-ico::after { content: ""; position: absolute; inset: 0;
@@ -2565,7 +2943,7 @@ table.with-pin th.type-col { width: 7rem; }
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
   .op-action-body { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans',sans-serif; color: var(--fg); }   /* status verb (Working/Ready) down half a notch: 0.86->0.80 */   /* FIXED size — status card is not −/+ controlled (chat only); mobile peek has its own scale */
+    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans', sans-serif; color: var(--fg); }
   .op-action-sub { transition: color .25s ease; }
   /* tool-call / status text changes animate in like the chat bubbles do */
   .op-action-txt.op-card-swap { animation: op-card-in .4s cubic-bezier(.22,1,.36,1); }
@@ -2600,25 +2978,37 @@ table.with-pin th.type-col { width: 7rem; }
   .op:has(.op-log:not(:empty)) #op-demo-note { display: none; }   /* clear the demo card once the conversation starts */
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
-  .op-action-sub { font: 500 0.66rem/1.3 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
+  .op-action-sub { font: 500 0.66rem/1.3 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
     margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* FIXED size (not −/+ controlled); +1px baseline-align with "Working" */
 
   /* wrap is the flex slot; log scrolls inside it; jump-button floats over it */
-  .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .op-logwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 18px); }
+
+  .op-logwrap:has(.op-log:empty) { -webkit-mask-image: none; mask-image: none; }
+
+  .op-logwrap:has(.op-log > :only-child) { -webkit-mask-image: none; mask-image: none; }
   /* "Jump to bottom" live pill — rises from above the input when scrolled up; red dot = feed is live. */
   /* "Jump to present" pill — filled red, fast-forward glyph, rises from above the input. */
   .op-jump { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%) translateY(8px);
     height: 24px; padding: 0 0.7rem 0 0.55rem; border-radius: 999px; cursor: pointer;
     background: var(--bad); color: #fff; border: 1px solid var(--bad);
     display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap;
-    font: 700 0.72rem/1 'Plus Jakarta Sans', sans-serif;
+    font: 600 0.72rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
     box-shadow: none; z-index: 6;
     opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
+  /* Anthropic Sans sits ~1px low in a line-height:1 flex box (ascender-heavy
+     metrics + the SVG glyph anchoring the row height), so "Jump" reads slightly
+     below center. Lift the label 1px into optical center; the ff glyph stays put. */
+  .op-jump-lbl { margin-top: -1px; }
   .op-jump-ff { flex: 0 0 auto; width: 12px !important; height: 12px !important; }   /* ▶▶ filled fast-forward */
   .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
   .op-jump:hover { background: #e5484d; border-color: #e5484d; }   /* stay red on hover, no gray, no glow */
-  /* conversation log — flex-grows, scrolls */
+
   .op-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    overflow-anchor: none;
     display: flex; flex-direction: column; gap: 0.4rem; padding: 0.05rem 0.1rem; }
   .op-log:empty { padding-top: 0; }
   .op[data-mode="man"] .op-log:empty::after { content: none; }
@@ -2627,7 +3017,7 @@ table.with-pin th.type-col { width: 7rem; }
   .op[data-mode="man"] .op-log { opacity: 0.5; filter: grayscale(0.35);
     transition: opacity .3s ease, filter .3s ease; pointer-events: none; }
   .op-log { transition: opacity .3s ease, filter .3s ease; }
-  .op-log:empty::after { content: "Type a message, or use the browser to steer Operator. Tip: type / for saved tasks.";
+  .op-log:empty::after { content: "Type a message, or use the browser to steer Operator.";
     color: var(--muted); font: 500 0.6rem/1.45 'Plus Jakarta Sans', sans-serif;
     padding: 0; margin: 0; letter-spacing: -.003em; }
   /* demo has no saved tasks (routes 404, palette hidden) — keep its copy tip-free */
@@ -2680,7 +3070,18 @@ table.with-pin th.type-col { width: 7rem; }
     box-shadow: 0 2px 8px -3px rgba(0,0,0,.4); white-space: pre-wrap; word-break: break-word; }
   .op-msg.step .body { color: var(--muted) !important;
     font: 600 0.66rem/1.4 'Plus Jakarta Sans',sans-serif !important; letter-spacing:-.002em; }
-  .op-msg.step.err .body { color: var(--bad); }
+
+  .op-msg.step.err { background: var(--bg-2); border: 1px solid var(--border);
+    border-left: 2px solid var(--bad); border-radius: 10px;
+    padding: 0.42rem 0.6rem 0.44rem 0.62rem; margin: 0.4rem 0 0.35rem;
+    display: flex; align-items: center; gap: 0.4rem;
+    box-shadow: 0 1px 10px -6px rgba(0,0,0,.55); }
+  .op-msg.step.err .body { color: var(--fg) !important;   /* body reads as text; the band carries the "bad" signal */
+    font: 600 calc(0.7rem * var(--chat-scale))/1.35 'Plus Jakarta Sans',sans-serif !important; }
+  /* ⚠ triangle on coalesced action-failure lines — inline, sits on the text baseline */
+  .op-msg.step .warn { display: inline-flex; vertical-align: -2px; margin-right: 0.3rem; color: var(--bad); }
+  .op-msg.step.err .warn { flex: 0 0 auto; margin-right: 0; vertical-align: 0; }
+  .op-msg.step .warn svg { display: block; }
   /* code: darker, theme-aware (adapts to dark/midnight/light via the bg/border vars) */
   .op-msg.bot .bubble code, .op-msg.bot .bubble pre {
     background: var(--op-code-bg); border: 1px solid var(--op-code-bd); border-radius: 5px;
@@ -2706,6 +3107,27 @@ table.with-pin th.type-col { width: 7rem; }
 
   .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.45rem 0 0.35rem; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; position: relative; }
   .op-msg.bot .bubble pre code { background: none; border: none; padding: 0; }   /* no double box */
+  /* TABULAR code (ASCII tables) — wrapping shreds the alignment, so these
+     scroll sideways instead. Ordinary code keeps the wrap rule above. */
+  .op-msg.bot .bubble pre.op-pre-table { white-space: pre; word-break: normal;
+    overflow-wrap: normal; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* markdown pipe tables → real tables, flat-design, sideways scroll if wide */
+  .op-md-tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch;
+    margin: 0.45rem 0 0.35rem; border: 1px solid var(--op-code-bd); border-radius: 8px; }
+  .op-md-table { border-collapse: collapse; min-width: max-content; width: 100%;
+    font-size: 0.95em; line-height: 1.35; }
+  .op-md-table th, .op-md-table td { padding: 0.3rem 0.6rem; text-align: left;
+    vertical-align: top; border-bottom: 1px solid var(--op-code-bd); }
+  .op-md-table th { font-weight: 700; background: rgba(128,128,128,0.10); }
+  .op-md-table th:not(:last-child), .op-md-table td:not(:last-child) {
+    border-right: 1px solid var(--op-code-bd); }
+  .op-md-table tbody tr:last-child th, .op-md-table tbody tr:last-child td { border-bottom: none; }
+  /* the host site's global table chrome (sticky uppercase thead pinned 92px
+     down, row hover wash) leaks into chat bubbles — neutralize it here */
+  .op-md-table thead th { position: static; top: auto; z-index: auto;
+    background: rgba(128,128,128,0.10); color: inherit; text-transform: none;
+    letter-spacing: normal; font-size: inherit; font-weight: 700; }
+  .op-md-table tr:hover td { background: transparent; }
   /* code-block copy button: top-right, hover-reveal, theme-safe */
   .op-copy { position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
     display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
@@ -2734,7 +3156,7 @@ table.with-pin th.type-col { width: 7rem; }
     display: flex; flex-direction: column; gap: 0.5rem;
     box-shadow: 0 1px 10px -6px rgba(0,0,0,.55); }
   .op-handoff-head { display: flex; align-items: center; gap: 0.45rem;
-    font: 700 calc(0.82rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;
+    font: 700 calc(0.88rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;
     color: var(--fg); letter-spacing: -.01em; }
 
   .op-handoff-head .hi { flex: 0 0 auto; width: 0.6em; height: 0.6em;
@@ -2744,6 +3166,10 @@ table.with-pin th.type-col { width: 7rem; }
   @keyframes op-handoff-blink {
     0%   { opacity: 1; }
     50%  { opacity: 0.15; } }
+
+  .op-handoff.done .hi { animation: none; opacity: 0.45; background: var(--muted); }
+  /* light: #f5c542 washes out on the light canvas — deepen to a truer yellow */
+  [data-theme="light"] .op-handoff-head .hi { background: #eab308; }
   .op-handoff-reason { font: 500 calc(0.72rem * var(--chat-scale))/1.45 var(--chat-font);
     color: var(--fg-2); letter-spacing: -.005em; }
   .op-takeover-btn { align-self: flex-start; cursor: pointer;
@@ -2774,8 +3200,9 @@ table.with-pin th.type-col { width: 7rem; }
   .op-finish-opt { font-size: 0.86em; font-style: italic; color: var(--muted); }   /* ONLY "(optional)" — small + italic + muted */
   .op-finish-input { width: 100%; box-sizing: border-box; resize: none;
     background: var(--bg); color: var(--fg); border: 1px solid var(--border-2); border-radius: 10px;
-    padding: 0.4rem 0.55rem; font: 500 calc(0.72rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif;
+    padding: 0.4rem 0.55rem; font: 500 calc(0.68rem * var(--chat-scale))/1.4 'Plus Jakarta Sans', sans-serif;
     outline: none; }
+  .op-finish-input::placeholder { font-weight: 525; }   /* match the composer's bump */
   /* placeholder: italic, more grayed out (it was too bright); font-size inherits
      so typed text and placeholder can never drift apart again */
   .op-finish-input::placeholder { font-size: inherit; font-style: italic;
@@ -2810,7 +3237,8 @@ table.with-pin th.type-col { width: 7rem; }
     border-radius: 9px; color: var(--fg); font: 500 0.78rem/1 'Plus Jakarta Sans', sans-serif;
     padding: 0.5rem 0.6rem; cursor: pointer; }
   .op-driver:focus { outline: none; border-color: var(--accent); }
-  .op-steer { display: flex; gap: 0.4rem; align-items: flex-end; }   /* send pinned bottom-right (2026-07-21) */
+
+  .op-steer { display: flex; gap: 0.4rem; align-items: flex-end; }
   .op-input-wrap { flex: 1 1 auto; position: relative; display: flex; }
   .op-prefix { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
     color: var(--accent); font: 700 0.85rem/1 'JetBrains Mono', monospace; pointer-events: none; }
@@ -2819,6 +3247,10 @@ table.with-pin th.type-col { width: 7rem; }
     padding: 0.7rem 0.8rem 0.7rem 1.85rem; transition: border-color .2s, box-shadow .2s; }
   .op-input::placeholder { color: var(--muted); }   /* inherits the input's size — keep them in lockstep */
   .op-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.20); }
+  /* fixed height = the input's single-line height (0.7rem top/bottom pad +
+     ~1lh + 2px border ≈ 2.35rem). Pinned so the button is a stable square-ish
+     control at the input's bottom-right regardless of how many lines the
+     textarea grows to. */
   .op-send { flex: 0 0 auto; background: var(--accent); color: #0b0e18; border: none; border-radius: 10px;
     padding: 0 0.95rem; height: 2.35rem; font: 700 0.78rem/1 'Plus Jakarta Sans', sans-serif; cursor: pointer;
     display: inline-flex; align-items: center; justify-content: center;
@@ -2828,7 +3260,11 @@ table.with-pin th.type-col { width: 7rem; }
   /* ── RIGHT: live browser ───────────────────────────────────── */
   /* drag-to-resize handle between the chat rail and the browser (desktop only) */
   .op-resizer { grid-column: 1; grid-row: 1; justify-self: end; align-self: stretch;
-    width: 10px; margin-right: -0.7rem; cursor: ew-resize; z-index: 8;
+    /* center the 10px hit box (and its 3px line) on the grid gutter: shift
+       right by half the gap + half the box. The old fixed -0.7rem overshot the
+       8px locked-mode gap and the line hugged the browser edge. */
+    width: 10px; margin-right: calc(-1 * (var(--op-gap, 0.7rem) / 2 + 5px));
+    cursor: ew-resize; z-index: 8;
     display: flex; align-items: center; justify-content: center;
     -webkit-user-select: none; user-select: none; touch-action: pinch-zoom; }
   .op-resizer::before { content: ""; width: 3px; height: 38px; border-radius: 3px;
@@ -2913,7 +3349,8 @@ table.with-pin th.type-col { width: 7rem; }
   .op-tab-fav { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 3px; display: block; }
   /* favicon hover popover (v0.7.0): hovering a tab's favicon shows the big icon
      + the full page title + host — like hovering a real browser tab, but richer. */
-  .op-favpop { position: absolute; z-index: 40; display: flex; align-items: center; gap: 0.55rem;
+
+  .op-favpop { position: fixed; z-index: 2147483000; display: flex; align-items: center; gap: 0.55rem;
     max-width: 320px; padding: 0.5rem 0.65rem; background: var(--bg-4);
     border: 1px solid var(--border-2); border-radius: 10px;
     box-shadow: 0 10px 28px -8px rgba(0,0,0,.7); pointer-events: none;
@@ -3062,7 +3499,7 @@ table.with-pin th.type-col { width: 7rem; }
 
     .op-finish-input { font-size: calc(0.74rem * var(--chat-scale)); }
     .op .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.96rem) !important; }   /* model/effort scales with -/+ (mobile) but CAPPED. Caret gutter is NOT overridden here any more — the base rule's em-based padding already scales with this font-size, and a second hard-coded gutter is what let the two drift apart. */
-    #op-input.op-input::placeholder { font-size: calc(0.74rem * var(--chat-scale)); }   /* down 2 notches 0.72->0.64 ("Message Operator" too big) */
+    #op-input.op-input::placeholder { font-size: calc(0.74rem * var(--chat-scale)); }
     .op-disclaimer { font-size: 0.62rem; }   /* +half notch (mobile) */
     /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
        flex-centered digit; desktop keeps its 0.5px top-pad) */
@@ -3075,7 +3512,8 @@ table.with-pin th.type-col { width: 7rem; }
     /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px).
        Desktop keeps the compact 20px sizing. */
     .op-iconbtn { width: 28px; height: 28px; min-width: 28px; font-size: 1.1rem !important; }
-    .op-iconbtn svg { width: 16px !important; height: 16px !important; }
+
+    .op-iconbtn:not(.op-home-btn) svg { width: 16px !important; height: 16px !important; }
     #op-full { font-size: 1.05rem; }
     .op-fontpill { height: 28px; }
     .op-fontpill button { width: 26px; font-size: 1rem; }
@@ -3181,9 +3619,14 @@ table.with-pin th.type-col { width: 7rem; }
       padding-bottom: 0.5rem; align-content: start; }
     .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; aspect-ratio: auto; }
       /* full-width single column: let cards stay content-height, not tall squares */
-    .op-lp-name { font-size: calc(0.82rem * var(--chat-scale)); padding-right: 2.2rem; }
-    .op-lp-prompt { font-size: calc(0.72rem * var(--chat-scale)); -webkit-line-clamp: 2; }
-    .op-lp-site { font-size: calc(0.64rem * var(--chat-scale)); padding: 0.22rem 0.55rem; }
+
+    /* the +3px on theme/ring is their existing optical offset against the X —
+       keep it, or the row goes 3px out of line on mobile only. */
+    .op-lp-close { top: calc(0.75rem + env(safe-area-inset-top)); }
+    .op-lp-theme, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
+    .op-lp-close { right: calc(0.75rem + env(safe-area-inset-right)); }
+    .op-lp-theme { right: calc(3.5rem + env(safe-area-inset-right)); }
+    .op-lp-mark  { right: calc(6.25rem + env(safe-area-inset-right)); }
     .op-lp-go { top: 0.7rem; right: 0.7rem; padding: 0.4rem 0.72rem 0.4rem 0.62rem;
       font-size: calc(0.68rem * var(--chat-scale)); }   /* bigger tap target on touch */
     .op-lp-go svg { width: 12px; height: 12px; }
@@ -3231,8 +3674,12 @@ table.with-pin th.type-col { width: 7rem; }
     border-radius: 4px; padding: 0.1rem 0.3rem; color: var(--muted);
     font: 500 0.6rem/1.2 'JetBrains Mono', monospace;
     transition: color .12s ease, background .12s ease; }
-  .op-ham-item .k.k-icon { background: none; border: 0; padding: 0.1rem 0.18rem;
+
+  .op-ham-item .k.k-icon { padding: 0.13rem 0.24rem;
     display: inline-flex; align-items: center; }
+
+  #op-ham-settings .k.k-icon { padding: 0.08rem 0.2rem; }
+  #op-ham-settings .k.k-icon svg { width: 14px; height: 14px; }
   .op-ham-item:hover .k.k-icon { color: var(--fg); }
   .op-ham-item:hover .k { color: var(--fg-2); background: var(--bg-3); }
   .op-ham-sep { height: 1px; background: var(--border); margin: 4px 8px; }
@@ -3266,33 +3713,111 @@ table.with-pin th.type-col { width: 7rem; }
 
   /* the whole input box: one bordered container holding the input row + model row */
   .op-inputbox { border: 1px solid var(--border-2); border-radius: 11px; background: var(--bg);
-    padding: 0.4rem 0.5rem 0.3rem;
+    padding: 0.35rem 0.5rem;
     transition: border-color .25s, box-shadow .25s, background .3s ease, opacity .3s ease; }
   .op-inputbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
-  .op-steer { display: flex; gap: 0.4rem; align-items: center; }
+  .op-steer { display: flex; gap: 0.4rem; align-items: flex-end; }
+  /* BLOCK wrapper around #op-input: the iOS anti-zoom technique below widens the
+     textarea to 1/scale and paints it back down — as a direct flex item that widened
+     box shrank straight back to the row width and painted squished (the documented
+     lp-composer flex defeat). The wrapper is the flex item; inside block flow the
+     widened box sticks. Inert on desktop (textarea fills it at 100% as before). */
+  .op-grow-wrap { flex: 1 1 auto; min-width: 0; }
   .op-input { flex: 1 1 auto; width: 100%; background: transparent; border: none; outline: none;
-    color: var(--fg); font: 500 0.58rem/1.35 'Plus Jakarta Sans', sans-serif; padding: 0.2rem 0.25rem;
+    color: var(--fg); font: 500 0.58rem/1.35 var(--chat-font); padding: 0.2rem 0.25rem;
     text-align: left; resize: none; overflow-y: hidden; max-height: 140px;
     white-space: pre-wrap; word-break: break-word; }
-  /* iOS forcibly zooms a page when an editable control computes below 16px.
-     Keep the surrounding compact UI, but meet that threshold on coarse-pointer
-     WebKit instead of ever disabling native page zoom in the viewport.
-     #op-input is carved out like the URL bar (1.0.23): the rail chatbox keeps
-     the owner-preferred compact size from 2026-07-13 and accepts Safari's
-     focus zoom — the blanket 16px force-up was what made "Message Operator"
-     oversized and misaligned against the compact rail (2026-07-18). */
+
   @supports (-webkit-touch-callout: none) {
     @media (pointer: coarse) {
-      #op textarea:not(#op-input):not(.op-nt-input):not(.op-finish-input),
-      #op input[type="text"]:not(.op-nt-input):not(.op-nt-pill-in),
-      #op input[type="search"], #op input:not([type]):not(.op-nt-pill-in) {
+
+      #op textarea:not(#op-input):not(.op-finish-input),
+      #op input[type="text"], #op input[type="search"], #op input:not([type]) {
         font-size: 16px !important;
       }
+
+      input.op-nt-input {
+        --op-nts: 0.68;
+        font-size: 16px !important;
+        transform: scale(var(--op-nts)); transform-origin: left top;
+        width: calc(100% / var(--op-nts));
+        /* reclaim the (1−scale) phantom height, same as the textarea above.
+           1.45em line + 0.96rem of vertical padding = the layout box. */
+        margin-bottom: calc((var(--op-nts) - 1) * (1.45em + 0.96rem)); }
+      input.op-nt-input::placeholder { font-size: inherit; }
+      /* The chip-row field is a FLEX ITEM, so it deliberately does NOT get the
+         width/margin half of the trick — widening a flex child fights its
+         basis and the old note here ("plain 16px, no transform") was right
+         about that much. Scaling the PAINT alone is safe: the layout box is
+         untouched, so the row keeps its height and wrap behaviour and only the
+         glyphs shrink. transform-origin is left CENTER, not top, so the text
+         stays on the row's centre line with the chips. */
+      .op-nt-pill-in {
+        font-size: 16px !important;
+        transform: scale(0.68); transform-origin: left center; }
+      /* Paint-scale the finish-up box (manual-takeover follow-up). Same trick
+         as #op-input: computed 16px kills the focus zoom, a scale transform
+         paints it back to the compact 0.72rem design size. transform-origin
+         top-left + width:1/scale keeps the painted box at 100% width; a
+         negative bottom margin reclaims the (1−scale) phantom height so the
+         shrunk box leaves no dead space under it (it lives in an
+         overflow:hidden column-flex, so an uncompensated shrink would clip
+         low). resize:none — a transform desyncs the native resize handle and
+         touch users don't drag it. */
+      .op-finish-input {
+        --op-sec: 0.72;                       /* 16 × 0.72 ≈ 11.5px ≈ the compact design size */
+        font-size: 16px !important;
+        transform: scale(var(--op-sec)); transform-origin: left top;
+        /* align-self:flex-start so the column-flex stretch doesn't CAP the
+           widened box at parent width — without it width:calc(100%/scale)
+           gets clamped and the painted box only fills `scale`× the row (a
+           right-side gap). flex-start lets it overflow the layout box, which
+           the scale then paints back down to exactly 100%. */
+        align-self: flex-start;
+        width: calc(100% / var(--op-sec)); resize: none;
+        margin-bottom: calc((var(--op-sec) - 1) * (1.4em + 0.8rem));
+      }
+      .op-finish-input::placeholder { font-size: inherit; }
+
+      textarea.op-nt-input {
+        --op-nts: 0.68;
+        font-size: 16px !important;
+        transform: scale(var(--op-nts)); transform-origin: left top;
+        width: calc(100% / var(--op-nts)); resize: none;
+        margin-bottom: calc((var(--op-nts) - 1) * (4.4em + 0.96rem));
+      }
+      textarea.op-nt-input::placeholder { font-size: inherit; }
     }
   }
-  .op-steer { align-items: center; }   /* small send btn centered on the input line — no gap */
-  .op-input::placeholder { color: var(--muted); text-align: left; }
-  .op-send { flex: 0 0 auto; width: 23px; height: 23px; background: #ededea; color: #0b0e18;
+
+  @supports (-webkit-touch-callout: none) {
+    @media (pointer: coarse) {
+      #op-input.op-input {
+        --op-ipt: min(calc(0.74 * var(--chat-scale)), 0.96);
+        font-size: 16px !important;
+        width: calc(100% / var(--op-ipt));
+
+        max-height: calc(140px / var(--op-ipt));
+        transform: scale(var(--op-ipt));
+        transform-origin: left top;
+
+        display: block;
+        margin-bottom: calc((var(--op-ipt) - 1) * (1.35em + 0.4rem));   /* idle phantom: line + v-padding */
+      }
+      /* single-shrink: inherit the 16px so the paint transform is the ONLY
+         scaling — beats the mobile block's 0.74·scale placeholder rule above */
+      #op-input.op-input::placeholder { font-size: inherit; }
+    }
+    /* ≥821px (iPad-width): the desktop source-order block sets 0.77rem, not 0.74 */
+    @media (pointer: coarse) and (min-width: 821px) {
+      #op-input.op-input { --op-ipt: min(calc(0.77 * var(--chat-scale)), 0.96); }
+    }
+  }
+  .op-steer { align-items: flex-end; }
+  .op-input::placeholder { color: var(--muted); text-align: left;
+    font-weight: 500; }
+
+  .op-send { flex: 0 0 auto; width: 21px; height: 21px; background: #ededea; color: #0b0e18;
     border: 1px solid var(--border-2); border-radius: 6px; cursor: pointer; padding: 0;
     display: grid; place-items: center;   /* SVG centers geometrically */
     transition: filter .15s, transform .05s, background .15s; }
@@ -3304,16 +3829,22 @@ table.with-pin th.type-col { width: 7rem; }
   [data-theme="light"] .op { --op-code-bg: #e9edf2; --op-code-bd: rgba(0,0,0,.12); --op-code-fg: #2a2e36;
     /* the default light theme washes out under this UI — give the operator rail a
        slightly deeper, cooler surface + firmer borders so it reads as a panel, not paper. */
-    --bg-2: #e4e8ee; --bg: #eef1f5; --bg-3: #dde2e9; --border: rgba(0,0,0,.12); --border-2: rgba(0,0,0,.16); }
+    --bg-2: #e4e8ee; --bg: #eef1f5; --bg-3: #dde2e9; --border: rgba(0,0,0,.12); --border-2: rgba(0,0,0,.16);
+
+    --muted: #4e5866;
+
+    --bg-4: #d3d9e2; }
   [data-theme="light"] .op-rail { background: #e7ebf1; }   /* solid (no gradient corner seam) */
-  [data-theme="midnight"] .op { --op-code-bg: #0a0e18; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
-  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* fixed size — does NOT scale with the +/- control */
+
+  [data-theme="midnight"] .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
+  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
     color: var(--muted); opacity: 0.82; text-align: center; cursor: default;
     /* iOS Safari's double-tap-select latches onto the nearest SELECTABLE text —
        a double-tap on the (non-selectable) stage bled through and highlighted
        this line. It's chrome, not content: make it unselectable. */
     -webkit-user-select: none; user-select: none; }
-  [data-theme="light"] .op-disclaimer { color: #5a6573; opacity: 0.92; }   /* darker on light for readability */
+  [data-theme="light"] .op-disclaimer { color: #4b5462; opacity: 0.95; }
+  [data-theme="light"] .op-ver { color: #4b5462; opacity: 0.85; }
   [data-theme="light"] .op-disclaimer-info { color: #3a424d; }
   /* ── LIGHT-MODE chat legibility: several chat elements are tuned for dark and
      wash out on light. Give them dark-on-light colors so everything reads. ── */
@@ -3326,14 +3857,18 @@ table.with-pin th.type-col { width: 7rem; }
   [data-theme="light"] .op-act-lab { color: var(--fg); }
   [data-theme="light"] .op-msg.sys .body { color: #3a424d; }
   .op-disclaimer-info { display: block; max-height: 0; overflow: hidden; opacity: 0;
-    transform: translateY(-2px); transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem; }   /* a smidge smaller than the disclaimer; collapsed: zero height + slight up-offset */
+    transform: translateY(-2px); transition: none; margin-top: 0; color: var(--fg-2); font-size: 0.53rem;
+    will-change: transform; }
   /* revealed: gap as margin-top (outside the overflow box, collapses cleanly), NOT
      transitioned → no 1px end-jump. Only max-height+opacity animate. */
+  /* max-height must MATCH the content (one 0.75rem line), not overshoot it:
+     at the old 1.4rem the visible growth hit the real height mid-transition
+     and stopped dead while the clock kept running — the end-stilt. */
   .op-disclaimer:hover .op-disclaimer-info,
-  .op[data-mode="man"] .op-disclaimer-info { max-height: 1.4rem; opacity: 0.85; transform: translateY(0); margin-top: 0.2rem; }   /* slide down + fade in; height matches 1 line (1:1, no step) */
+  .op[data-mode="man"] .op-disclaimer-info { max-height: 0.78rem; opacity: 0.85; transform: translateY(0); margin-top: 0.2rem; }
   /* enable the reveal transition only AFTER first paint (op-ready) so a refresh can't
      animate the info open→closed (the flash on load). */
-  .op.op-ready .op-disclaimer-info { transition: max-height .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, transform .28s cubic-bezier(.22,.61,.36,1); }   /* ease-out: height resolves smoothly; opacity leads; subtle slide */
+  .op.op-ready .op-disclaimer-info { transition: max-height .3s cubic-bezier(.22,.8,.28,1), opacity .26s ease .04s, transform .3s cubic-bezier(.22,.8,.28,1); }   /* height + slide resolve together; opacity trails 40ms so text fades in as it settles, not before */
   /* MAN mode: the "no screenshots while you have control" line stays shown persistently
      (it's an active reassurance while the user is driving), not just on hover. */
   .op-noshot { display: inline-block; vertical-align: middle; position: relative; top: -1px; }   /* center the icon on the text midline (not flush at baseline) */
@@ -3342,52 +3877,17 @@ table.with-pin th.type-col { width: 7rem; }
     padding-top: 0.25rem; border-top: 1px solid var(--border); overflow: visible;
     visibility: hidden; }   /* revealed once loadModels sets the saved model — avoids default-flash on refresh */
   .op-modelrow.op-ready { visibility: visible; }
-  #op-model { min-width: 0; }   /* width owned by fitMini dynamic caret */
+  /* #op-model width is owned by fitMini (dynamic caret) — it sets flex:0 0 auto
+     + an explicit min-width to the selected name so the name is never clipped.
+     effort yields under squeeze. */
+  #op-model { min-width: 0; }
   #op-effort { flex: 0 1 auto; min-width: 0; max-width: 42%; }
   .op-mini:disabled { opacity: 0.45; cursor: default; }
   /* ── Slash palette (#30 v2): saved tasks summoned by typing "/" in the composer.
      Zero standing chrome — the palette floats above the inputbox only while the
      draft starts with "/". Same tokens as everything else; never in the demo. ── */
   .op-inputbox { position: relative; }
-  .op-pal { position: absolute; left: -1px; right: -1px; bottom: calc(100% + 8px);
-    background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 11px;
-    box-shadow: 0 -8px 30px rgba(0,0,0,.55); overflow: hidden; z-index: 30;
-    animation: op-pal-in .18s cubic-bezier(.2,1,.3,1); }
   @keyframes op-pal-in { from{opacity:0;transform:translateY(6px) scale(.99)} to{opacity:1;transform:none} }
-  .op-pal[hidden] { display: none; }
-  .op-pal-head { display: flex; justify-content: space-between; padding: 0.45rem 0.65rem;
-    font: 700 calc(0.54rem * var(--chat-scale))/1 var(--chat-font); color: var(--muted);
-    letter-spacing: .08em; border-bottom: 1px solid var(--border); }
-  .op-pal-list { max-height: 205px; overflow-y: auto; }
-  .op-pal-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem;
-    cursor: pointer; }
-  .op-pal-item.sel { background: var(--bg-4); }
-  .op-pal-name { font: 700 calc(0.66rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--fg); white-space: nowrap; }
-  .op-pal-prompt { font: 500 calc(0.58rem * var(--chat-scale))/1.2 var(--chat-font);
-    color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  .op-pal-empty { padding: 0.55rem 0.65rem; font: 500 calc(0.6rem * var(--chat-scale))/1.4 var(--chat-font);
-    color: var(--muted); }
-  .op-pal-key { flex: 0 0 auto; background: var(--bg-4); border: 1px solid var(--border-2);
-    border-radius: 4px; padding: 0.06rem 0.3rem; color: var(--fg-2);
-    font: 600 calc(0.54rem * var(--chat-scale))/1.3 var(--chat-font); }
-  .op-pal-del { flex: 0 0 auto; background: transparent; border: none; cursor: pointer;
-    color: var(--muted); font-size: 0.7rem; padding: 0.05rem 0.2rem; visibility: hidden; }
-  .op-pal-item.sel .op-pal-del, .op-pal-item:hover .op-pal-del { visibility: visible; }
-  .op-pal-del:hover { color: var(--fg); }
-  .op-pal-del.arm { color: #e5534b; visibility: visible; }
-  .op-pal-foot { display: flex; gap: 0.8rem; padding: 0.4rem 0.65rem; border-top: 1px solid var(--border);
-    font: 600 calc(0.54rem * var(--chat-scale))/1.6 var(--chat-font); color: var(--muted); flex-wrap: wrap; }
-  .op-pal-foot[hidden] { display: none; }   /* same [hidden]-vs-flex trap as the save row */
-  .op-pal-save { display: flex; gap: 0.4rem; padding: 0.5rem 0.65rem; align-items: center; }
-  .op-pal-save[hidden] { display: none; }   /* the class's display:flex would beat the hidden attr */
-  .op-pal-save input { flex: 1 1 auto; min-width: 0; background: var(--bg-3);
-    border: 1px solid var(--border-2); border-radius: 6px; color: var(--fg);
-    font: 500 calc(0.62rem * var(--chat-scale))/1.4 var(--chat-font); padding: 0.28rem 0.45rem; }
-  .op-pal-save input::placeholder { color: var(--muted); }
-  .op-pal-save input:focus { outline: none; border-color: var(--accent); }
-  .op-pal-save .op-pal-sites { flex: 0 1 38%; }
-  .op-demo .op-pal { display: none !important; }   /* never in the public demo */
   /* ── New-task modal (#30 v2b): OpenAI-Operator-style save dialog — name,
      "What would you like Operator to do?", websites/apps/MCPs. Opened from the
      💾 urlbar button (and prefilled from the draft or last dispatch). ── */
@@ -3409,7 +3909,7 @@ table.with-pin th.type-col { width: 7rem; }
     padding-top: 0.5rem; margin-bottom: -0.2rem; }
   @keyframes op-nt-in { from{opacity:0;transform:translateY(8px) scale(.97)} to{opacity:1;transform:none} }
   .op-nt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem; }
-  .op-nt-title { font: 700 calc(1.15rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); letter-spacing: -.01em; }
+  .op-nt-title { font: 700 calc(1.20rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); letter-spacing: -.01em; }
   .op-nt-x { background: transparent; border: none; color: var(--muted); cursor: pointer;
     width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; }
   .op-nt-x:hover { background: var(--bg-4); color: var(--fg); }
@@ -3508,6 +4008,8 @@ table.with-pin th.type-col { width: 7rem; }
   /* ── Launchpad (#1): saved tasks as cards on the idle stage — the OpenAI-
      Operator homepage pattern. Shown only on a fresh session (empty log, no
      run); disappears for good the moment the conversation starts. ── */
+
+  .op .op-lp:not([hidden]) { position: fixed; inset: 0; z-index: 40; }
   .op-lp { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column;
     align-items: safe center; justify-content: safe center; gap: 1rem; padding: 1.5rem;
     /* 3 cols × 218px + 2 × 0.75rem gap — the shared width for bar + grid */
@@ -3532,6 +4034,20 @@ table.with-pin th.type-col { width: 7rem; }
   .op-lp-grid { touch-action: pan-y pinch-zoom; }
   .op-lp[hidden] { display: none; }
   .op[data-mode="man"] .op-lp { display: none !important; }
+  /* Browser → splash used to be a hard cut: [hidden] flips display:none→flex and
+     the splash popped in. Fade + settle it instead. transition-behavior:allow-discrete
+     lets `display` participate so the element is laid out for the whole fade; the
+     @starting-style block is the enter-from state (Chrome 117+/all modern browsers,
+     confirmed on the bot's Chrome 148). op-ready gates it exactly like the disclaimer
+     reveal — a cold refresh restores the splash with no animation, only the in-session
+     return-to-splash animates. Boot/manual paths keep their hard display rules. */
+  .op.op-ready .op-lp:not([hidden]) {
+    transition: opacity .34s cubic-bezier(.22,.8,.28,1),
+                transform .34s cubic-bezier(.22,.8,.28,1);
+    opacity: 1; transform: none; }
+  @starting-style {
+    .op.op-ready .op-lp:not([hidden]) { opacity: 0; transform: scale(.985) translateY(6px); }
+  }
   /* The server renders the splash as the initial surface. Keep it on top for
      the first two animation frames while local/shared session state restores,
      so neither the rail nor browser chrome can flash before launchpad paint. */
@@ -3569,6 +4085,10 @@ table.with-pin th.type-col { width: 7rem; }
     grid-column: 1; border: 0; border-radius: 0; }
   .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-stage {
     min-height: 100%; }
+
+  .op-view { transition: opacity .28s ease; }
+  .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-view {
+    opacity: 0; }
   /* There is no second way into the cockpit from homepage mode: submitting a
      task is the door. The old X merely exposed an empty control panel. */
   .op[data-mode="auto"][data-busy="0"]:has(.op-lp:not([hidden])) .op-lp-close {
@@ -3581,9 +4101,15 @@ table.with-pin th.type-col { width: 7rem; }
   /* rem-only, NOT vw: under page zoom vw shrinks while rem text grows, so a
      vw-clamped wordmark scaled out of proportion to everything else. Mobile
      keeps its vw clamp below — narrow screens genuinely need viewport fit. */
-  .op-lp-wordmark { font: 700 5.6rem/0.9 'Plus Jakarta Sans',
-    sans-serif; color: var(--fg); letter-spacing: -.03em;
-    text-rendering: geometricPrecision; }
+  .op-lp-wordmark { font: var(--op-wordmark-wght, 700) 5.6rem/0.9 'PJS Wordmark',
+    'Plus Jakarta Sans', sans-serif; color: var(--fg); letter-spacing: -.03em;
+    text-rendering: geometricPrecision;
+    /* lh 0.9 leaves the p's descender ~0.2em of ink OUTSIDE the box: any later
+       sibling (composer, demonote, splash transitions) paints over exactly the
+       bottom of the p. Lift the wordmark's paint order, and grow the box over
+       the ink (negative margin keeps net layout identical). */
+    position: relative; z-index: 1;
+    padding-bottom: .24em; margin-bottom: -.24em; }
 
   .op-lp-demonote { display: none; font: 500 0.72rem/1.5 'Plus Jakarta Sans', sans-serif;
     color: var(--muted); letter-spacing: .01em; text-align: center; }
@@ -3596,6 +4122,220 @@ table.with-pin th.type-col { width: 7rem; }
   /* Cards are part of first paint, so keep the compact hero near the top and
      reserve the remaining height for the fixed two-row grid. */
   .op-lp-hero { margin-top: 0; gap: 0.6rem; }
+  /* ── The animated Operator mark (1.0.29) ──────────────────────────────────
+     Boot: the green arc sweeps the ring (indeterminate spinner) while the
+     glyph is still faded out. Once the feed resolves the sweep closes into a
+     full ring and the mark fades/scales in — so the "loader" IS the logo
+     assembling, not a spinner that gets replaced by one. Colors match the
+     favicon's ring stack. */
+  /* Third control in the splash's top-right row: X at 1.1rem, theme at 4rem,
+     this at 6.9rem. Same 32px box as its neighbours so the three read as one
+     row; the 26px art inside leaves the ring visually matched to their glyphs
+     rather than ballooning to the full button. */
+  .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
+    width: 32px; height: 32px; display: grid; place-items: center; line-height: 0; }
+  .op-lp-mark svg { overflow: visible; }
+
+  .op-lp-mark-tip { position: absolute; top: calc(100% + 6px); right: 0;
+    display: grid; gap: 1px; justify-items: end;
+    padding: 0.34rem 0.55rem; border-radius: 9px; white-space: nowrap;
+    background: color-mix(in srgb, var(--bg-4) 92%, transparent);
+    border: 1px solid var(--border-2); backdrop-filter: blur(14px) saturate(140%);
+    color: var(--fg); font: 600 0.63rem/1.25 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    box-shadow: 0 10px 26px -12px rgba(0,0,0,.85);
+    opacity: 0; transform: translateY(-3px); pointer-events: none;
+    transition: opacity .14s ease, transform .16s cubic-bezier(.2,1,.3,1); }
+  /* the state word is ::before content so it can be swapped purely in CSS;
+     the version rides under it as a dimmed second line. */
+  .op-lp-mark-ver { color: var(--muted); font-weight: 500; font-size: 0.5rem;
+    letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+  .op-lp-mark:hover .op-lp-mark-tip,
+  .op-lp-mark:focus-visible .op-lp-mark-tip { opacity: 1; transform: none; }
+
+  [data-theme="light"] .op-lp-mark-tip {
+    background: color-mix(in srgb, #f6f8fb 94%, transparent);
+    border-color: rgba(0,0,0,.13);
+    box-shadow: 0 10px 26px -14px rgba(0,0,0,.35); }
+  .op-lp-mark-tip::before { content: "Connecting…"; }
+  .op-mark-settled .op-lp-mark-tip::before { content: "Connected"; }
+  .op[data-state="hung"] .op-lp-mark-tip::before { content: "Degraded performance"; }
+  .op[data-state="hung"] .op-lp-mark-tip { color: #d2a30f; }
+  .op[data-state="error"] .op-lp-mark-tip::before,
+  .op.op-signal-lost .op-lp-mark-tip::before { content: "Connection error"; }
+  .op[data-state="error"] .op-lp-mark-tip,
+  .op.op-signal-lost .op-lp-mark-tip { color: var(--bad); }
+
+  .op.op-browser-down .op-lp-mark-tip::before { content: "Browser is down"; }
+  .op.op-browser-down .op-lp-mark-tip { color: var(--bad); }
+  .op.op-browser-down .op-lp-mark-sweep { stroke: var(--bad); }
+
+
+
+  .op-lp-mark.op-greeting .op-lp-mark-glyph {
+    animation: op-mark-greet-turn .78s cubic-bezier(.34,1.06,.44,1),
+               op-mark-greet-swell .78s ease-in-out; }
+  /* The glyph keeps opacity 1 and an identity transform AT REST, so hover-off
+     has nothing to snap back to. Pinning opacity inside the keyframes (the
+     2026-07-25 fix) was not enough on its own: `both` holds the animation's
+     final frame only while the :hover rule still matches, so the instant the
+     cursor left, BOTH the opacity and the rotate/scale reverted to whatever the
+     base rule said — that revert is the flash. Declaring the resting state
+     explicitly here makes the animation's end frame and the resting state
+     identical, so the handover is invisible.
+     A 720deg end frame is congruent with 0deg, so nothing jumps even if the
+     animation is interrupted mid-turn. */
+  .op-mark-settled .op-lp-mark-glyph {
+    opacity: 1; transform: rotate(0deg) scale(1);
+    transform-origin: center; transform-box: fill-box; }
+
+  @keyframes op-mark-greet-turn {
+    from { rotate: 0deg; } to { rotate: 360deg; } }
+  @keyframes op-mark-greet-swell {
+    0%, 100% { scale: 1; } 45% { scale: 1.14; } }
+  /* the ring swells with it, a touch behind, so the whole badge feels alive */
+  .op-lp-mark.op-greeting .op-lp-mark-sweep {
+    transform-origin: center; transform-box: fill-box;
+    animation: op-mark-greet-ring .78s cubic-bezier(.34,1.06,.44,1); }
+  /* Resting state declared for the same reason as the glyph above: the ring
+     must already BE at scale(1) when the hover rule drops, or it snaps. */
+  .op-mark-settled .op-lp-mark-sweep {
+    transform-origin: center; transform-box: fill-box; transform: scale(1); }
+  @keyframes op-mark-greet-ring {
+    0%,100% { transform: scale(1); }
+    25%     { transform: scale(1.07); }
+    60%     { transform: scale(1.04); } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-mark.op-greeting .op-lp-mark-glyph,
+    .op-lp-mark.op-greeting .op-lp-mark-sweep { animation: none; } }
+  .op-lp-mark-track { stroke: color-mix(in srgb, var(--muted) 26%, transparent); }
+  /* The SPIN lives on the wrapper group; the circle carries only dash geometry.
+     Splitting them is what makes the settle clean: growing the dash to a closed
+     ring never has to stop the rotation, and a full 360deg turn has no seam (a
+     dash-offset lap flashes where the round caps overlap at the wrap). */
+
+  .op-lp-mark-spin { transform-origin: center; transform-box: fill-box;
+    animation: op-mark-spin 1.15s linear infinite; }
+  .op-lp-mark-sweep { stroke: #3fb950;
+    /* r=25 => circumference 157.08. Dash 40/157 = a ~92deg arc. */
+    stroke-dasharray: 40 117.08;
+    will-change: transform;
+    transition: stroke-dasharray .5s cubic-bezier(.22,1,.36,1); }
+  /* The inner <g> carries the translate/scale that centers the 24-box art;
+     this group carries ONLY the rotation, so transform-origin is the true
+     ring center (32,32) and the mark pivots in place instead of swinging in. */
+
+
+  .op-lp-mark-glyph { stroke: var(--fg); opacity: .3;
+    will-change: transform;
+    transform-origin: center; transform-box: fill-box; }
+  /* Settled state — the sweep closes to a full ring, the mark resolves in.
+     Gated on .op-mark-settled (set by JS on the first live feed state), NOT on
+     .op-ready: op-ready flips ~32ms after parse, which would skip the spin. */
+  /* Settle: the dash GROWS to the full circumference, so the arc closes into a
+     complete ring. Only the dasharray is touched — the offset is deliberately
+     left alone. Once the dash covers the whole circle the offset stops being
+     observable (a full ring looks the same at any rotation), so the spin can
+     be cut without the arc's position ever showing a jump. Transitioning the
+     offset instead would snap it from mid-lap back to 0: the stutter. */
+  /* Settle: grow the dash into a closed ring. The rotation keeps running on the
+     wrapper and is stopped separately AFTER the ring closes — a full ring looks
+     identical at every angle, so stopping it then is invisible. */
+  .op-mark-settled .op-lp-mark-sweep { stroke-dasharray: 157.08 0; }
+
+  /* DISTINCT keyframes name, not op-mark-spin: same-name updates never
+     restart a running CSS animation — with iteration-count switched to 1 and
+     a lap already elapsed, the animation jumped straight to its filled end
+     state and the mark FROZE at 0deg (the "halt": the decelerating finale
+     never actually played for any settle after the first lap — live-traced
+     2026-07-27, rotation flatlines the instant op-mark-settled lands). A
+     fresh name restarts cleanly from 0deg at the lap boundary. */
+  .op-mark-settled .op-lp-mark-spin {
+    animation: op-mark-spin-settle 1.15s cubic-bezier(.25,.8,.3,1) 1 forwards; }
+
+
+  .op-mark-settled .op-lp-mark-glyph { opacity: 1;
+    animation: op-mark-settle .5s cubic-bezier(.22,1,.36,1) both,
+               op-mark-glyph-turn .72s cubic-bezier(.28,.74,.22,1) both; }
+  @keyframes op-mark-glyph-turn { from { rotate: 0deg; } to { rotate: 360deg; } }
+  /* THE mouse-off flash, finally (2026-07-26). While .op-greeting is on the
+     mark, the greet rule REPLACES this settle animation in the cascade; the
+     moment the class drops, `op-mark-settle` re-enters the element's
+     animation list and the browser treats it as newly applied — it REPLAYS
+     from opacity .3 / scale .94. That dip-and-refade is the flash. JS stamps
+     .op-boot-played once the settle has run; after that the settle animation
+     is never applied again (:not(.op-greeting) keeps this order-independent
+     of the greet rule, which must still win during a greet). */
+  .op-lp-mark.op-boot-played:not(.op-greeting) .op-lp-mark-glyph {
+    animation: none; }
+  /* ── Status colors ────────────────────────────────────────────────────────
+     Driven entirely by #op's existing data-state, so the ring needs no state
+     of its own: green live, amber connecting/hung, red when the backend is
+     down. The closed ring is the health readout; the sweep only runs before
+     the first resolved state. */
+  .op[data-state="error"] .op-lp-mark-sweep,
+  .op.op-signal-lost .op-lp-mark-sweep { stroke: var(--bad); }
+  .op[data-state="hung"] .op-lp-mark-sweep { stroke: #d2a30f; }
+  .op[data-state="error"] .op-lp-mark-glyph,
+  .op.op-signal-lost .op-lp-mark-glyph { stroke: var(--bad); }
+  /* A dead backend pulses so a red ring reads as an alarm, not just a recolor. */
+  .op-mark-settled[data-state="error"] .op-lp-mark-sweep,
+  .op-mark-settled.op-signal-lost .op-lp-mark-sweep {
+    animation: op-mark-alarm 1.6s ease-in-out infinite; }
+  @keyframes op-mark-alarm { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-mark-settled[data-state="error"] .op-lp-mark-sweep,
+    .op-mark-settled.op-signal-lost .op-lp-mark-sweep { animation: none; } }
+  /* A true 360deg turn — seamless by construction, no dash wrap to flash. */
+  @keyframes op-mark-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes op-mark-spin-settle { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+
+
+  /* The button inherits .op-full-btn's monospace `font: 500 .72rem/1`, and
+     .op-iconbtn only overrides font-SIZE — the leftover line-height kept
+     nudging the glyph off centre. Pin the box to a grid and drop the inherited
+     line box entirely so the only thing positioning the mark is the centring.
+     No transform-box: on an SVG ROOT, fill-box resolves against the ink bbox,
+     not the element box, which pivoted the spin off-centre (the tumble). */
+  .op-home-btn { display: grid; place-items: center; line-height: 0; }
+
+  /* The svg is DRAWN at 52px and scaled to 13 (see the template comment: the
+     compositor rotates a rasterised texture, and only a supersampled texture
+     spins without shimmer at this size). scale(.25) must therefore appear in
+     every transform that touches this element, keyframes included. No top/
+     left nudges: 52 in the 20px button centers on integers by itself —
+     verified dx 0.0 / dy 0.0 in an 8x headless measure. */
+  .op-home-btn { position: relative; }
+  /* absolutely centered, not grid-centered: the 52px box overflows the 20px
+     button and the button's layout pushed it below instead of holding it
+     centered. left/top 50% + integer -26px margins = exact center. */
+  .op-home-btn svg { display: block; transform-origin: center; will-change: transform;
+    position: absolute; left: 50%; top: 50%; margin: -26px 0 0 -26px;
+    transform: scale(0.25); }
+  /* Class-gated like the splash greet, NOT :hover-driven: mouse-off used to
+     kill the spin mid-turn and snap back. JS adds .op-greeting on enter and
+     clears it only on animationend, so the turn always completes. No `both`:
+     720deg end pose is congruent with rest, holding it buys nothing. */
+  .op-home-btn.op-greeting svg {
+    animation: op-home-greet .82s cubic-bezier(.34,1.06,.44,1); }
+
+  @keyframes op-home-greet {
+    from { transform: rotate(0deg)   scale(0.25); }
+    to   { transform: rotate(720deg) scale(0.25); } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-home-btn.op-greeting svg { animation: none; } }
+  /* starts at the glyph's resting .3 so the animation picks up exactly where
+     the static state left off — no step at the handover. */
+  @keyframes op-mark-settle {
+    from { opacity: .3; transform: scale(.94); }
+    to   { opacity: 1;  transform: scale(1); } }
+  /* Motion-sensitive users get the finished logo, never the spin. */
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-mark-spin { animation: none; }
+    .op-mark-settled .op-lp-mark-glyph { animation: op-mark-settle .5s cubic-bezier(.22,1,.36,1) both; }
+    .op-lp-mark-sweep { stroke-dasharray: 157.08 0; }
+    .op-lp-mark-glyph { opacity: 1; animation: none; }
+  }
   .op-lp-composer { margin-top: 1.4rem; }
   .op-lp-wordmark { font-size: 2.4rem; }
   /* ── the post-trash presentation: tasks over the LIVE feed, old translucent
@@ -3619,9 +4359,7 @@ table.with-pin th.type-col { width: 7rem; }
      hijacked absolute anchoring; the splash is full-viewport so fixed pins
      the X to the view's true top-right and it survives launchpad scroll */
   .op-lp-close { position: fixed; top: 1.1rem; right: 1.1rem; z-index: 3; }
-  /* the launchpad reopen button only makes sense in auto mode (manual mode
-     force-hides the launchpad itself) */
-  .op[data-mode="man"] #op-lp-open { display: none; }
+
   .op-lp-composer { width: min(100%, 36rem); min-height: 42px; position: relative; display: flex;
     align-items: center; padding: 0.4rem 3rem 0.4rem 0.92rem; box-sizing: border-box;
     background: color-mix(in srgb, var(--bg) 78%, #000); border: 1px solid var(--border-2);
@@ -3632,21 +4370,34 @@ table.with-pin th.type-col { width: 7rem; }
   .op-lp-input { display: block; width: 100%; height: 1.3em; min-height: 1.3em; max-height: none;
     resize: none; overflow-y: hidden;
     padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg);
-    font: 500 calc(0.68rem * var(--chat-scale))/1.3 'Anthropic Sans', var(--chat-font);
-    letter-spacing: -.01em; caret-color: var(--fg); }
+    font: 500 calc(0.84rem * var(--chat-scale))/1.3 'Anthropic Sans', var(--chat-font);
+    letter-spacing: -.01em; caret-color: var(--fg);
+    transform: translateY(0.5px);
+    transition: height .16s cubic-bezier(.22,.8,.28,1); }
+
   .op-lp-input::placeholder { color: var(--muted); opacity: .88;
-    font-size: inherit; }
+    font-size: calc(0.96rem * var(--chat-scale)); line-height: 1.14; }
 
   .op-lp-input:placeholder-shown { -webkit-user-select: none; user-select: none;
     height: 1.3em !important; }
   .op-lp-input:not(:placeholder-shown) { -webkit-user-select: text; user-select: text; }
-  .op-lp-send { position: absolute; right: 0.55rem; bottom: 0.35rem; width: 30px; height: 30px;
+
+  @media (min-width: 821px) {
+    .op-lp-input:placeholder-shown { font-size: calc(0.96rem * var(--chat-scale)); }
+    .op-lp-input::placeholder { font-size: inherit; line-height: 1.3; }
+  }
+
+  .op-lp-send { position: absolute; right: 5px; bottom: 5px;
+    width: 30px; height: 30px;
     display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%;
     padding: 0; gap: 0; background: var(--fg); color: var(--bg); cursor: pointer;
-    transition: opacity .12s ease, filter .12s ease; }
+    transition: opacity .12s ease, filter .16s cubic-bezier(.22,.8,.28,1), transform .13s cubic-bezier(.34,1.56,.64,1); }
   .op-lp-send svg { width: 16px; height: 16px; flex: 0 0 16px; }
-  .op-lp-send:hover { filter: brightness(.88); }
-  .op-lp-send:active { filter: brightness(.75); }
+
+  .op-lp-composer:has(.op-lp-input:placeholder-shown) .op-lp-send {
+    top: 50%; bottom: auto; translate: 0 -50%; }
+  .op-lp-send:hover { filter: brightness(.88); transform: scale(1.06); }
+  .op-lp-send:active { filter: brightness(.75); transform: scale(.92); }
   .op-lp-theme { position: fixed; top: calc(1.1rem + 3px); right: 4rem; z-index: 4;
     width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center;
     justify-content: center; border: 1px solid transparent; border-radius: 9px;
@@ -3655,10 +4406,26 @@ table.with-pin th.type-col { width: 7rem; }
   .op-lp-theme:hover { color: var(--fg); background: var(--bg-3); border-color: var(--border-2); }
   .op-lp-theme:active { transform: scale(.94); }
   .op-lp-theme svg { display: block; }
-  .op-lp-theme-night { display: none !important; }
-  [data-theme="light"] .op-lp-theme-day { display: none; }
-  [data-theme="light"] .op-lp-theme-night { display: block !important; }
-  .op-lp-cats { width: min(100%, var(--op-lp-w)); display: flex; align-items: center; justify-content: center;
+
+
+  .op-lp-theme svg, #op-flat svg {
+    animation: op-theme-rise .45s cubic-bezier(.22,.8,.28,1); }
+  /* the button IS the horizon: clip the rise so the icon climbs into view
+     instead of sliding up over the surrounding chrome */
+  .op-lp-theme, #op-flat { overflow: hidden; }
+  @keyframes op-theme-rise {
+    from { transform: translateY(58%) rotate(-40deg); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-theme svg, #op-flat svg { animation: none; } }
+  svg.op-lp-theme-day, svg.op-lp-theme-night { display: none; }
+  .op.op-flat svg.op-lp-theme-oled { display: none; }
+  .op.op-flat svg.op-lp-theme-day { display: block; }
+  [data-theme="light"] .op svg.op-lp-theme-day,
+  [data-theme="light"] .op svg.op-lp-theme-oled { display: none; }
+  [data-theme="light"] .op svg.op-lp-theme-night { display: block; }
+  .op-lp-cats { width: min(100%, var(--op-lp-w)); display: flex; align-items: center;
+
+    justify-content: safe center;
     flex-wrap: nowrap; gap: 0.22rem; padding: 3px 0.1rem; box-sizing: border-box;
     overflow-x: auto; scrollbar-width: none; }
   .op-lp-cats::-webkit-scrollbar { display: none; }
@@ -3667,14 +4434,20 @@ table.with-pin th.type-col { width: 7rem; }
     padding: 0.42rem 0.58rem; border: 1px solid transparent; border-radius: 999px;
     background: transparent; color: var(--fg-2); cursor: pointer; white-space: nowrap;
     font: 600 0.65rem/1 'Anthropic Sans', var(--chat-font);
-    transition: color .12s ease, background .12s ease, border-color .12s ease; }
+    transition: color .18s cubic-bezier(.22,.8,.28,1), background .18s cubic-bezier(.22,.8,.28,1),
+                border-color .18s cubic-bezier(.22,.8,.28,1), transform .13s cubic-bezier(.34,1.56,.64,1); }
   .op-lp-cat[hidden] { display: none; }
   .op-lp-cat:hover { color: var(--fg); background: var(--bg-3);
     border-color: color-mix(in srgb, var(--fg) 26%, transparent); }
+  .op-lp-cat:active { transform: scale(.94); }   /* tactile press — springs back via the transform easing */
   .op-lp-cat.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
 
   .op-lp.op-lp-collapsed .op-lp-cat.active { color: var(--fg-2) !important;
     background: transparent !important; border-color: transparent !important; }
+
+  .op-lp.op-lp-collapsed .op-lp-cat.active:hover { color: var(--fg) !important;
+    background: var(--bg-3) !important;
+    border-color: color-mix(in srgb, var(--fg) 26%, transparent) !important; }
   .op-lp-cat-ico { width: 14px; height: 14px; flex: 0 0 auto; fill: none;
     stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
   @media (max-width: 1060px) and (min-width: 821px) {
@@ -3686,10 +4459,10 @@ table.with-pin th.type-col { width: 7rem; }
 
     .op-lp.op-lp-collapsed { justify-content: center; }
     .op-lp-hero { align-items: flex-start; gap: 0.7rem; }
-    .op-lp-wordmark { align-self: center; font-size: clamp(2.4rem, 11vw, 3rem); margin-left: 0; }
+    .op-lp-wordmark { align-self: center; font-size: clamp(2.2rem, 10vw, 2.7rem); margin-left: 0; }
     .op-lp-composer { min-height: 44px; border-radius: 999px; padding: 0.42rem 3rem 0.42rem 0.9rem; }
     .op-lp-input { font-size: max(16px, calc(0.64rem * var(--chat-scale))); }
-    .op-lp-send { width: 30px; height: 30px; right: 0.58rem; }
+    .op-lp-send { width: 30px; height: 30px; right: 6px; bottom: 6px; }   /* 44px cap: 6px inset (+1px border) centers a single-line button; bottom-anchored for multi-row */
     .op-lp-cats { justify-content: flex-start; overflow-x: auto; scrollbar-width: none;
       padding-bottom: 3px; }
     .op-lp-cats::-webkit-scrollbar { display: none; }
@@ -3731,7 +4504,10 @@ table.with-pin th.type-col { width: 7rem; }
   .op-lp.op-lp-collapsed .op-lp-results { grid-template-rows: 0fr; opacity: 0;
     transform: translateY(14px); pointer-events: none; }
   @media (prefers-reduced-motion: reduce) {
-    .op-lp-results, .op-lp { transition: none; }
+    .op-lp-results, .op-lp,
+    .op.op-ready .op-lp:not([hidden]),
+    .op-lp-cat, .op-lp-send { transition: none; }
+    .op-lp-cat:active, .op-lp-send:hover, .op-lp-send:active { transform: none; }
   }
   /* title bar: label left, a clear labeled Close on the right (the old tiny
      corner X was unhittable) */
@@ -3743,8 +4519,9 @@ table.with-pin th.type-col { width: 7rem; }
   /* real section heading: the card-title font (var(--chat-font)), a step up in
      size from the card names (0.82rem), aligned to the grid's left edge. Reads
      as the menu's title, not a micro-label. */
-  .op-lp-title { font: 700 calc(1.35rem * var(--chat-scale))/1.1 var(--chat-font);
-    color: var(--fg-2); letter-spacing: -0.01em; margin-left: 2px;   /* teeny nudge off the card's left edge */ }
+  .op-lp-title { font: 700 calc(1.35rem * var(--chat-scale))/1.1 'Plus Jakarta Sans', sans-serif;
+    white-space: nowrap;
+    color: var(--fg-2); letter-spacing: -0.01em; margin-left: 2px;    }
   .op-lp-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; }
   .op-lp-actions > button { flex: 0 0 auto; align-self: center; padding: 0; gap: 0; }
   .op-lp-actions > button svg { display: block; flex: 0 0 auto; }
@@ -3846,11 +4623,18 @@ table.with-pin th.type-col { width: 7rem; }
       max-height: calc(2 * var(--op-lp-cardh) + 0.75rem); overflow: hidden; } }
   /* Quiet cross-fade: geometry never moves, so cycling cannot make the fixed
      card grid wobble. Fresh cards use the same short opacity entrance. */
-  .op-lp-grid { transition: opacity .2s ease; }
-  .op-lp-grid.op-lp-fading { opacity: 0; pointer-events: none; }
+
+  .op-lp-grid { transition: opacity .22s cubic-bezier(.22,.8,.28,1), transform .22s cubic-bezier(.22,.8,.28,1); }
+  .op-lp-grid.op-lp-fading { opacity: 0; transform: translateY(6px) scale(.995); pointer-events: none; }
+
+  .op-lp-title { transition: opacity .2s cubic-bezier(.22,.8,.28,1), transform .2s cubic-bezier(.22,.8,.28,1); }
+  .op-lp-title.op-lp-fading { opacity: 0; transform: translateY(4px); }
+
+  .op-lp-results-inner.op-lp-hmorph { transition: height .32s cubic-bezier(.22,.8,.28,1); }
   @media (prefers-reduced-motion: reduce) {
-    .op-lp-grid { transition: none; }
+    .op-lp-grid, .op-lp-title, .op-lp-results-inner.op-lp-hmorph { transition: none; }
     .op-lp-grid.op-lp-fading { opacity: 1; transform: none; }
+    .op-lp-title.op-lp-fading { opacity: 1; transform: none; }
     .op-lp-card { animation: none; }
   }
   .op-lp-card { background: color-mix(in srgb, var(--bg) 78%, #000);
@@ -3868,8 +4652,10 @@ table.with-pin th.type-col { width: 7rem; }
   [data-theme="light"] .op-nt-pills,
   [data-theme="light"] .op-nt-pill { background: #fff; }
   [data-theme="light"] .op-lp-composer:focus-within,
-  [data-theme="light"] .op-lp-searchinput:focus,
-  [data-theme="light"] .op-lp-cat:hover { background: #fff; }
+  [data-theme="light"] .op-lp-searchinput:focus { background: #fff; }
+
+  [data-theme="light"] .op-lp-cat:hover,
+  [data-theme="light"] .op-lp.op-lp-collapsed .op-lp-cat.active:hover { background: #e6eaf1 !important; }
   [data-theme="light"] .op-lp-cat { border-color: rgba(20, 24, 31, .1); }
   [data-theme="light"] .op-lp-cat.active {
     color: #16191f; background: #fff; border-color: rgba(20, 24, 31, .34);
@@ -3886,14 +4672,14 @@ table.with-pin th.type-col { width: 7rem; }
   /* Fixed vertical rhythm so every card lays out identically: the name reserves
      exactly 2 lines and the prompt exactly 2, so the prompt's "…" terminates in
      the same visual band on every card regardless of title length. */
-  .op-lp-name { font: 700 0.78rem/1.28 var(--chat-font); color: var(--fg);
+  .op-lp-name { font: 700 0.86rem/1.28 'Plus Jakarta Sans', sans-serif; color: var(--fg);
     padding-right: 1.8rem;   /* 2.6->1.8: let the title run further right; still clears the Go button's left edge */
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     min-height: calc(2 * 1.28em); }
   /* prompt grows into the taller card: up to 4 lines, reserving 2 so short
      prompts still align the meta row. margin-top:auto on .op-lp-meta pushes the
      pill to the bottom, so the prompt takes whatever vertical space is free. */
-  .op-lp-prompt { font: 500 0.62rem/1.45 var(--chat-font); color: var(--muted);
+  .op-lp-prompt { font: 500 0.62rem/1.45 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
     min-height: calc(2 * 1.45em); }
   /* site pill pinned to the bottom of the card, aligned across cards */
@@ -3904,6 +4690,11 @@ table.with-pin th.type-col { width: 7rem; }
     padding: 0.2rem 0.5rem; white-space: nowrap; max-width: none;
     display: inline-flex; align-items: center; gap: 0.3rem; }
   .op-lp-site img { width: 13px; height: 13px; border-radius: 3px; display: block; }
+
+  [data-theme="light"] .op-lp-site { background: #e3e8ef; border-color: rgba(0,0,0,.10);
+    color: #3c4450; }
+  [data-theme="light"] .op-lp-site.op-lp-sched { background: rgba(34,134,58,.10);
+    color: #1f7a37; border-color: rgba(34,134,58,.30); }
   /* scheduled-task chip on a launchpad card (v0.7.0) — soft green so it reads
      as "this one runs itself" next to the neutral site chips */
   .op-lp-site.op-lp-sched { background: rgba(63,185,80,.10); color: #56d364;
@@ -3935,16 +4726,14 @@ table.with-pin th.type-col { width: 7rem; }
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
   .op-anim-ready .op-mini { transition: opacity .2s ease; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
-    border: none; cursor: pointer; font: 600 0.56rem/1.5 'Plus Jakarta Sans', sans-serif;
+    border: none; cursor: pointer; font: 550 0.56rem/1.5 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
     padding: 0.1rem 1.35em 0.1rem 0.34em; flex: 0 0 auto; width: auto; line-height: 1.5;
-    /* Caret gutter is em, not rem, so it tracks the −/+ zoom: at a fixed 1.05rem
-       the text outgrew its reserve and slid under the caret. And because
-       #op-model is flex-shrinkable, a squeezed row used to clip the name mid-
-       letter behind the caret — ellipsize instead, stopping at the gutter
-       (2026-07-20: "at higher zoom the caret still hides the model name"). */
+
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M1 1l3 3 3-3' fill='none' stroke='%237e8a9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
     background-position: right 0.3em center; background-size: 0.62em 0.42em; background-repeat: no-repeat; }
+
+  #op-model.op-mini { font-weight: 600; }
   .op-mini:hover { color: var(--fg); }
   .op-mini:focus { outline: none; color: var(--accent); }
   .op-mini.op-mini-swap { animation: op-mini-in .26s cubic-bezier(.2,1,.3,1); }
@@ -3955,7 +4744,7 @@ table.with-pin th.type-col { width: 7rem; }
   @media (min-width: 821px) {
 
     .op-input { font-size: calc(0.77rem * var(--chat-scale)); }
-    .op-input::placeholder { font-size: calc(0.77rem * var(--chat-scale)); }   /* "Message Operator" keeps its -1-notch offset: 0.81->0.73 */
+    .op-input::placeholder { font-size: calc(0.77rem * var(--chat-scale)); }
     .op-mini { font-size: min(calc(0.74rem * var(--chat-scale)), 0.92rem); }
   }
 
@@ -3968,37 +4757,77 @@ table.with-pin th.type-col { width: 7rem; }
      resolves to a green checkmark + "Worked for Ns" when done. */
   .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
   .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
-    color: var(--fg-2); font: 600 calc(0.74rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
+    color: var(--fg-2); font: 600 calc(0.78rem * var(--chat-scale))/1.3 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
     padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }
   .op-task:hover .op-task-head .verb,
   .op-task[data-busy="0"] .op-task-head:hover .verb { color: var(--fg); }   /* brighten text on hover, beats the dimmed finished-state color */
   .op-task-head:hover .car { opacity: 1; }
   .op-task-head:hover .car::before { border-color: var(--fg); }   /* + the caret */   /* left pad aligns spinner center to the trace vertical line */
-  .op-task-head .ico { width: 14px; height: 14px; flex: 0 0 auto; position: relative; }
+  /* Sized in em of the head's own font (see the spinner block below) so the
+     icon holds its proportion at every --chat-scale; was a fixed 14px. */
 
-  .op-task[data-busy="1"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
-    border-radius:50%;
-    background:
-      conic-gradient(from 0deg, var(--fg-2) 0deg 84deg, transparent 84deg 360deg);
-    /* the faint background track lives on the ::after; here we keep only the arc */
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
-    animation: op-spin .8s linear infinite; }
-  /* static faint track behind the sweeping arc — gives the spinner a body so the
-     arc reads as motion on a ring, not a lone comet. */
-  .op-task[data-busy="1"] .op-task-head .ico::after { content:""; position:absolute; inset:0;
-    border-radius:50%; border:2px solid var(--border-2); }
-  .op-task[data-busy="0"] .op-task-head .ico::before { content:"\2713"; position:absolute; inset:0;
-    display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700; }
-  .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { content:"\2715"; color: var(--bad); }
-  .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2); }
-  /* stopped (hand-off): a stop symbol instead of the green ✓ */
-  .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { content:"\25A0"; color: var(--bad); font-size: 0.7rem; }
+
+  .op-task-head .ico { width: 1.2rem; height: 1.2rem; flex: 0 0 auto; position: relative;
+    margin-left: calc(1.05rem + 0.75px - 0.62rem - 0.6rem);
+    margin-right: 0.19rem; }
+
+
+
+  .op-task-head .ico .op-ico-mark { width: 100%; height: 100%; display: block;
+    overflow: visible; }
+  .op-task-head .ico .op-ico-ring { display: none; }
+
+  /* stroke-width is tuned PER INSTANCE — every copy renders at a different size,
+     so one shared number gives three different apparent weights. Do not "unify"
+     them (tried 2026-07-25; it made every mark visibly heavier). Thinned to 1.3
+     on request. */
+  .op-task-head .ico .op-ico-hooks { fill: none; stroke: var(--fg-2); stroke-width: 1.3;
+    stroke-linecap: round; transform-origin: center; transform-box: fill-box; }
+  /* finished/failed/stopped: the ✓/✕/⏹ owns the box — hide the mark entirely. */
+  .op-task[data-busy="0"] .op-task-head .ico .op-ico-mark { display: none; }
+  .op-task[data-busy="1"] .op-task-head .ico .op-ico-hooks {
+    animation: op-mark-halt 2.9s cubic-bezier(.7,0,.2,1) infinite; }
+
+  @keyframes op-mark-halt {
+    0%    { transform: rotate(0deg)   scale(1); }
+    10%   { transform: rotate(0deg)   scale(1.08); }   /* inhale */
+    22%   { transform: rotate(0deg)   scale(1); }      /* exhale, then go */
+    38%   { transform: rotate(360deg) scale(.9); }
+    50%   { transform: rotate(360deg) scale(1); }
+    60%   { transform: rotate(360deg) scale(1.08); }   /* inhale */
+    72%   { transform: rotate(360deg) scale(1); }      /* exhale, then go */
+    88%   { transform: rotate(720deg) scale(.9); }
+    100%  { transform: rotate(720deg) scale(1); } }
+  /* Reduced motion: a still mark, no turn and no breath. */
+  @media (prefers-reduced-motion: reduce) {
+    .op-task[data-busy="1"] .op-task-head .ico .op-ico-hooks { animation: none; } }
+
+  .op-task[data-busy="0"] .op-task-head .ico::before { content:""; position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center; color: var(--live); font-size: 0.8rem; font-weight: 700;
+    background: var(--live);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.2 12.9l4.5 4.5L18.8 7.4'/%3E%3C/svg%3E") center calc(50% - 0.1px) / 72% no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.2 12.9l4.5 4.5L18.8 7.4'/%3E%3C/svg%3E") center calc(50% - 0.1px) / 72% no-repeat; }
+  .op-task.op-task-failed[data-busy="0"] .op-task-head .ico::before { background: var(--bad);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M7 7l10 10M17 7L7 17'/%3E%3C/svg%3E") center / 66% no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M7 7l10 10M17 7L7 17'/%3E%3C/svg%3E") center / 66% no-repeat; }
+  /* steered/stopped still use text glyphs — kill the inherited mask+fill or
+     the mask would clip them into a phantom check shape */
+  .op-task.op-task-steered[data-busy="0"] .op-task-head .ico::before { content:"\2699\FE0F"; color: var(--fg-2);
+    background: none; -webkit-mask: none; mask: none; }
+  /* stopped (hand-off): a geometric rounded square, same mask technique */
+  .op-task.op-task-stopped[data-busy="0"] .op-task-head .ico::before { background: var(--bad);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6.5' y='6.5' width='11' height='11' rx='2.4' fill='%23000'/%3E%3C/svg%3E") center / 60% no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6.5' y='6.5' width='11' height='11' rx='2.4' fill='%23000'/%3E%3C/svg%3E") center / 60% no-repeat; }
   .op-task.op-task-failed .op-task-head .verb { color: var(--bad); }
   /* the live word sits in .op-verb-word; on a status change the old word is
      removed and the new one pops up (op-msg-in) — a clean replace, no overlap. */
-  .op-task-head .verb { font-weight: 700; color: var(--fg); transition: color .16s ease; }
-  .op-task[data-busy="0"] .op-task-head .verb { font-weight: 600; color: var(--fg-2); }
+
+
+  .op-task-head .verb { font-weight: 575; color: var(--fg); transition: color .16s ease; }
+  .op-task[data-busy="0"] .op-task-head .verb { font-weight: 575; color: var(--fg-2); }
+
+  [data-theme="light"] .op-task[data-busy="1"] .op-task-head .verb { color: var(--muted); }
+  [data-theme="light"] .op-task[data-busy="1"]:hover .op-task-head .verb { color: var(--fg); }
   /* the incoming word replaces the old one CLEANLY (old removed first, no
      overlap — an earlier cross-fade had an ugly moment where both showed) and
      pops up from below via the SAME op-msg-in the trace steps use on add. */
@@ -4030,6 +4859,8 @@ table.with-pin th.type-col { width: 7rem; }
     overflow: visible; max-height: 20000px; opacity: 1;
     transition: max-height .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .3s, padding .3s; }
   .op-task.collapsed .op-task-steps { max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+
+
   .op-task-step { color: var(--muted); font: 500 calc(0.69rem * var(--chat-scale))/1.5 var(--chat-font);
     letter-spacing: -.002em; animation: op-msg-in .2s ease;
     white-space: normal; overflow-wrap: anywhere;
@@ -4051,21 +4882,23 @@ table.with-pin th.type-col { width: 7rem; }
     overflow-wrap: anywhere; word-break: break-word; }
   .op-act-step { display: flex; flex-direction: column; gap: 0.05rem; color: var(--fg-2); position: relative; }
   .op-act-step .op-act-lab { white-space: nowrap; }
-  .op-act-ico2 { position: absolute; left: calc(-0.85rem - 0.75px); top: 0.72rem;
+  .op-act-ico2 { position: absolute; left: calc(-0.85rem - 0.75px); top: calc(0.72rem + 1.4px);
     transform: translate(-50%, -50%); font-size: 0.72rem; line-height: 1;
     background: var(--bg-2); padding: 1px; border-radius: 50%; }
   .op-act-step .op-act-lab { margin-left: 0; }
   /* label is a flex ROW so the text + the ×N pill sit on one line, vertically
      centered together. */
   .op-act-lab { font-weight: 700; color: var(--fg);
-    display: inline-flex; align-items: center; }
+    display: inline-flex; align-items: center; flex-wrap: wrap;
+
+    font-family: 'Plus Jakarta Sans', sans-serif; }
   /* repeat-count badge — coalesced consecutive identical actions.
      wireframe pill: transparent fill, hairline border, muted text. Bigger so the
      digit has room, and centered both ways (inline-flex centers the number; the
      parent flex-row centers the pill against the label). */
   .op-act-x { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-    margin-left: 0.4rem; width: 1.45em; height: 1.45em; padding: 1.25px 0 0 0;   /* perfect circle; padding-top nudges digit down (mono digits sit high) */
-    font: 500 0.66rem/1 'JetBrains Mono', monospace; color: var(--muted);
+    margin-left: 0.4rem; width: 1.5em; height: 1.5em; padding: 0;   /* perfect circle */
+    font: 500 0.56rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);
     background: transparent; border: 1px solid var(--border-2);
     border-radius: 50%; box-sizing: border-box; }
   .op-act-x.op-x-pop { animation: op-xpop .22s cubic-bezier(.34,1.56,.64,1); }
@@ -4076,13 +4909,20 @@ table.with-pin th.type-col { width: 7rem; }
   .op-task-step:not(.op-act-step)::before { content: ""; position: absolute;
     left: calc(-0.85rem - 3.25px); top: 0.52rem; width: 5px; height: 5px; border-radius: 50%;
     background: var(--muted); box-shadow: 0 0 0 3px var(--bg-2); }
+
+  .op-task-step:not(.op-act-step) strong { font-weight: 600; }
   /* inline coordinate detail after "Clicking"/"Dragging" — lighter, smaller, set apart */
-  .op-act-coord { margin-left: 0.4rem; font-weight: 400; color: var(--muted);
-    font: 400 calc(0.6rem * var(--chat-scale))/1 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: -.01em; position: relative; top: 1px; }   /* inline detail (coord OR duration) — Jakarta, muted */   /* sits high vs the label — lower ~2px */
+
+  .op-act-coord { margin-left: 0.4rem; color: var(--muted);
+    font: 375 calc(0.6rem * var(--chat-scale))/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -.01em; position: relative; top: 1px; }
+
+  .op-act-query { white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+    min-width: 0; line-height: 1.4; top: 0; }
   /* plain detail (element names under Clicking/Typing/etc.) — NOT a code block */
-  .op-act-detail-plain { color: var(--muted); font-weight: 400; max-width: 100%;
-    font: 500 calc(0.66rem * var(--chat-scale))/1.45 var(--chat-font);
+
+  .op-act-detail-plain { color: var(--muted); max-width: 100%;
+    font: 475 calc(0.66rem * var(--chat-scale))/1.45 var(--chat-font);
     margin-top: 0.1rem; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
   .op-act-detail { color: var(--fg-2); font-weight: 400; max-width: 100%;
     /* commands + URLs render as a code block (scales with the +/- font control) */
@@ -4096,8 +4936,13 @@ table.with-pin th.type-col { width: 7rem; }
   a.op-act-detail { color: var(--fg-2); text-decoration: none; display: block; cursor: pointer; }
   a.op-act-detail:hover { border-color: var(--accent); background: rgba(184,192,204,.08); color: var(--fg); }
   /* step-count header at the top of the live trace — white, same size as action labels */
-  .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: .01em; margin: 0 0 0.3rem 0.35rem; }   /* bumped 0.66→0.70rem */
+
+
+  .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 var(--chat-font);
+    letter-spacing: .01em; margin: 0 0 0.3rem 0;
+    /* align-self:stretch so the count sizes like a row and the padding above
+       resolves against the same box origin. */
+    align-self: stretch; padding-left: calc(0.44rem - 0.75px); }   /* bumped 0.66→0.70rem */
   .op-step-count[hidden] { display: none; }
 
   /* DEMO: effort pinned + invisible */
@@ -4112,6 +4957,9 @@ table.with-pin th.type-col { width: 7rem; }
   .op-titlewrap[role="button"] .op-title { transition: color .15s ease; }
   .op-titlewrap[role="button"]:hover .op-title,
   .op-titlewrap[role="button"]:focus-visible .op-title { color: #fff; }
+  /* light mode: white hover fades INTO the light brow — darken instead */
+  [data-theme="light"] .op-titlewrap[role="button"]:hover .op-title,
+  [data-theme="light"] .op-titlewrap[role="button"]:focus-visible .op-title { color: #000; }
   .op-titlewrap[role="button"]:hover .op-brand-caret { opacity: .9; }
   /* caret is a centered sibling of the wordmark, aligned to the MAN/AUTO row.
      Fixed 9px box + centered origin so the flip pivots in place (no jump). */
@@ -4299,14 +5147,189 @@ table.with-pin th.type-col { width: 7rem; }
     .op-taskbar::-webkit-scrollbar { display: none; }
   }
 
+  /* ── installed-PWA safe areas (Add to Home Screen) ─────────────────────────
+     viewport-fit=cover (operator.html) takes the page edge-to-edge, so in
+     standalone mode pad the frame with the device cutouts: status bar top,
+     home indicator bottom, sensor housing on landscape sides. Scoped to
+     display-mode:standalone — browser-tab layout is untouched (Safari's own
+     chrome covers those regions there). Kept at the END of the file so the
+     .op-rail override outranks the base bottom-sheet rule by source order. */
+  @media (display-mode: standalone) {
+    body.op-locked, body.op-full { box-sizing: border-box;
+      padding-top: env(safe-area-inset-top) !important;
+      padding-bottom: env(safe-area-inset-bottom) !important;
+      padding-left: env(safe-area-inset-left) !important;
+      padding-right: env(safe-area-inset-right) !important; }
+  }
+  @media (display-mode: standalone) and (max-width: 820px) {
+    /* the phone bottom sheet is fixed to the viewport edge — fixed elements
+       ignore body padding, so lift its content clear of the home indicator */
+    .op-rail { padding-bottom: calc(0.7rem + env(safe-area-inset-bottom)); }
+  }
+
+
+  /* open/close ride a .open class + transitions, NOT :hover/animation state
+     (today's lesson: state that can be yanked mid-flight snaps). JS unhides,
+     forces a reflow, then adds .open; close removes .open and re-hides on
+     transitionend. */
+  .op-about-backdrop { position: fixed; inset: 0; z-index: 70;
+    background: color-mix(in srgb, #000 42%, transparent);
+    backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+    opacity: 0; transition: opacity .24s ease; }
+  .op-about-backdrop.open { opacity: 1; }
+  .op-about { position: fixed; z-index: 71; left: 50%; top: 50%;
+    transform: translate(-50%, -50%) scale(.94) translateY(6px);
+    opacity: 0;
+    transition: opacity .24s ease, transform .3s cubic-bezier(.22,1,.36,1);
+    min-width: 21rem; max-width: min(26rem, calc(100vw - 2rem));
+    text-align: left;
+    background: color-mix(in srgb, var(--bg-2) 92%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+    border-radius: 16px; padding: 1.5rem 1.5rem 1.05rem;
+    box-shadow: 0 24px 70px -24px rgba(0,0,0,.7);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .op-about.open { opacity: 1; transform: translate(-50%, -50%) scale(1) translateY(0); }
+  /* the display:flex above DEFEATS the hidden attribute (an author class rule
+     outranks the UA's [hidden]{display:none} on the tie) — without this
+     restate, the "closed" card is an invisible fixed overlay eating every
+     click under the splash center (broke 6 harness tests, 2026-07-26). */
+  .op-about[hidden], .op-about-backdrop[hidden] { display: none !important; }
+
+  .op-about-head { display: flex; align-items: center; gap: 0.7rem;
+    margin: 0.4rem 0 1.7rem; }
+  .op-about-mark { width: 60px; height: 60px; color: var(--fg); flex: 0 0 auto; }
+  .op-about-word { font: var(--op-wordmark-wght, 700) 2.75rem/1 'PJS Wordmark', 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -.03em; color: var(--fg); }
+  .op-about-ver { font: 550 0.85rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    color: var(--muted); margin-left: 0.3rem; align-self: center;
+    transform: translateY(0.7rem); }   /* rides the 2.75rem word's lower baseline */
+  .op-about-ver-v { margin-right: 0.13em; }
+  .op-about-rights { margin-top: 0.75rem;
+    font: 500 0.6rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    color: var(--fg-2); }
+  /* brand foot — the Fragify settings pattern: muted brands joined by a dot */
+  .op-about-foot { display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+    margin-top: 0.95rem; padding-top: 0.7rem;
+    border-top: 1px solid color-mix(in srgb, var(--fg) 9%, transparent);
+    font: 600 0.66rem/1 'Plus Jakarta Sans', sans-serif; color: var(--muted); }
+  .op-about-brand { display: inline-flex; align-items: center; gap: 0.28rem; }
+  .op-about-foot-mark { width: 12px; height: 12px; }
+  .op-about-cloud { width: 14px; height: 14px; fill: currentColor; }
+  .op-about-dot { opacity: 0.7; }
+  /* the ring is a BUTTON on desktop now too (it opens this card) */
+  .op-lp-mark { cursor: pointer; }
+
+
+  @media (max-width: 820px) {
+    .op-lp { position: fixed; inset: 0; z-index: 40; background: var(--bg);
+      /* clear the top control row (ring/menu) — without this the wordmark
+         rode up under the ring */
+      padding-top: calc(3.6rem + env(safe-area-inset-top)); }
+    /* the ring anchors the top-RIGHT corner on phones (its menu items slide
+       out beneath it at right 0.75rem) — the desktop 6.9rem offset landed it
+       mid-header, overlapping the wordmark */
+    .op-lp-mark { top: calc(1.1rem + env(safe-area-inset-top)); right: 0.75rem; }
+  }
+
+
+  @media (max-width: 820px) {
+    .op-lp { overflow: hidden; }
+
+    .op-lp::before { content: ""; flex: 0 1 0px; flex-grow: 0;
+      transition: flex-grow .42s cubic-bezier(.22,.8,.28,1); }
+    .op-lp.op-lp-collapsed::before { flex-grow: 1; }
+    .op-lp-results { flex: 1 1 auto; min-height: 0; }
+    .op-lp-results-inner { overflow-y: auto; -webkit-overflow-scrolling: touch;
+      max-height: 100%; }
+
+    .op-lp-name { min-height: 0; }
+    /* card titles at the DESKTOP's visual proportion: mobile cards run full
+       width (~360px vs ~300px desktop), so the same 0.86rem read smaller
+       relative to the card — scale it to match */
+    .op-lp-name { font-size: 1.02rem; }
+  }
+
+
+  @media (max-width: 820px) {
+    /* the home mark: base draws 52px + scale(.25)=13px for desktop; mobile
+       buttons are 28px with 16px sibling icons, so scale to match (52*.31=16).
+       Lives HERE (after the base rule) so it actually wins the cascade. */
+    .op-home-btn svg { transform: scale(0.31); }
+    /* a real seam between the brow and the conversation — there was none, and
+       on light theme the controls floated straight into the chat text */
+    .op-head { border-bottom: 1px solid var(--border);
+      padding-bottom: 0.5rem; margin-bottom: 0.15rem; }
+    /* the floating minimized status pill reads as part of the text without a
+       solid surface — give it one */
+    .op[data-status-min="1"] .op-action { background: var(--bg-2);
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 18px -8px rgba(0,0,0,.55); }
+  }
+
+
+  @media (max-width: 820px) {
+
+    .op-lp.op-lp-collapsed .op-lp-results {
+      grid-template-rows: 0fr; opacity: 0; pointer-events: none; }
+
+    .op-lp.op-lp-collapsed .op-lp-results-inner {
+      height: 0 !important; min-height: 0 !important; overflow: hidden; }
+
+    .op-lp.op-lp-collapsed .op-lp-hero::after {
+      content: ""; display: block; pointer-events: none;
+      /* mirrors the wordmark's own clamp + the hero gap, so the balance holds
+         at every width instead of only the one it was eyeballed at */
+      height: calc(clamp(2.2rem, 10vw, 2.7rem) + 0.7rem); }
+
+    .op-lp-title { font-size: min(calc(1.08rem * var(--chat-scale)), 4.4vw); }   /* vw cap: nowrap heading must FIT a phone width */
+    .op-lp-prompt { -webkit-line-clamp: 2; }
+
+
+    .op-lp-mark { pointer-events: auto; cursor: pointer; }
+    .op-lp-mark-tip { display: none; }
+    .op-lp-mark.op-menu-open .op-lp-mark-tip {
+      display: grid; opacity: 1; transform: none; }
+    /* hover must NOT open it on touch — only the explicit tap does */
+    .op-lp-mark:not(.op-menu-open):hover .op-lp-mark-tip { display: none; }
+    /* theme + X: hidden until the ring's menu is open, then stacked beneath it */
+    .op-lp-theme, .op-lp-close { opacity: 0; pointer-events: none;
+      transition: opacity .16s ease, transform .18s cubic-bezier(.2,1,.3,1);
+      transform: translateY(-6px); }
+    .op-lp-mark.op-menu-open ~ .op-lp-theme,
+    .op-lp-mark.op-menu-open ~ .op-lp-close { opacity: 1; pointer-events: auto;
+      transform: none; }
+
+    /* CENTERS aligned, not tops: the ring sits at top 1.1rem with a 32px
+       box; the X's box is 40px tall, so it starts 4px higher to share the
+       centerline (measured cy 33.6/36.6/40.6 before this) */
+    .op-lp-close { top: calc(1.1rem - 4px + env(safe-area-inset-top)) !important;
+      right: calc(3.4rem + env(safe-area-inset-right)) !important;
+      display: inline-flex !important; }
+    .op-lp-theme { top: calc(1.1rem + env(safe-area-inset-top)) !important;
+      right: calc(6rem + env(safe-area-inset-right)) !important; }
+  }
+
 </style>
+{% if standalone %}
+
+<style>
+  header.site { display: none; }
+  .wrap { max-width: none; padding: 0.6rem 0.8rem; }
+  .op { height: calc(100vh - 22px); height: calc(100dvh - 22px); }
+</style>
+{% endif %}
 
 <link rel="manifest" href="{{ url_for('operator.static', filename='manifest.webmanifest') }}">
 <meta name="theme-color" content="#0d1117">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Operator">
-<link rel="apple-touch-icon" href="{{ url_for('operator.static', filename='icons/operator-180.png') }}">
+{# viewport-fit=cover: browsers apply the LAST viewport meta, so this overrides
+   _base.html's for Operator only — edge-to-edge in the installed PWA (content
+   under the notch/status bar), and it makes env(safe-area-inset-*) non-zero so
+   the standalone padding below can clear the home indicator. #}
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="apple-touch-icon" href="{{ url_for('operator.static', filename='icons/operator-180.png') }}?v={{ FAVICON_V }}">
 
 <div class="op op-booting" id="op" data-state="idle" data-busy="0">
 
@@ -4318,7 +5341,7 @@ table.with-pin th.type-col { width: 7rem; }
       <span class="op-titlewrap" id="op-brand" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false" title="switch surface">
         <span class="op-brand-text">
           <span class="op-title">Operator</span>
-          <span class="op-verline"><span class="op-ver">1.0.28 demo</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
+          <span class="op-verline"><span class="op-ver">{{ OP_VERSION }} demo</span><span class="op-surface-chip" id="op-surface-chip" hidden></span></span>
         </span>
         <svg class="op-brand-caret" viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1.5l4 3.5 4-3.5"></path></svg>
       </span>
@@ -4333,16 +5356,21 @@ table.with-pin th.type-col { width: 7rem; }
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
-      <button class="op-full-btn op-iconbtn" id="op-lp-open" title="task launchpad" aria-label="open task launchpad"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect></svg></button>
+
+      <button class="op-full-btn op-iconbtn op-home-btn" id="op-lp-open" title="home — task launchpad" aria-label="open task launchpad"><svg viewBox="6 6 12 12" width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-clear" title="clear chat" aria-label="clear chat"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path><path d="M10 11v6M14 11v6"></path></svg></button>
-      <button class="op-full-btn op-iconbtn" id="op-flat" title="high-contrast / flat theme" aria-label="toggle flat theme"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"></circle><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg></button>
+
+      <button class="op-full-btn op-iconbtn" id="op-flat" title="theme: default → flat → light" aria-label="cycle theme (default, flat, light)"><svg class="op-lp-theme-day" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg><svg class="op-lp-theme-night" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg><svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-full" title="fullscreen">⤢</button>
     </div>
 
 
     <button class="op-action" id="op-action" type="button" aria-expanded="false"
             title="click to show the step-by-step event history">
-      <span class="op-action-ico"></span>
+      {# While busy the mark REPLACES the ring (the ::before is hidden) and spins
+         with the ring's own constant timing — not the chat spinner's
+         halt-and-breathe. Idle/done states still show the ::before ring. #}
+      <span class="op-action-ico"><svg class="op-act-mark" viewBox="6.4 6.4 11.2 11.2" fill="none" aria-hidden="true"><g class="op-act-hooks"><path d="M12 7.2a4.8 4.8 0 0 1 0 9.6 3.1 3.1 0 0 1 0-6.2 1.4 1.4 0 0 0 0 2.8"/><path d="M12 16.8a4.8 4.8 0 0 1 0-9.6 3.1 3.1 0 0 1 0 6.2 1.4 1.4 0 0 0 0-2.8"/></g></svg></span>
       <span class="op-min-emoji" id="op-min-emoji" aria-hidden="true"></span>
       <div class="op-action-body" style="min-width:0; text-align:left;">
         <div class="op-action-txt" id="op-action-txt">Connecting…</div>
@@ -4373,23 +5401,13 @@ table.with-pin th.type-col { width: 7rem; }
 
     <div class="op-logwrap" id="op-logwrap">
       <div class="op-log" id="op-log"></div>
-      <button class="op-jump" id="op-jump" type="button" aria-label="jump to present" hidden><svg class="op-jump-ff" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 5l8 7-8 7z"></path><path d="M12 5l8 7-8 7z"></path></svg>Jump</button>
+      <button class="op-jump" id="op-jump" type="button" aria-label="jump to present" hidden><svg class="op-jump-ff" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M3 5l8 7-8 7z"></path><path d="M12 5l8 7-8 7z"></path></svg><span class="op-jump-lbl">Jump</span></button>
     </div>
 
 
     <div class="op-inputbox">
-      <div class="op-pal" id="op-pal" hidden>
-        <div class="op-pal-head"><span id="op-pal-title">SAVED TASKS</span><span>type to filter</span></div>
-        <div class="op-pal-list" id="op-pal-list"></div>
-        <div class="op-pal-save" id="op-pal-save" hidden>
-          <input type="text" id="op-pal-save-name" placeholder="task name" autocomplete="off" spellcheck="false">
-          <input type="text" class="op-pal-sites" id="op-pal-save-sites" placeholder="preferred sites (optional)" autocomplete="off" spellcheck="false">
-          <span class="op-pal-key">↵ save</span>
-        </div>
-        <div class="op-pal-foot" id="op-pal-foot"><span><span class="op-pal-key">↑↓</span> pick</span><span><span class="op-pal-key">↵</span> run as stored</span><span><span class="op-pal-key">Tab</span> load &amp; edit</span><span><span class="op-pal-key">/save</span> save last task</span><span><span class="op-pal-key">Esc</span> close</span></div>
-      </div>
       <div class="op-steer">
-        <textarea class="op-input" id="op-input" rows="1" autocomplete="off" spellcheck="false" placeholder="Message Operator"></textarea>
+        <div class="op-grow-wrap"><textarea class="op-input" id="op-input" rows="1" autocomplete="off" spellcheck="false" placeholder="Message Operator"></textarea></div>
         <button class="op-send" id="op-send" title="send (Enter)" aria-label="send"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v5a3 3 0 0 1-3 3H5"></path><path d="M8 9l-3 3 3 3"></path></svg></button>
       </div>
       <div class="op-modelrow" id="op-modelrow">
@@ -4443,14 +5461,30 @@ table.with-pin th.type-col { width: 7rem; }
           <button class="op-ham-item" data-kind="tab_next"><span>Next tab</span><span class="k">⇥</span></button>
           <button class="op-ham-item" data-kind="home"><span>Home</span><span class="k">⌂</span></button>
           <div class="op-ham-sep"></div>
+          <button class="op-ham-item" id="op-ham-chats"><span>Chats</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5h14v8H8.5L5 16.5v-3H3z"></path></svg></span></button>
           <button class="op-ham-item" id="op-ham-history"><span>History</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M10 6v4l2.6 1.6"></path></svg></span></button>
-          <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="k">⚙</span></button>
+          <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="2.7"></circle><path d="M10 2.6v2M10 15.4v2M17.4 10h-2M4.6 10h-2M15.2 4.8l-1.4 1.4M6.2 13.8l-1.4 1.4M15.2 15.2l-1.4-1.4M6.2 6.2 4.8 4.8"></path></svg></span></button>
         </div>
       </div>
-      <!-- Settings popover (v0.7.0): the first real settings surface. Every row is a
-           localStorage-persisted cockpit preference; future settings slot in as rows. -->
+      <!-- Settings popover. Grouped into BROWSER (what the attached Chrome does)
+           and COCKPIT (what this page does), because they persist in different
+           places and fail in different ways: the homepage is a server setting
+           that Python reads when it opens a tab, the rest are localStorage and
+           never leave this browser. -->
       <div class="op-settings" id="op-settings" hidden>
-        <div class="op-set-row"><span>Chat font</span>
+        <div class="op-set-head">Browser</div>
+        <div class="op-set-row is-stacked">
+          <label for="op-set-home">Homepage</label>
+          <div class="op-set-field">
+            <input type="url" id="op-set-home" spellcheck="false" autocomplete="off"
+                   placeholder="https://www.google.com">
+            <button type="button" id="op-set-home-reset" title="Back to the default">Reset</button>
+          </div>
+          <p class="op-set-note" id="op-set-home-note">New tabs and the last tab you close land here.</p>
+        </div>
+        <div class="op-set-sep"></div>
+        <div class="op-set-head">Cockpit</div>
+        <div class="op-set-row"><label for="op-set-font">Chat font</label>
           <select id="op-set-font">
             <option value="'Anthropic Sans', 'Plus Jakarta Sans', sans-serif">Anthropic</option>
             <option value="'Plus Jakarta Sans', sans-serif">Jakarta</option>
@@ -4459,12 +5493,19 @@ table.with-pin th.type-col { width: 7rem; }
             <option value="Georgia, serif">Serif</option>
           </select>
         </div>
-        <div class="op-set-row"><span>Keyboard hint</span>
-          <input type="checkbox" id="op-set-hint" checked></div>
-        <div class="op-set-row"><span>Cursor glide</span>
-          <input type="checkbox" id="op-set-glide" checked></div>
+        <div class="op-set-row"><label for="op-set-hint">Keyboard hint</label>
+          <input type="checkbox" id="op-set-hint" class="op-switch" checked></div>
+        <div class="op-set-row"><label for="op-set-glide">Cursor glide</label>
+          <input type="checkbox" id="op-set-glide" class="op-switch" checked></div>
       </div>
       <!-- flight recorder (1.0.11): every finished run, newest first -->
+      <!-- conversations (2026-08-06): switch/rename/delete chats. The
+           server keeps the map; this lists it. -->
+      <div class="op-chats" id="op-chats" hidden>
+        <div class="op-chat-head"><span>Chats</span>
+          <button class="op-chat-newbtn" id="op-chat-new">New chat</button></div>
+        <div class="op-chat-list" id="op-chat-list"></div>
+      </div>
       <div class="op-history" id="op-history" hidden>
         <div class="op-hist-head">Run history</div>
         <div class="op-hist-list" id="op-hist-list"></div>
@@ -4499,15 +5540,64 @@ table.with-pin th.type-col { width: 7rem; }
       <img class="op-view" id="op-view" alt="">
 
       <div class="op-lp op-lp-collapsed" id="op-lp">
+        {# Status ring — the Operator mark as a backend-health indicator, sized
+           and spaced to sit in the same row as the theme toggle and the X. The
+           ring sweeps while connecting, settles green when the feed is live,
+           and goes red when the browser backend is down. Not aria-hidden: it
+           carries state, so it gets a live region for screen readers. #}
+        {# The label text is CSS-driven off #op's data-state (see op-lp-mark-tip)
+           so it can never go stale the way the old hardcoded title= did. #}
+        <div class="op-lp-mark" id="op-lp-mark" role="status" aria-live="polite"
+             aria-label="connecting">
+          <span class="op-lp-mark-tip" aria-hidden="true"><span class="op-lp-mark-ver">v{{ OP_VERSION }}</span></span>
+          <svg viewBox="0 0 64 64" width="26" height="26" fill="none">
+            <circle class="op-lp-mark-track" cx="32" cy="32" r="25" stroke-width="7"/>
+
+            <g class="op-lp-mark-spin">
+              <circle class="op-lp-mark-sweep" cx="32" cy="32" r="25" stroke-width="7" stroke-linecap="round"/>
+            </g>
+            {# The 24-box art is centered into the 64-box by the inner group's
+               own transform attribute, so the CSS transform is left free to
+               carry ONLY the settle rotation — mixing both in CSS made
+               transform-origin resolve in the translated space and swung the
+               glyph out of the ring. #}
+            {# 1.15 — tuned for this size. Do not "unify" it with the other
+               copies' values; they render at different sizes, so one shared
+               number gives three different apparent weights. #}
+            <g class="op-lp-mark-glyph" stroke-width="1.15" stroke-linecap="round">
+              <g transform="translate(3.2 3.2) scale(2.4)">
+                <path d="M12 7.2a4.8 4.8 0 0 1 0 9.6 3.1 3.1 0 0 1 0-6.2 1.4 1.4 0 0 0 0 2.8"/>
+                <path d="M12 16.8a4.8 4.8 0 0 1 0-9.6 3.1 3.1 0 0 1 0 6.2 1.4 1.4 0 0 0 0-2.8"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+
+        <div class="op-about-backdrop" id="op-about-backdrop" hidden></div>
+        <div class="op-about" id="op-about" hidden role="dialog" aria-modal="true" aria-label="about Operator">
+          <div class="op-about-head">
+            <svg class="op-about-mark" viewBox="6.4 6.4 11.2 11.2" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg>
+            <span class="op-about-word">Operator</span>
+            <span class="op-about-ver"><span class="op-about-ver-v">v</span>{{ OP_VERSION }}</span>
+          </div>
+          <div class="op-about-rights">© 2026. All rights reserved.</div>
+          <div class="op-about-foot">
+            <span class="op-about-brand"><svg class="op-about-foot-mark" viewBox="6.4 6.4 11.2 11.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg>Operator</span>
+            <span class="op-about-dot" aria-hidden="true">·</span>
+            <span class="op-about-brand">BaiCloud<svg class="op-about-cloud" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 18.5h10.7a4.3 4.3 0 0 0 .5-8.6A6.2 6.2 0 0 0 6.1 8.2a5.2 5.2 0 0 0 .4 10.3Z"/></svg></span>
+          </div>
+        </div>
         <button type="button" class="op-lp-theme" id="op-lp-theme" aria-label="use light mode" title="use light mode">
           <svg class="op-lp-theme-day" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg>
           <svg class="op-lp-theme-night" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg>
+
+          <svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg>
         </button>
         <button type="button" class="op-lp-close" id="op-lp-x" aria-label="close welcome screen" title="close">
           <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l8 8M11 3l-8 8"></path></svg>
         </button>
         <div class="op-lp-hero">
-          <div class="op-lp-wordmark" id="op-lp-wordmark">Operator</div>
+<div class="op-lp-wordmark" id="op-lp-wordmark">Operator</div>
           {# demo-only (CSS-gated on body.op-demo): the public demo's welcome notice.
              This hero view doubles as the future "new chat" landing page once
              sessions + a conversation sidebar exist — keep it self-contained. #}
@@ -4583,7 +5673,7 @@ table.with-pin th.type-col { width: 7rem; }
       <input type="text" class="op-nt-input" id="op-nt-name" placeholder="e.g. Lunch order" autocomplete="off" spellcheck="false">
       <label class="op-nt-lbl" for="op-nt-prompt">What would you like Operator to do?</label>
       <textarea class="op-nt-input" id="op-nt-prompt" rows="4" placeholder="e.g. Order my usual chicken burrito bowl from Chipotle on DoorDash, deliver to home."></textarea>
-      <label class="op-nt-lbl" for="op-nt-sites">Websites and tools Operator can use</label>
+      <label class="op-nt-lbl" for="op-nt-sites">What websites and tools would you like Operator to use?</label>
       <div class="op-nt-pillwrap">
         <div class="op-nt-pills" id="op-nt-pills">
           <input type="text" class="op-nt-pill-in" id="op-nt-sites" placeholder="Type a site or tool and press Enter…" autocomplete="off" spellcheck="false">
@@ -4634,6 +5724,7 @@ table.with-pin th.type-col { width: 7rem; }
     drivers: "{{ url_for('operator.operator_drivers') }}",
     frame: "{{ url_for('operator.operator_frame') }}",
     history_list: "{{ url_for('operator.operator_history_list') }}",
+    homepage: "{{ url_for('operator.operator_homepage') }}",
     history_get: "{{ url_for('operator.operator_history_get', run_id=0) }}",
     maps: "{{ url_for('operator.operator_maps') }}",
     models: "{{ url_for('operator.operator_models') }}",
@@ -4642,6 +5733,8 @@ table.with-pin th.type-col { width: 7rem; }
     sandbox_files: "{{ url_for('operator.operator_sandbox_files') }}",
     sandbox_upload: "{{ url_for('operator.operator_sandbox_upload') }}",
     session: "{{ url_for('operator.operator_session') }}",
+    sessions: "{{ url_for('operator.operator_sessions') }}",
+    session_one: "{{ url_for('operator.operator_session_one', sid='__S__') }}",
     status: "{{ url_for('operator.operator_status') }}",
     steer: "{{ url_for('operator.operator_steer') }}",
     stream: "{{ url_for('operator.operator_stream') }}",
@@ -4656,7 +5749,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1033"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1155"></script>
 
 </body>
 </html>
