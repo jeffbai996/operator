@@ -3620,10 +3620,10 @@ table.with-pin th.type-col { width: 7rem; }
     .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; aspect-ratio: auto; }
       /* full-width single column: let cards stay content-height, not tall squares */
 
-    /* the +3px on theme/ring is their existing optical offset against the X —
-       keep it, or the row goes 3px out of line on mobile only. */
-    .op-lp-close { top: calc(0.75rem + env(safe-area-inset-top)); }
-    .op-lp-theme, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
+    /* Equal 32px control boxes share one top coordinate, so their centers stay
+       aligned even when browser zoom magnifies the top row. */
+    .op-lp-close, .op-lp-theme, .op-lp-mark {
+      top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
     .op-lp-close { right: calc(0.75rem + env(safe-area-inset-right)); }
     .op-lp-theme { right: calc(3.5rem + env(safe-area-inset-right)); }
     .op-lp-mark  { right: calc(6.25rem + env(safe-area-inset-right)); }
@@ -4133,7 +4133,8 @@ table.with-pin th.type-col { width: 7rem; }
      row; the 26px art inside leaves the ring visually matched to their glyphs
      rather than ballooning to the full button. */
   .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
-    width: 32px; height: 32px; display: grid; place-items: center; line-height: 0; }
+    width: 32px; height: 32px;
+    display: grid; place-items: center; line-height: 0; }
   .op-lp-mark svg { overflow: visible; }
 
   .op-lp-mark-tip { position: absolute; top: calc(100% + 6px); right: 0;
@@ -4358,7 +4359,7 @@ table.with-pin th.type-col { width: 7rem; }
   /* fixed, not absolute: an ancestor (.op-lp-bar) is positioned at runtime, which
      hijacked absolute anchoring; the splash is full-viewport so fixed pins
      the X to the view's true top-right and it survives launchpad scroll */
-  .op-lp-close { position: fixed; top: 1.1rem; right: 1.1rem; z-index: 3; }
+  .op-lp-close { position: fixed; top: calc(1.1rem + 3px); right: 1.1rem; z-index: 3; }
 
   .op-lp-composer { width: min(100%, 36rem); min-height: 42px; position: relative; display: flex;
     align-items: center; padding: 0.4rem 3rem 0.4rem 0.92rem; box-sizing: border-box;
@@ -4399,7 +4400,8 @@ table.with-pin th.type-col { width: 7rem; }
   .op-lp-send:hover { filter: brightness(.88); transform: scale(1.06); }
   .op-lp-send:active { filter: brightness(.75); transform: scale(.92); }
   .op-lp-theme { position: fixed; top: calc(1.1rem + 3px); right: 4rem; z-index: 4;
-    width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center;
+    width: 32px; height: 32px;
+    padding: 0; display: inline-flex; align-items: center;
     justify-content: center; border: 1px solid transparent; border-radius: 9px;
     background: transparent; color: var(--muted); cursor: pointer;
     transition: color .16s ease, background .16s ease, border-color .16s ease; }
@@ -4599,13 +4601,11 @@ table.with-pin th.type-col { width: 7rem; }
     padding: 0; gap: 0; background: transparent; border: 1px solid transparent;
     color: var(--muted); border-radius: 8px; cursor: pointer;
     transition: background .12s ease, color .12s ease, border-color .12s ease; }
-  .op-lp-close svg { width: calc(15px * var(--chat-scale));
-    height: calc(15px * var(--chat-scale)); }
-  /* touch: a real tap target, independent of scale (the fixed-px button read
-     as microscopic on iPad) */
+  .op-lp-close svg { width: 16px; height: 16px; }
+  /* Keep the same control geometry as the status/theme controls on touch.
+     Inflating only the X moves its centerline. */
   @media (pointer: coarse) {
-    .op-lp-close { width: 40px; height: 40px; border-radius: 10px; }
-    .op-lp-close svg { width: 18px; height: 18px; }
+    .op-lp-close { border-radius: 9px; }
   }
   .op-lp-close:hover { background: var(--bg-3); color: var(--fg-2); border-color: var(--border-2); }
   /* 3 fixed columns → a stable block width (--op-lp-w) the bar can lock onto.
@@ -5299,10 +5299,9 @@ table.with-pin th.type-col { width: 7rem; }
     .op-lp-mark.op-menu-open ~ .op-lp-close { opacity: 1; pointer-events: auto;
       transform: none; }
 
-    /* CENTERS aligned, not tops: the ring sits at top 1.1rem with a 32px
-       box; the X's box is 40px tall, so it starts 4px higher to share the
-       centerline (measured cy 33.6/36.6/40.6 before this) */
-    .op-lp-close { top: calc(1.1rem - 4px + env(safe-area-inset-top)) !important;
+    /* Equal 32px boxes share one top coordinate, so their centers align on
+       every touch viewport without per-control compensation. */
+    .op-lp-close { top: calc(1.1rem + env(safe-area-inset-top)) !important;
       right: calc(3.4rem + env(safe-area-inset-right)) !important;
       display: inline-flex !important; }
     .op-lp-theme { top: calc(1.1rem + env(safe-area-inset-top)) !important;
