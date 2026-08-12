@@ -74,12 +74,11 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.35** — recent highlights: an alerts channel that carries a
-> run to your phone (one live card showing what the agent is doing right now,
-> retiring to a completion ping when it finishes), a loop-breaker that catches
-> varied-coordinate flailing rather than only exact repeats, element refs
-> preferred over stale pixel coordinates on a moving page, and **conversations**
-> — the cockpit's single chat becomes a switchable, renamable map of them.
+> **Status:** **v1.0.35** — a transaction-ready batch: 1Password-backed identity
+> and card filling, one combined CVV + submit authorization gate, safer browser
+> grounding, an alerts channel that carries a live run to your phone, a
+> loop-breaker that catches varied-coordinate flailing, and switchable,
+> renamable **conversations**.
 
 ## What it does
 
@@ -180,28 +179,31 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 
 ## Changelog
 
-**v1.0.35** — **the alerts channel, and a loop-breaker that sees flailing**. A run
-becomes visible without the cockpit open: it posts one live card the moment it
-starts and edits that card in place, showing what the agent is doing *right now*
-rather than a growing wall of completed steps; when the run ends the card retires
-to its final state and a separate completion ping lands as a new message with the
-final frame attached. Edits don't notify and posts do, so that is one card and
-exactly one buzz per run, and change is measured by what the agent *did* rather
-than by the clock — a silent hour costs one edit, not one per poll. The whole
-readout sits inside a single fence, clamped to the card width, with the outcome
-carried by colour instead of bold. Off entirely unless a channel is configured,
-run off the run thread, and unable to break a run by contract. The loop-breaker
-learns the failure it kept missing: a rolling window catches *varied*-coordinate
-flailing (a booking run burned ~25 calls clicking different wrong spots, which
-reset the exact-repeat streak every time), while a `browser_snapshot` clears the
-window because re-grounding on the DOM is the recovery the nudge asks for.
-Browsing gets more honest about the page underneath it — element refs beat stale
-pixel coordinates on a moving page, dialog/hover/download reachability is taught
-rather than discovered by failing, and a collapsed viewport can no longer
-calibrate a click. Also: **conversations** — the cockpit's one-and-only chat
-becomes a map of them, switchable, renamable and deletable, with an untitled chat
-taking the name of the first task run in it; and the release version stops being
-typed into three templates, collapsing to one constant injected everywhere.
+**v1.0.35** — **the transaction batch, and runs that tell you they finished**.
+1Password now fills saved logins, cards, addresses and identity items, with its
+load-time injection behaviour documented so a missing inline suggestion gets a
+reload before being mistaken for missing credentials. A purchase asks for the
+CVV and permission to submit in one authorization gate instead of interrupting
+the user twice, while personal data is resolved through an explicit manifest
+rather than improvised searching. Browser control gets more honest about the
+page underneath it: element refs beat stale pixel coordinates on moving pages,
+dialog/hover/download reachability is taught up front, a collapsed viewport can
+no longer calibrate a click, and the feed follows the tab the agent is actually
+driving. The loop-breaker learns the failure it kept missing: a rolling window
+catches *varied*-coordinate flailing, while `browser_snapshot` clears the window
+because re-grounding on the DOM is the intended recovery.
+
+A run can now travel without the cockpit open. An optional alerts channel gets
+one in-flight card that is edited as the trace grows, then a separate completion
+post with the final frame — edits do not buzz, posts do, so each run produces
+one live instrument panel and exactly one completion notification. Updates are
+driven by agent activity rather than a timer, run off the run thread, and cannot
+break the run. Restart requests made mid-turn defer until the terminal
+transition. **Conversations** land in the same release: chats are switchable,
+renamable and deletable, New chat returns to the welcome view, and an untitled
+chat adopts the first task's name. The effort auto-switch experiment is removed
+in favour of manual effort, and the release version is now one injected constant
+instead of three hand-synchronized template strings.
 
 **v1.0.33** — **the letterbox, root-caused**. Two long-standing viewport complaints turn out to be one mechanism failing in two places, both found in the viewport flight recorder rather than reasoned about. **Re-entry:** returning to a backgrounded cockpit tab fires `visibilitychange`, not `resize`, so nothing re-beaconed the stage size — and the remote target does drift while you are away, because a force-desktop on navigation re-applies the stored target, which before any beacon has landed is `WIDTHx0` (auto height = the window's native height); `object-fit: contain` renders that as a letterbox. Re-entry now resyncs, and clears the send's no-op guard first — the stage size is normally *unchanged* across the away period, which is exactly why the old code swallowed the re-send. **Collapse:** the repair for a collapsed layout viewport required N *consecutive* gate misses, and any healthy read zeroed the counter — so a viewport flipping between healthy and collapsed (ten such flips in one recorded session) never reached the threshold, and the captured frame kept changing size under the viewer. The collapsed band now scores instead of counting: a collapsed read outweighs a healthy one, so a flip-flop converges on a repair while a lone navigation transient still decays to nothing and never reflows the real window. Also: the version line under the wordmark moves to the chat face.
 
