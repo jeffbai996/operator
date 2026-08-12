@@ -1,7 +1,7 @@
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark.png">
-    <img src="docs/img/operator-lockup-light.png" height="72" alt="Operator v1.0.35">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.0.35.png">
+    <img src="docs/img/operator-lockup-light-v1.0.35.png" height="72" alt="Operator v1.0.35">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
