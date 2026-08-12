@@ -663,7 +663,7 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
                   themeSize: t.width, closeSize: x.width, themeRight: t.right,
                   closeLeft: x.left, closeRight: x.right, viewport: innerWidth};
         }""")
-        assert 2.75 <= corner["themeCenterOffset"] <= 3.25
+        assert corner["centerDelta"] <= 0.5
         assert corner["themeSize"] == corner["closeSize"] == 32
         assert corner["themeRight"] < corner["closeLeft"]
         assert corner["viewport"] - corner["closeRight"] <= 20
@@ -758,6 +758,38 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         }
     finally:
         ctx.close()
+
+
+def test_launchpad_top_controls_share_a_centerline_on_coarse_pointer(browser, harness):
+    """The X must not grow or drift below status/theme controls on touch."""
+    original_demo = harness.mod.DEMO
+    try:
+        for demo in (False, True):
+            harness.mod.DEMO = demo
+            ctx = browser.new_context(viewport={"width": 1440, "height": 900},
+                                      has_touch=True)
+            ctx.add_init_script(
+                "localStorage.setItem('operator-session-v1', "
+                + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                         "bot": "", "model": "", "effort": ""})) + ");")
+            pg = ctx.new_page()
+            try:
+                pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+                pg.wait_for_selector("#op-lp-wordmark", state="visible", timeout=8000)
+                controls = pg.evaluate("""() => {
+                  const ids = ['op-lp-mark', 'op-lp-theme', 'op-lp-x'];
+                  const boxes = ids.map(id => document.getElementById(id).getBoundingClientRect());
+                  return {coarse: matchMedia('(pointer: coarse)').matches,
+                          centers: boxes.map(r => (r.top + r.bottom) / 2),
+                          sizes: boxes.map(r => [r.width, r.height])};
+                }""")
+                assert controls["coarse"], "touch harness did not activate coarse-pointer CSS"
+                assert max(controls["centers"]) - min(controls["centers"]) <= 0.5
+                assert controls["sizes"] == [[32, 32], [32, 32], [32, 32]]
+            finally:
+                ctx.close()
+    finally:
+        harness.mod.DEMO = original_demo
 
 
 def test_launchpad_backdrop_collapses_results_and_theme_toggle_is_local(browser, harness):
