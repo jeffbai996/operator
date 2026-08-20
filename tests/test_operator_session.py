@@ -53,6 +53,12 @@ def test_store_round_trip(store):
     assert store.save({"log": "x"}) == 2
 
 
+def test_first_explicit_legacy_save_seeds_an_empty_store(store):
+    assert store.save({"log": "first"}, conversation_id="legacy") == 1
+    assert store.listing()["active"] == "legacy"
+    assert store.load(conversation_id="legacy")["data"]["log"] == "first"
+
+
 def test_store_survives_corrupt_file(store, tmp_path):
     (tmp_path / "session.json").write_text("{not json")
     assert store.load() == {"rev": 0, "data": None}
@@ -70,8 +76,8 @@ def test_session_routes_round_trip(tmp_path, monkeypatch):
     app = _app(False, tmp_path, monkeypatch)
     c = app.test_client()
     r = c.get("/operator/session")
-    assert r.status_code == 200 and r.get_json() == {"ok": True, "rev": 0,
-                                                     "data": None}
+    assert r.status_code == 200 and r.get_json() == {
+        "ok": True, "rev": 0, "data": None, "conversation_id": "legacy"}
     r = c.post("/operator/session",
                json={"data": {"log": "<div>from ipad</div>", "mode": "man"}})
     assert r.status_code == 200 and r.get_json()["rev"] == 1
@@ -144,6 +150,17 @@ def test_each_conversation_keeps_its_own_log(store):
     b = store.listing()["active"]
     assert store.activate(a)["data"]["log"] == "<div>A</div>"
     assert store.activate(b)["data"]["log"] == "<div>B</div>"
+
+
+def test_explicit_conversation_save_does_not_follow_global_active(store):
+    store.save({"log": "A"})
+    a = store.listing()["active"]
+    b = store.create()["id"]
+    store.save({"log": "B"}, conversation_id=b)
+    store.activate(a)
+    store.save({"log": "B updated from another browser"}, conversation_id=b)
+    assert store.load(conversation_id=a)["data"]["log"] == "A"
+    assert store.load(conversation_id=b)["data"]["log"] == "B updated from another browser"
 
 
 def test_rename_sticks_and_is_clipped(store):
@@ -237,6 +254,20 @@ def test_conversation_routes_round_trip(tmp_path, monkeypatch):
     assert [s["title"] for s in rows if s["id"] == first] == ["errand one"]
 
     assert c.delete(f"/operator/sessions/{made['id']}").get_json()["active"] == first
+
+
+def test_session_route_reads_and_writes_an_explicit_conversation(tmp_path, monkeypatch):
+    app = _app(False, tmp_path, monkeypatch)
+    c = app.test_client()
+    c.post("/operator/session", json={"data": {"log": "A"}})
+    a = c.get("/operator/sessions").get_json()["active"]
+    b = c.post("/operator/sessions", json={}).get_json()["id"]
+    c.post("/operator/session", json={"conversation_id": b,
+                                      "data": {"log": "B"}})
+    got_a = c.get(f"/operator/session?conversation_id={a}").get_json()
+    got_b = c.get(f"/operator/session?conversation_id={b}").get_json()
+    assert got_a["conversation_id"] == a and got_a["data"]["log"] == "A"
+    assert got_b["conversation_id"] == b and got_b["data"]["log"] == "B"
 
 
 def test_conversation_routes_reject_a_bad_id_and_action(tmp_path, monkeypatch):

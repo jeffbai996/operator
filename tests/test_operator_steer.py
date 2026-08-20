@@ -71,6 +71,16 @@ def test_clear_and_corrupt_tolerance(store):
     assert [s["text"] for s in store.pending()] == ["valid"]
 
 
+def test_queues_are_isolated_by_conversation(store):
+    store.push("only a", conversation_id="conv-a")
+    store.push("only b", conversation_id="conv-b")
+    assert [s["text"] for s in store.pending("conv-a")] == ["only a"]
+    assert [s["text"] for s in store.pending("conv-b")] == ["only b"]
+    store.clear("conv-a")
+    assert store.pending("conv-a") == []
+    assert [s["text"] for s in store.take_all("conv-b")] == ["only b"]
+
+
 # ── the PostToolUse hook script ──────────────────────────────────────────────
 
 def _run_hook(env_path: str) -> subprocess.CompletedProcess:
@@ -384,7 +394,7 @@ def test_say_route_validation_and_states(store, monkeypatch):
     # running → 200 ok
     import operator_agent as OA
     monkeypatch.setattr(OA.runner, "steer",
-                        lambda t: {"ok": True, "queued": 1, "live": True})
+                        lambda t, **_k: {"ok": True, "queued": 1, "live": True})
     body = c.post("/operator/agent/say", json={"text": "hello"})
     assert body.status_code == 200 and body.get_json()["ok"]
 

@@ -23,6 +23,16 @@ href="{{ url_for('operator.static', filename='icons/operator-192.png') }}">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@200..800&family=Geist+Mono:wght@400..800&display=swap" rel="stylesheet">
 <style>
 
+@font-face {
+  font-family: "Anthropic Sans";
+  /* woff2 first (~1/3 the bytes of the raw TTF, which was going out uncompressed);
+     the TTF stays as the fallback for anything that can't do woff2. */
+  src: url("{{ url_for('static', filename='fonts/AnthropicSansVariable-TextRegular.woff2') }}") format("woff2"),
+       url("{{ url_for('static', filename='fonts/AnthropicSansVariable-TextRegular.ttf') }}") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
 :root {
 
   --bg: #08090b;
@@ -158,8 +168,9 @@ input::placeholder, textarea::placeholder {
    sheet at equal-or-higher specificity, so this only catches unclassed links. */
 
 .wrap a { color: var(--fg-2); text-decoration: none; }
-.wrap a:hover { color: var(--fg); text-decoration: underline; }
-
+.wrap a:hover { color: var(--fg); text-decoration: none; }
+/* Button-like <a> tags (pills, badges, tab/view switchers) remain explicitly
+   underline-free too; they are controls rather than prose links. */
 .wrap a.pill:hover, .wrap a.view-btn:hover, .wrap a.btn:hover,
 .wrap a.mode-btn:hover, .wrap a.filter-opt:hover, .wrap a.cold-toggle:hover,
 .wrap a.bot-badge:hover, .wrap a.chip-mini:hover {
@@ -182,7 +193,7 @@ header.site a.brand { color: var(--fg); font-weight: 800; font-size: 1.32rem;
                       font-family: "Plus Jakarta Sans", sans-serif;
                       letter-spacing: -0.02em; margin-right: 0.75rem; padding-left: 0.15rem;
                       white-space: nowrap; flex: 0 0 auto; }
-header.site a.brand:hover { color: var(--accent); background: none; }
+header.site a.brand:hover { color: var(--fg-2); background: none; }
 
 header.site a.active { color: var(--accent); background: var(--accent-soft);
                        font-weight: 600; box-shadow: 0 0 0 1px var(--accent-soft);
@@ -559,7 +570,7 @@ td.truncate { max-width: 0; overflow: hidden; text-overflow: ellipsis;
 td.truncate a.entry { display: block; overflow: hidden; text-overflow: ellipsis;
                       white-space: nowrap; }
 a.entry { color: var(--fg); text-decoration: none; font-weight: 500; }
-a.entry:hover { color: var(--accent); }
+a.entry:hover { color: var(--fg-2); }
 /* ID number column: larger, tabular for alignment */
 /* A dim # before an id code. In CSS, not the markup, so a copy takes the bare
    id — you want `ts5w` on the clipboard, not `#ts5w`. */
@@ -635,7 +646,7 @@ mark { background: rgba(241, 196, 15, 0.25); color: inherit;
                             padding: 0.1rem 0.9rem; margin: 0.6rem 0;
                             color: var(--muted); }
 .markdown-body a { color: var(--accent); text-decoration: none; }
-.markdown-body a:hover { text-decoration: underline; }
+.markdown-body a:hover { text-decoration: none; }
 .markdown-body table { margin: 0.6rem 0; }
 
 .markdown-body table {
@@ -2095,6 +2106,16 @@ form[data-delete-confirm] .delete-armed {
   border-radius: 5px; font-size: 0.7rem; font-weight: 650;
   line-height: 1; white-space: nowrap;
 }
+
+.row-actions .delete-armed,
+.row-delete-form .delete-armed {
+  position: absolute; right: 0.4rem; top: 50%; transform: translateY(-50%);
+  z-index: 2;
+}
+/* Positioning context for the rule above. Applied to both the cell and the
+   inline form, since the armed button lives inside the form on delete-confirm
+   surfaces and directly in the cell on data-delete-tap ones. */
+.row-actions, .row-delete-form { position: relative; }
 /* Touch devices (iPad, phones) have no hover, so the hover-gated reveal above
    never fires — the ✕ stayed invisible/untappable at viewports >480px (the old
    mobile rule only caught phones). Show it always on any no-hover device. */
@@ -2175,7 +2196,7 @@ form[data-delete-confirm] .delete-armed {
 .deep-table .type-col { width: 1%; white-space: nowrap; padding-right: 0.7rem; }
 .deep-table .type-col .pill { font-size: 0.7rem; }
 .deep-table .name-cell a.entry { font-weight: 600; }
-.deep-table .name-cell a.entry:hover { color: var(--accent); }
+.deep-table .name-cell a.entry:hover { color: var(--fg-2); }
 .deep-title { font-weight: 600; color: var(--fg); }
 .deep-desc { font-size: 0.8rem; margin-top: 0.15rem; line-height: 1.4; color: var(--muted); }
 /* rendered deep .md doc — readable long-form */
@@ -2189,8 +2210,7 @@ form[data-delete-confirm] .delete-armed {
 .deep-doc table { border-collapse: collapse; margin: 0.6rem 0; }
 .deep-doc th, .deep-doc td { border: 1px solid var(--bg-3); padding: 0.3rem 0.6rem; }
 .deep-doc blockquote { border-left: 3px solid var(--bg-3); margin: 0.6rem 0; padding-left: 0.8rem; color: var(--muted); }
-.deep-doc a.wikilink { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
-.deep-doc a.wikilink:hover { border-bottom-style: solid; }
+.deep-doc a.wikilink { color: var(--accent); text-decoration: none; }
 /* deep CRUD — header actions + new/edit forms */
 .deep-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 1rem; }
 .deep-head-count { margin: 0; }
@@ -2200,7 +2220,10 @@ form[data-delete-confirm] .delete-armed {
 .deep-undo-form { margin: 0; }
 .deep-noresults { margin-top: 1rem; }
 .deep-inline-form { display: inline; margin: 0; }
-.deep-file-meta { margin: 0.2rem 0 1rem; }
+.deep-file-title { font-size: 1.45rem; font-weight: 600; margin: 0.45rem 0 0.15rem; }
+.deep-file-desc { margin: 0 0 0.4rem; max-width: 74ch; font-size: 0.93rem;
+                  line-height: 1.5; color: var(--fg-2, var(--fg)); }
+.deep-file-meta { margin: 0.1rem 0 0.7rem; }
 .deep-file-path { font-family: var(--code-font); font-size: 0.82rem; }
 .deep-file-mtime { font-size: 0.8rem; }
 /* new/edit/promote forms share this back-link + heading spacing */
@@ -2209,7 +2232,8 @@ form[data-delete-confirm] .delete-armed {
 .deep-promote-hint { font-size: 0.85rem; max-width: 70ch; }
 .deep-file-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0.2rem 0 0.4rem; }
 .deep-file-actions { display: flex; gap: 0.4rem; }
-.deep-del:hover { color: #ff7b72; border-color: rgba(255,123,114,0.4); }
+.deep-del { color: #ff7b72; border-color: rgba(255,123,114,0.32); }
+.deep-del:hover { border-color: rgba(255,123,114,0.6); background: rgba(248,81,73,0.10); }
 .deep-form { display: flex; flex-direction: column; gap: 0.9rem; max-width: 80ch; }
 .deep-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.82rem; color: var(--muted); }
 .deep-form input, .deep-form textarea, .deep-form select { background: var(--bg-2); border: 1px solid var(--bg-3);
@@ -3620,10 +3644,10 @@ table.with-pin th.type-col { width: 7rem; }
     .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; aspect-ratio: auto; }
       /* full-width single column: let cards stay content-height, not tall squares */
 
-    /* Equal 32px control boxes share one top coordinate, so their centers stay
-       aligned even when browser zoom magnifies the top row. */
-    .op-lp-close, .op-lp-theme, .op-lp-mark {
-      top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
+    /* the +3px on theme/ring is their existing optical offset against the X —
+       keep it, or the row goes 3px out of line on mobile only. */
+    .op-lp-close { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
+    .op-lp-theme, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
     .op-lp-close { right: calc(0.75rem + env(safe-area-inset-right)); }
     .op-lp-theme { right: calc(3.5rem + env(safe-area-inset-right)); }
     .op-lp-mark  { right: calc(6.25rem + env(safe-area-inset-right)); }
@@ -4115,6 +4139,7 @@ table.with-pin th.type-col { width: 7rem; }
     color: var(--muted); letter-spacing: .01em; text-align: center; }
   .op-demo .op-lp-demonote { display: block; }
   .op-lp { justify-content: safe center;
+    --op-lp-control-size: 32px;
     /* solid near-black, no translucency/blur — the welcome page is a surface
        of its own, not a veil over the browser feed */
     background: #08090c; backdrop-filter: none; }
@@ -4133,7 +4158,7 @@ table.with-pin th.type-col { width: 7rem; }
      row; the 26px art inside leaves the ring visually matched to their glyphs
      rather than ballooning to the full button. */
   .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
-    width: 32px; height: 32px;
+    width: var(--op-lp-control-size); height: var(--op-lp-control-size);
     display: grid; place-items: center; line-height: 0; }
   .op-lp-mark svg { overflow: visible; }
 
@@ -4158,7 +4183,10 @@ table.with-pin th.type-col { width: 7rem; }
     border-color: rgba(0,0,0,.13);
     box-shadow: 0 10px 26px -14px rgba(0,0,0,.35); }
   .op-lp-mark-tip::before { content: "Connecting…"; }
-  .op-mark-settled .op-lp-mark-tip::before { content: "Connected"; }
+  /* The branding animation may settle at its 4s ceiling while the backend is
+     still connecting. Settled is an animation fact, not connectivity: only
+     a live frame may claim Connected. */
+  .op[data-state="live"].op-mark-settled .op-lp-mark-tip::before { content: "Connected"; }
   .op[data-state="hung"] .op-lp-mark-tip::before { content: "Degraded performance"; }
   .op[data-state="hung"] .op-lp-mark-tip { color: #d2a30f; }
   .op[data-state="error"] .op-lp-mark-tip::before,
@@ -4273,9 +4301,11 @@ table.with-pin th.type-col { width: 7rem; }
      of its own: green live, amber connecting/hung, red when the backend is
      down. The closed ring is the health readout; the sweep only runs before
      the first resolved state. */
+  .op[data-state="connecting"] .op-lp-mark-sweep,
+  .op[data-state="connecting"] .op-lp-mark-glyph,
+  .op[data-state="hung"] .op-lp-mark-sweep { stroke: #d2a30f; }
   .op[data-state="error"] .op-lp-mark-sweep,
   .op.op-signal-lost .op-lp-mark-sweep { stroke: var(--bad); }
-  .op[data-state="hung"] .op-lp-mark-sweep { stroke: #d2a30f; }
   .op[data-state="error"] .op-lp-mark-glyph,
   .op.op-signal-lost .op-lp-mark-glyph { stroke: var(--bad); }
   /* A dead backend pulses so a red ring reads as an alarm, not just a recolor. */
@@ -4303,15 +4333,15 @@ table.with-pin th.type-col { width: 7rem; }
   /* The svg is DRAWN at 52px and scaled to 13 (see the template comment: the
      compositor rotates a rasterised texture, and only a supersampled texture
      spins without shimmer at this size). scale(.25) must therefore appear in
-     every transform that touches this element, keyframes included. No top/
-     left nudges: 52 in the 20px button centers on integers by itself —
-     verified dx 0.0 / dy 0.0 in an 8x headless measure. */
+     every transform that touches this element, keyframes included. Position
+     nudges belong on left/top so the scale and spin transforms stay exact. */
   .op-home-btn { position: relative; }
-  /* absolutely centered, not grid-centered: the 52px box overflows the 20px
+  /* Absolutely centered, not grid-centered: the 52px box overflows the 20px
      button and the button's layout pushed it below instead of holding it
-     centered. left/top 50% + integer -26px margins = exact center. */
+     centered. The geometry is exact at 50%; the asymmetric spiral's visual
+     mass reads a hair left, so carry a quarter-pixel optical nudge right. */
   .op-home-btn svg { display: block; transform-origin: center; will-change: transform;
-    position: absolute; left: 50%; top: 50%; margin: -26px 0 0 -26px;
+    position: absolute; left: calc(50% + 0.25px); top: 50%; margin: -26px 0 0 -26px;
     transform: scale(0.25); }
   /* Class-gated like the splash greet, NOT :hover-driven: mouse-off used to
      kill the spin mid-turn and snap back. JS adds .op-greeting on enter and
@@ -4359,6 +4389,7 @@ table.with-pin th.type-col { width: 7rem; }
   /* fixed, not absolute: an ancestor (.op-lp-bar) is positioned at runtime, which
      hijacked absolute anchoring; the splash is full-viewport so fixed pins
      the X to the view's true top-right and it survives launchpad scroll */
+
   .op-lp-close { position: fixed; top: calc(1.1rem + 3px); right: 1.1rem; z-index: 3; }
 
   .op-lp-composer { width: min(100%, 36rem); min-height: 42px; position: relative; display: flex;
@@ -4400,7 +4431,7 @@ table.with-pin th.type-col { width: 7rem; }
   .op-lp-send:hover { filter: brightness(.88); transform: scale(1.06); }
   .op-lp-send:active { filter: brightness(.75); transform: scale(.92); }
   .op-lp-theme { position: fixed; top: calc(1.1rem + 3px); right: 4rem; z-index: 4;
-    width: 32px; height: 32px;
+    width: var(--op-lp-control-size); height: var(--op-lp-control-size);
     padding: 0; display: inline-flex; align-items: center;
     justify-content: center; border: 1px solid transparent; border-radius: 9px;
     background: transparent; color: var(--muted); cursor: pointer;
@@ -4597,13 +4628,13 @@ table.with-pin th.type-col { width: 7rem; }
     .op-lp-searchclear { width: 28px; height: 28px; }
   }
   .op-lp-close { display: inline-flex; align-items: center; justify-content: center;
-    width: 32px; height: 32px;
+    width: var(--op-lp-control-size); height: var(--op-lp-control-size);
     padding: 0; gap: 0; background: transparent; border: 1px solid transparent;
     color: var(--muted); border-radius: 8px; cursor: pointer;
     transition: background .12s ease, color .12s ease, border-color .12s ease; }
   .op-lp-close svg { width: 16px; height: 16px; }
-  /* Keep the same control geometry as the status/theme controls on touch.
-     Inflating only the X moves its centerline. */
+  /* touch: keep the same control geometry as theme/status. Inflating only the
+     X moved its centerline on touch laptops and wide tablets. */
   @media (pointer: coarse) {
     .op-lp-close { border-radius: 9px; }
   }
@@ -4910,7 +4941,7 @@ table.with-pin th.type-col { width: 7rem; }
     left: calc(-0.85rem - 3.25px); top: 0.52rem; width: 5px; height: 5px; border-radius: 50%;
     background: var(--muted); box-shadow: 0 0 0 3px var(--bg-2); }
 
-  .op-task-step:not(.op-act-step) strong { font-weight: 600; }
+  .op-task-step:not(.op-act-step) strong { font-weight: 650; }
   /* inline coordinate detail after "Clicking"/"Dragging" — lighter, smaller, set apart */
 
   .op-act-coord { margin-left: 0.4rem; color: var(--muted);
@@ -5748,7 +5779,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1155"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1159"></script>
 
 </body>
 </html>

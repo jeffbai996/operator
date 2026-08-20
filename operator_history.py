@@ -38,13 +38,15 @@ _LOCK = threading.Lock()
 _SCHEMA = """CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_ts REAL, ended_ts REAL,
+    conversation_id TEXT DEFAULT '',
     bot TEXT, task TEXT, state TEXT, reason TEXT,
     model TEXT, effort TEXT, runtime TEXT, surface TEXT,
     demo INTEGER DEFAULT 0,
     cum_in_tokens INTEGER, peak_in_tokens INTEGER,
     n_messages INTEGER, trace TEXT)"""
 
-_LEAN_COLS = ("id", "started_ts", "ended_ts", "bot", "task", "state",
+_LEAN_COLS = ("id", "started_ts", "ended_ts", "conversation_id",
+              "bot", "task", "state",
               "reason", "model", "effort", "runtime", "surface", "demo",
               "cum_in_tokens", "peak_in_tokens", "n_messages")
 
@@ -53,6 +55,11 @@ def _conn() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(_PATH), exist_ok=True)
     c = sqlite3.connect(_PATH, timeout=5)
     c.execute(_SCHEMA)
+    # CREATE IF NOT EXISTS does not add columns to the live pre-conversations
+    # ledger. This additive migration is idempotent and keeps every old row.
+    cols = {row[1] for row in c.execute("PRAGMA table_info(runs)")}
+    if "conversation_id" not in cols:
+        c.execute("ALTER TABLE runs ADD COLUMN conversation_id TEXT DEFAULT ''")
     return c
 
 
@@ -90,6 +97,7 @@ def record(runner, reason: str = "") -> int | None:
         msgs = getattr(runner, "messages", None) or []
         row = (
             started, ended,
+            str(getattr(runner, "conversation_id", "") or ""),
             str(getattr(runner, "bot", "") or ""),
             str(getattr(runner, "task", "") or ""),
             str(getattr(runner, "state", "") or ""),
@@ -107,10 +115,11 @@ def record(runner, reason: str = "") -> int | None:
         with _LOCK:
             with _conn() as c:
                 cur = c.execute(
-                    "INSERT INTO runs (started_ts, ended_ts, bot, task, state,"
+                    "INSERT INTO runs (started_ts, ended_ts, conversation_id,"
+                    " bot, task, state,"
                     " reason, model, effort, runtime, surface, demo,"
                     " cum_in_tokens, peak_in_tokens, n_messages, trace)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
                 return cur.lastrowid
     except Exception as e:  # noqa: BLE001 — by contract: never break a run
         log.warning("history record failed (run unaffected): %s", e)

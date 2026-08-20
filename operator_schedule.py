@@ -247,11 +247,46 @@ class CompletionWatcher:
         self._notify = notify
         self._prev = getattr(runner, "state", "idle")
         self._sched_slug: str | None = None
+        self._prev_by_conversation: dict[str, str] = {}
+        self._scheduled_by_conversation: dict[str, str] = {}
 
-    def mark_scheduled(self, slug: str) -> None:
-        self._sched_slug = slug
+    def mark_scheduled(self, slug: str, conversation_id: str = "") -> None:
+        if conversation_id:
+            self._scheduled_by_conversation[conversation_id] = slug
+            self._prev_by_conversation[conversation_id] = "running"
+        else:
+            self._sched_slug = slug
+
+    def _terminal(self, runner, state: str, slug: str | None) -> None:
+        try:
+            dur = ((runner.ended_ts or time.time())
+                   - (runner.started_ts or 0))
+        except Exception:
+            dur = 0
+        icon = "✅" if state == "done" else "⚠️"
+        task = (getattr(runner, "task", "") or "")[:80]
+        bot = getattr(runner, "bot", "") or "operator"
+        via = f" (scheduled: {slug})" if slug else ""
+        try:
+            self._notify(f"{icon} {bot} {'finished' if state == 'done' else 'ERRORED'}"
+                         f"{via}: {task} · {_fmt_secs(dur or 0)}")
+        except Exception:
+            pass
 
     def poll(self) -> None:
+        all_runners = getattr(self._r, "runners", None)
+        if callable(all_runners):
+            for target in all_runners():
+                cid = str(getattr(target, "conversation_id", "") or "legacy")
+                state = getattr(target, "state", "idle")
+                prev = self._prev_by_conversation.setdefault(cid, state)
+                self._prev_by_conversation[cid] = state
+                if state == prev or prev != "running":
+                    continue
+                slug = self._scheduled_by_conversation.pop(cid, None)
+                if state in ("done", "error"):
+                    self._terminal(target, state, slug)
+            return
         state = getattr(self._r, "state", "idle")
         prev, self._prev = self._prev, state
         if state == prev or prev != "running":
@@ -260,19 +295,7 @@ class CompletionWatcher:
             self._sched_slug = None
             return
         slug, self._sched_slug = self._sched_slug, None
-        try:
-            dur = (self._r.ended_ts or time.time()) - (self._r.started_ts or 0)
-        except Exception:
-            dur = 0
-        icon = "✅" if state == "done" else "⚠️"
-        task = (getattr(self._r, "task", "") or "")[:80]
-        bot = getattr(self._r, "bot", "") or "operator"
-        via = f" (scheduled: {slug})" if slug else ""
-        try:
-            self._notify(f"{icon} {bot} {'finished' if state == 'done' else 'ERRORED'}"
-                         f"{via}: {task} · {_fmt_secs(dur or 0)}")
-        except Exception:
-            pass
+        self._terminal(self._r, state, slug)
 
 
 # ── the background thread (singleton) ────────────────────────────────────────
@@ -282,7 +305,8 @@ _started = False
 
 def start(run_fn, runner) -> None:
     """Launch the housekeeping thread once. `run_fn(slug)` dispatches a saved
-    task (the view's shared run path); `runner` is the AgentRunner singleton."""
+    task (the view's shared run path); `runner` exposes the registry's latest
+    run for backwards-compatible completion notices."""
     global _started
     if _started or os.environ.get("OPERATOR_SCHEDULER", "1") == "0":
         return
@@ -302,7 +326,9 @@ def start(run_fn, runner) -> None:
                     try:
                         r = run_fn(slug) or {}
                         if r.get("ok"):
-                            watcher.mark_scheduled(slug)
+                            watcher.mark_scheduled(
+                                slug, conversation_id=str(
+                                    r.get("conversation_id") or ""))
                         else:
                             bump_unseen(f"⏭️ scheduled task “{slug}” "
                                         f"skipped: {r.get('error', 'dispatch failed')}")

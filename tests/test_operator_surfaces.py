@@ -48,10 +48,10 @@ class StartRecorder:
     def is_running(self):
         return False
 
-    def snapshot(self, since_ts=0.0):
+    def snapshot(self, since_ts=0.0, **_kwargs):
         return {}
 
-    def stop(self):
+    def stop(self, **_kwargs):
         return {"ok": True}
 
 
@@ -64,6 +64,7 @@ def live():
     # neutralize feed/streamer side effects
     mod._streamer.ensure_running = lambda: None
     mod._streamer._ensure_chrome_alive = lambda: None
+    mod._streamer.require_ready = lambda: None
     yield app.test_client(), mod, rec
     OA.runner = orig
 
@@ -76,6 +77,7 @@ def demo():
     OA.runner = rec
     mod._streamer.ensure_running = lambda: None
     mod._streamer._ensure_chrome_alive = lambda: None
+    mod._streamer.require_ready = lambda: None
     yield app.test_client(), mod, rec
     OA.runner = orig
     os.environ.pop("OPERATOR_DEMO", None)

@@ -90,12 +90,18 @@ def test_grab_hi_native_page_clips_device_viewport():
     assert clip["scale"] == pytest.approx(1.0)
 
 
-def test_grab_emulated_page_clips_css_viewport():
-    """OVERRIDE regime (the "chin"): when the device layout viewport equals
-    the view target, our setDeviceMetricsOverride is active and the capture
-    renders 1:1 CSS on an override-sized canvas — the clip must be the CSS
-    viewport or the frame pads a white right+bottom band (live-proven on
-    chatgpt.com: view 1280x1020, css 1024x816, device clip left a 204px chin)."""
+def test_grab_emulated_page_clips_the_device_canvas():
+    """OVERRIDE regime: the clip is device space in BOTH regimes.
+
+    This used to clip the CSS viewport, adopted against a white right+bottom
+    band once seen on chatgpt.com and called "the chin". Measured live on
+    google.com 2026-08-14 (css 1036x894, device 1295x1118): the device canvas
+    is painted edge to edge, and the CSS-sized clip is what amputates real
+    content — it took the top-left 1/zoom of the page and lost the Gmail /
+    avatar corner and the whole footer. Cropping a band away by cropping
+    everything is not a fix. If a genuine unpainted band ever returns, it is a
+    capture problem to solve at the source, not by shrinking the clip.
+    """
     metrics = {"layoutViewport": {"pageX": 0, "pageY": 0,
                                   "clientWidth": 1280, "clientHeight": 1020},
                "cssLayoutViewport": {"pageX": 0, "pageY": 0,
@@ -103,8 +109,8 @@ def test_grab_emulated_page_clips_css_viewport():
     st_view = (1280, 1020)
     out, shot = _grab_with("hi", vw=1024, vh=816, metrics=metrics, view=st_view)
     clip = shot["clip"]
-    assert clip["width"] == pytest.approx(1024)   # css layout viewport
-    assert clip["height"] == pytest.approx(816)
+    assert clip["width"] == pytest.approx(1280)   # device layout viewport
+    assert clip["height"] == pytest.approx(1020)
     assert clip["scale"] == pytest.approx(1.0)
 
 
@@ -125,10 +131,15 @@ def test_grab_emulated_body_minwidth_page_grows_clip_to_view():
     assert clip["height"] == pytest.approx(1140)
 
 
-def test_grab_emulated_scrolled_tail_caps_clip_at_remaining_content():
-    """The body-extent grow is bounded by content remaining BELOW the scroll
-    offset — a page scrolled near its tail must not clip past the bottom of
-    the document (that would pad the very band the grow exists to avoid)."""
+def test_grab_emulated_scrolled_page_anchors_on_the_device_scroll_origin():
+    """A scrolled emulated page keeps the device canvas and the device origin.
+
+    The body extents and the scroll offset are read in CSS px, so both must be
+    converted before they meet a device-space clip. The old "cap the grow at
+    the content remaining below the fold" guard is gone with the units bug
+    that needed it: the clip floor is the layout viewport, and a viewport
+    cannot extend past the end of its own document.
+    """
     metrics = {"layoutViewport": {"pageX": 0, "pageY": 2560,
                                   "clientWidth": 1280, "clientHeight": 1140},
                "cssLayoutViewport": {"pageX": 0, "pageY": 2048,
@@ -136,9 +147,9 @@ def test_grab_emulated_scrolled_tail_caps_clip_at_remaining_content():
     out, shot = _grab_with("hi", metrics=metrics, view=(1280, 1140),
                            body=[1024, 2960])   # 912 css px left below the fold
     clip = shot["clip"]
-    assert clip["width"] == pytest.approx(1024)    # fluid body: no grow
-    assert clip["height"] == pytest.approx(912)    # min(view 1140, 2960-2048)
-    assert clip["y"] == pytest.approx(2048)
+    assert clip["width"] == pytest.approx(1280)
+    assert clip["height"] == pytest.approx(1140)
+    assert clip["y"] == pytest.approx(2560)       # device, not css, scroll top
 
 
 def test_grab_clip_follows_scrolled_device_viewport():
@@ -512,3 +523,39 @@ def test_desktop_steer_pokes_the_feed(monkeypatch):
     res = OV._desktop_steer({"kind": "click_at", "x": 0.5, "y": 0.5})
     assert res["ok"] and calls
     assert OV._desktop_feed._wake.is_set()
+
+
+# --------------------------------------------------------------------------
+# Tier arbitration across concurrent viewers (the owner 2026-08-11 — "the browser
+# seems to be flickering, is it the stream optimization").
+#
+# The tier was last-viewer-wins on the shared frame buffer. With an iPad on lo
+# and a desktop on hi, every frame request restamped it, so consecutive
+# captures alternated between the 900px lo cap and full device resolution and
+# the <img> rescaled on each swap. Serve the highest tier any live viewer
+# wants: lo can downscale locally, hi cannot invent resolution back.
+# --------------------------------------------------------------------------
+
+def test_a_lone_lo_viewer_still_gets_lean_frames():
+    seen = {"ipad": ("lo", 100.0)}
+    assert OV.effective_tier(seen, 100.5) == "lo"
+
+
+def test_a_hi_viewer_stops_a_lo_viewer_downgrading_the_stream():
+    """The flicker: both polling, so the shared field flipped every request."""
+    seen = {"ipad": ("lo", 100.0), "desktop": ("hi", 100.1)}
+    assert OV.effective_tier(seen, 100.2) == "hi"
+    # ...and it does not depend on who polled last, which was the whole bug
+    seen = {"desktop": ("hi", 100.0), "ipad": ("lo", 100.9)}
+    assert OV.effective_tier(seen, 101.0) == "hi"
+
+
+def test_a_departed_hi_viewer_releases_the_stream_to_lo():
+    """A closed desktop tab must not pin the phone to heavy frames forever."""
+    seen = {"desktop": ("hi", 100.0), "ipad": ("lo", 200.0)}
+    assert OV.effective_tier(seen, 200.1) == "lo"
+
+
+def test_no_live_viewer_defaults_to_hi():
+    assert OV.effective_tier({}, 500.0) == "hi"
+    assert OV.effective_tier({"gone": ("lo", 1.0)}, 500.0) == "hi"

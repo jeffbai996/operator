@@ -34,3 +34,39 @@ def test_deferred_restart_is_coalesced_and_consumed_once(tmp_path, monkeypatch):
 def test_no_pending_restart_is_a_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("OPERATOR_RESTART_MARKER", str(tmp_path / "missing.json"))
     assert not guard.consume_and_restart()
+
+
+def test_service_stop_waits_for_operator_to_be_idle(tmp_path, monkeypatch):
+    marker = tmp_path / "deploy-drain"
+    monkeypatch.setenv("OPERATOR_DRAIN_PATH", str(marker))
+    payloads = [
+        {"admission": {"active": 1,
+                       "jobs": [{"conversation_id": "conv-a", "bot": "gemma"}]}},
+        {"admission": {"active": 0, "jobs": []}},
+    ]
+    sleeps = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def open_state(_url, timeout):
+        assert timeout <= 5
+        return Response(payloads.pop(0))
+
+    result = guard.wait_until_idle(
+        "http://operator.test/agent", opener=open_state,
+        sleep=lambda delay: sleeps.append(delay))
+
+    assert result is True
+    assert sleeps, "an active run must delay the service stop"
+    assert marker.exists(), "the marker stays through the stop/start gap"

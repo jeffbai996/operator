@@ -9,10 +9,9 @@ One was not enough (the owner 2026-08-06). Every task landed in the same
 transcript, an unrelated errand's context rode along inside it, and the only
 way to get a clean start was the trash can, which destroyed what was there.
 So this module now owns a MAP of conversations plus which one is active, and
-the cockpit gets a switcher. What it deliberately does NOT change is the
-single-session contract the client already speaks: `load()` and `save()` still
-read and write "the session", they just mean the ACTIVE one. A cockpit that
-never learns about conversations keeps working exactly as before.
+the cockpit gets a switcher. `load()` and `save()` default to the active one
+for legacy callers and accept an explicit conversation id for independent
+browsers and runners.
 
 On-disk shape (v2), with a single monotonic `rev` across the whole file
 because that is what the client's adopt-if-newer check compares:
@@ -136,16 +135,20 @@ def _clip_title(text: str) -> str:
 
 # ── the single-session contract the client already speaks ───────────────
 
-def load() -> dict:
+def load(conversation_id: str | None = None) -> dict:
     """{rev, data} for the ACTIVE conversation; {rev: 0, data: None} when the
     store is empty. Unchanged shape — the pre-conversations client still works."""
     with _LOCK:
         st = _read_unlocked()
-        sess = st["sessions"].get(st["active"]) or {}
+        sid = conversation_id or st["active"]
+        if (conversation_id and sid not in st["sessions"]
+                and sid != _LEGACY_ID):
+            raise KeyError(sid)
+        sess = st["sessions"].get(sid) or {}
         return {"rev": st["rev"], "data": sess.get("data")}
 
 
-def save(data: dict) -> int:
+def save(data: dict, conversation_id: str | None = None) -> int:
     """Persist into the active conversation; returns the new revision. Creates
     the first conversation if there is none. Raises ValueError over MAX_BYTES."""
     if not isinstance(data, dict):
@@ -154,12 +157,25 @@ def save(data: dict) -> int:
         raise ValueError(f"session payload exceeds {MAX_BYTES} bytes")
     with _LOCK:
         st = _read_unlocked()
-        sid = st["active"] or _new_id()
+        sid = conversation_id or st["active"] or _new_id()
+        # A completely empty store is advertised by the route as the stable
+        # `legacy` conversation so the client has an identity before its first
+        # debounced save. Let that one seed the store; arbitrary unknown ids
+        # still fail instead of silently manufacturing a typo'd conversation.
+        if (conversation_id and sid not in st["sessions"]
+                and sid != _LEGACY_ID):
+            raise KeyError(sid)
         prev = st["sessions"].get(sid) or {"title": ""}
         st["sessions"][sid] = {"title": prev.get("title") or "",
                                "updated_ts": time.time(), "data": data}
-        st["active"] = sid
+        if not st["active"]:
+            st["active"] = sid
         return _write_unlocked(st)
+
+
+def active_id() -> str:
+    with _LOCK:
+        return _read_unlocked()["active"]
 
 
 # ── conversations ───────────────────────────────────────────────────────
@@ -232,7 +248,7 @@ def delete(sid: str) -> dict:
         return {"active": st["active"], "rev": _write_unlocked(st)}
 
 
-def title_if_unset(text: str) -> None:
+def title_if_unset(text: str, conversation_id: str | None = None) -> None:
     """Name the active conversation after the first task dispatched into it.
 
     Titling server-side rather than in the client because the server is where
@@ -245,7 +261,7 @@ def title_if_unset(text: str) -> None:
             return
         with _LOCK:
             st = _read_unlocked()
-            sid = st["active"]
+            sid = conversation_id or st["active"]
             sess = st["sessions"].get(sid)
             if not sess or (sess.get("title") or "").strip():
                 return

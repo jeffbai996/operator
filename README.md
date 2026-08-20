@@ -1,13 +1,14 @@
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.0.35.png">
-    <img src="docs/img/operator-lockup-light-v1.0.35.png" height="72" alt="Operator v1.0.35">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.0.37.svg">
+    <img src="docs/img/operator-lockup-light-v1.0.37.svg" height="72" alt="Operator v1.0.37">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
 
 <p>
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
+  <img src="https://img.shields.io/badge/version-1.0.37-5965d8" alt="version 1.0.37">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
   <img src="https://img.shields.io/badge/agents-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini-8a63d2" alt="agent runtimes">
   <img src="https://img.shields.io/badge/auth-subscription%2C%20no%20API%20keys-2ea44f" alt="subscription auth">
@@ -15,28 +16,23 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-launchpad.png" alt="The Operator launchpad — wordmark, composer, and saved-task cards">
+  <img src="docs/img/operator-trip-planning-v1.0.37.png" alt="Operator planning a trip in a live browser">
 </p>
 
-<p><sub><i>The launchpad — a fresh session owns the full viewport: the wordmark, the composer, and category pills that summon saved-task cards, each pinned to the sites it uses. Hit <b>Go</b> and the prompt dispatches straight to the agent.</i></sub></p>
+<p><sub><i>Trip planning in the live cockpit — the action trail stays beside the exact page the agent is reading, and a follow-up can steer the run without starting over.</i></sub></p>
 
 <p>
-  <img src="docs/img/operator-run.png" alt="A live agent run — interleaved thinking + action trace beside the browser it is driving">
+  <img src="docs/img/operator-live-research-v1.0.37.png" alt="Operator comparing live sources and reporting its findings">
 </p>
 
-<p><sub><i>A live run — left: the interleaved thinking + action trace reasoning over what it sees; right: the actual Chrome it's driving, streamed frame-by-frame over CDP. Mid-run messages steer the agent without killing the turn.</i></sub></p>
-
-<p align="center">
-  <img src="docs/img/operator-tables.png" width="430" alt="The agent reports back — markdown tables render natively in the chat">
-  &nbsp;&nbsp;
-  <img src="docs/img/operator-mobile.png" width="300" alt="The phone cockpit — full-viewport splash, category pills, saved-task cards">
-</p>
-
-<p><sub><i>Left: the report-back — agent answers render as real markdown in the chat, tables included: bordered, rounded, sideways-scrolling when they overflow the rail. Right: the phone cockpit — the same launchpad as a full-viewport takeover, pills summoning task cards, installable to the home screen as an app (PWA).</i></sub></p>
+<p><sub><i>Live research in a second conversation — each chat keeps its own transcript, resumed agent session, working directory, and stop/steer channel while a shared admission cap protects the machine.</i></sub></p>
 
 ---
 
-A live **browser / computer-use agent cockpit**. Watch a real Chrome in real time, steer it manually, or hand control to a subscription-backed agent — Claude, GPT, or Gemini — that drives the browser and reports back.
+A live **browser / computer-use agent cockpit**. Give it a task, watch the exact
+Chrome it is driving, take the wheel whenever you want, and keep separate jobs
+alive in separate conversations. Claude, GPT, and Gemini runtimes use their
+normal subscription sign-ins rather than metered screenshot-heavy API calls.
 
 > **Inspired by OpenAI's Operator.** This project borrows the name and the spirit of a watch-the-agent-drive interface. It is an independent implementation, not affiliated with, endorsed by OpenAI, or derived from any OpenAI products.
 
@@ -74,11 +70,23 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `.env.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.35** — a transaction-ready batch: 1Password-backed identity
-> and card filling, one combined CVV + submit authorization gate, safer browser
-> grounding, an alerts channel that carries a live run to your phone, a
-> loop-breaker that catches varied-coordinate flailing, and switchable,
-> renamable **conversations**.
+> **Status:** **v1.0.37** — conversation-scoped runners with bounded concurrency,
+> correct viewport sizing on first paint and re-entry, hard browser-availability
+> preflight, and restart draining that refuses new work before a deployment and
+> lets active runs finish.
+
+## Things worth trying
+
+- **Plan against live inventory:** “Compare nonstop weekend flights from Seattle
+  to San Francisco next month, keep the best three, and explain the trade-off.”
+- **Research across sources:** “Read the official mission page and its latest
+  news coverage, reconcile any disagreement, and give me a five-bullet brief.”
+- **Work a logged-in tool:** “Open my project dashboard, find everything blocked
+  this week, and draft a cleanup order. Do not submit changes.”
+- **Make a file in the sandbox:** “Build a one-page spreadsheet from these notes,
+  format it cleanly, and leave the finished file in Downloads.”
+- **Stay in the loop:** send a follow-up while the agent is working, switch to a
+  second conversation, or take over with MAN mode without losing the trace.
 
 ## What it does
 
@@ -86,10 +94,10 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 |---|---|
 | **Live view** | Self-clocking frame pump of an attached Chrome via CDP `Page.captureScreenshot` — latency bounded at ~1 frame in flight on any device, with an adaptive `lo` tier (downscale + harder JPEG) for small screens and Save-Data connections. |
 | **Manual steer** | Click / type / scroll / press-hold / drag flow straight through to the page. |
-| **Agent drive** | `claude-a` + `claude-b` (Claude) and `gpt` (Codex), all on subscription auth — no metered API keys. Conversation is shared across bot switches and persisted across restarts. |
+| **Agent drive** | Claude, Codex, and Gemini CLI runtimes on subscription auth — no metered API keys. Each conversation owns its transcript, resumed runtime sessions, work directory, and stop/steer channel. |
 | **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. Agent answers render as real markdown — pipe tables included — and ASCII/box-drawing fences scroll sideways instead of wrapping to soup. |
-| **UX** | MAN/AUTO modes, drag-to-resize chat, live font controls, mobile layout, launchpad of saved tasks, a `/` slash palette, and a real scheduler (repeat/time/day → cron). |
-| **Reliability** | A serialized run state machine (a Stop can't be swallowed by a follow-up turn, a stall-kill can't mislabel a token-cap stop, a clean exit racing a stop is never "done"), a stall watchdog that ignores legitimate inter-turn gaps, a hardened stream parser that survives malformed runtime output, Chrome launched once at server boot, persisted scheduler dedupe, and an env-tunable token-cap governor. |
+| **UX** | MAN/AUTO modes, switchable/renamable conversations, drag-to-resize chat, live font controls, mobile/PWA layout, saved-task launchpad, `/` palette, history replay, and a real scheduler (repeat/time/day → cron). |
+| **Reliability** | Conversation-scoped state machines behind a shared global cap and one-slot-per-runtime guard; deterministic Stop/timeout/token-cap outcomes; browser preflight that refuses invisible work; hardened stream parsing; first-paint/re-entry viewport repair; deployment admission draining; and persisted scheduler dedupe. |
 | **Surfaces** | Browser (default), an isolated sandbox desktop (Xvfb), or the real desktop (gated — explicit per-session confirm, panic-STOP always on screen). Switch from a popover on the brand mark; the live feed follows. |
 | **Perception** | Zero-token local vision (`vision/`): template/colour-blob target finding + OCR, per-game region maps, and grid/crop grounding overlays — the agent reads labeled targets instead of squinting at raw pixels. |
 | **game_macro** | A planner/controller split (`control/`): the model emits a multi-step macro once, a local controller executes + verifies it at machine speed with zero mid-macro model calls, and only reports back on completion or surprise. |
@@ -99,18 +107,18 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 ## Layout
 
 ```text
-__init__.py               exports bp (Flask blueprint) + runner (AgentRunner)
 operator_view.py          blueprint: streamer (CDP screenshots) + /operator routes
-operator_agent.py         AgentRunner: the run state machine (dispatch/stop/gate)
+operator_agent.py         AgentRunner + conversation registry + admission cap
 operator_runtimes.py      per-runtime launch adapters (argv + MCP-config ownership)
 operator_prompts.py       personas, surface mandates, the task SYSTEM DIRECTIVEs
 operator_trace.py         pure tool-event -> trace-label functions + text cleaning
 operator_agy.py           Gemini/Antigravity trajectory parser (no event stream)
 operator_tasks.py         saved-task store (name / prompt / bot / model / tools)
 operator_schedule.py      cron matcher + background dispatcher, disk-persisted dedupe
-operator_session.py       one shared cockpit session (rev-counted, cross-device)
+operator_session.py       conversation map (rev-counted, cross-device)
 operator_history.py       flight recorder: SQLite run ledger, one row per finished run
 operator_steer.py         mid-run steer queue (cross-process, hook + exit-seam delivery)
+operator_restart_guard.py deployment admission lock + active-run drain helper
 steer_hook.py             PostToolUse hook: injects queued steers into the live agent
 templates/operator.html   the UI markup + a small endpoint-config script
 static/js/operator.js     the entire cockpit client (extracted from the template)
@@ -132,7 +140,7 @@ flowchart LR
   end
   subgraph server["Flask blueprint"]
     V["operator_view.py<br/>CDP streamer + routes"]
-    A["operator_agent.py<br/>run state machine"]
+    A["operator_agent.py<br/>runner registry + admission"]
     R["operator_runtimes.py<br/>launch adapters"]
   end
   C["Attached Chrome<br/>(your logged-in profile)"]
@@ -146,10 +154,11 @@ flowchart LR
 ```
 
 One Chrome, two drivers: the streamer screenshots and steers it over CDP for the
-human, the agent runtime attaches to the *same* browser through a Playwright MCP —
-so the feed can never show a browser the agent isn't actually driving. The runner
-is a serialized state machine (single-flight, deterministic terminal reasons), and
-the trace the client renders is the same event stream the runner consumed.
+human, while the selected agent runtime attaches to the *same* browser through a
+Playwright MCP. Dispatch is refused if that browser is unavailable, so an agent
+cannot quietly work in an invisible fallback. A registry gives every conversation
+its own state machine while shared admission keeps total load and per-runtime
+collisions bounded. The trace is the same event stream the runner consumed.
 
 ---
 
@@ -160,8 +169,6 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 ---
 
 ## Roadmap
-
-**Sessions + conversation sidebar** — multiple conversations instead of the single shared session: a collapsible sidebar listing chats (rename / delete / switch), and "New chat" landing on the welcome view — the wordmark + composer launchpad. The header's launchpad button (return-to-splash, mid-conversation included) is the seed of this surface.
 
 **v1.1 — perception depth + the canvas-game showcase**
 - Self-hosted OpenRSC demo (zero ToS risk) — the flagship RuneScape-class canvas run.
@@ -178,6 +185,22 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.37** — **correct on arrival + restart-safe runs**. The cockpit force-sends
+its visible stage geometry on first load and on re-entry, even when its saved
+dimensions look unchanged, so a stale browser target cannot leave a bottom
+letterbox until the user drags the divider. Deployments take an admission lock,
+refuse new work with an explicit message, and wait for active slots to finish.
+The reusable restart-guard helper lets a deployment or service stop boundary
+adopt the same drain semantics without hard-coding a particular service layout.
+
+**v1.0.36** — **conversation-scoped runners + bounded admission**. The old
+module-level runner becomes a registry keyed by conversation id. Every chat owns
+its transcript, resumed runtime sessions, working directory, state file, steer
+queue, stop target, telemetry, and history identity. Two different runtimes can
+work concurrently by default; a global cap and one-slot-per-runtime guard prevent
+box starvation and profile collisions. Rejections name the requested runtime and
+the conversation holding the slot.
 
 **v1.0.35** — **the transaction batch, and runs that tell you they finished**.
 1Password now fills saved logins, cards, addresses and identity items, with its
