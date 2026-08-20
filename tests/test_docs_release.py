@@ -10,34 +10,25 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CURRENT_VERSION = "1.0.37"
-
-
-def test_public_release_surfaces_match_current_version() -> None:
+def test_public_release_assets_follow_operator_version() -> None:
     view = (ROOT / "operator_view.py").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     match = re.search(r'^OP_VERSION = "([^"]+)"$', view, re.MULTILINE)
     assert match is not None
-    assert match.group(1) == CURRENT_VERSION
+    version = match.group(1)
 
-    assert f"badge/version-{CURRENT_VERSION}-" in readme
-    assert f"**Status:** **v{CURRENT_VERSION}**" in readme
+    assert f"badge/version-{version}-" in readme
+    assert f"**Status:** **v{version}**" in readme
     for theme in ("dark", "light"):
-        name = f"operator-lockup-{theme}-v{CURRENT_VERSION}.svg"
+        name = f"operator-lockup-{theme}-v{version}.svg"
         assert name in readme
         lockup = (ROOT / "docs" / "img" / name).read_text(encoding="utf-8")
-        assert f"Operator v{CURRENT_VERSION}" in lockup
-        assert f">v{CURRENT_VERSION}</text>" in lockup
+        assert f"Operator v{version}" in lockup
+        assert f">v{version}</text>" in lockup
 
-
-def test_readme_uses_the_current_showcase_pair() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assets = (
-        "operator-trip-planning-v1.0.37.png",
-        "operator-live-research-v1.0.37.png",
-    )
-
-    for name in assets:
-        assert f"docs/img/{name}" in readme
+    showcases = re.findall(
+        rf"docs/img/(operator-[^)\"']+-v{re.escape(version)}\.png)", readme)
+    assert len(set(showcases)) >= 2
+    for name in set(showcases):
         assert (ROOT / "docs" / "img" / name).is_file()

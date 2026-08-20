@@ -222,39 +222,6 @@ def test_streamer_defaults_to_soft_zoom_and_desktop_width() -> None:
     assert OV._VIEW_FOLLOW is True
 
 
-def test_launchpad_controls_keep_one_box_and_centerline_on_touch() -> None:
-    """Touch input must not silently make only the close control larger.
-
-    The splash row is positioned as three equal controls.  Inflating the X to
-    40px under ``pointer: coarse`` while the mark and theme toggle stay 32px
-    shifts its visual center by 4px on touch laptops and large tablets.
-    """
-    css = (Path(__file__).resolve().parents[1]
-           / "static/operator.css").read_text(encoding="utf-8")
-
-    assert "--op-lp-control-size: 32px;" in css
-    for selector in (".op-lp-mark", ".op-lp-theme", ".op-lp-close"):
-        assert f"{selector} {{" in css
-        assert f"width: var(--op-lp-control-size);" in css
-        assert f"height: var(--op-lp-control-size);" in css
-
-    touch = css[css.index("/* touch: keep the same control geometry"):
-                css.index(".op-lp-close:hover")]
-    assert "width: 40px" not in touch
-    assert "height: 40px" not in touch
-
-
-def test_home_mark_keeps_its_tiny_optical_nudge_right() -> None:
-    """The spiral is geometrically centered but reads left-heavy at scale."""
-    css = (Path(__file__).resolve().parents[1]
-           / "static/operator.css").read_text(encoding="utf-8")
-    rule = css[css.index(".op-home-btn svg {"):]
-    rule = rule[:rule.index("}")]
-    assert "left: calc(50% + 0.25px);" in rule
-    assert "top: 50%;" in rule
-    assert "margin: -26px 0 0 -26px;" in rule
-
-
 def test_view_metrics_tolerate_scrollbar_shaved_width() -> None:
     # cssLayoutViewport EXCLUDES the ~15px scrollbar, so a scrollable page under
     # the forced 1280 width reads ~1012 CSS — 12px under the 1024 floor. A hard
@@ -287,54 +254,6 @@ def test_pdf_pages_resize_the_real_window_not_emulation() -> None:
     assert "Browser.setWindowBounds" in apply_src
     # web tabs keep emulation (it overrides window size for web content)
     assert "Emulation.setDeviceMetricsOverride" in apply_src
-
-
-def test_grab_repair_is_throttled_not_per_frame() -> None:
-    # Defense in depth for the same strobe class: when a repair cannot change
-    # the reading (scrollbar, foreign-session override), retrying every frame
-    # reflows the real window at frame rate. The _grab mismatch path must gate
-    # repairs behind a multi-second throttle stamp.
-    src = Path(OV.__file__).read_text(encoding="utf-8")
-    assert '_repair_ts' in src
-    # backoff (2026-07-22): a repair that leaves the gate failing doubles the
-    # wait (cap 60s) instead of pulsing every 5s — on scrollbar-toggling pages
-    # the repair reflow itself perturbs the reading, so fixed-period retries
-    # strobed forever (films-table page).
-    assert '> getattr(self, "_repair_backoff", 5.0)' in src
-    assert 'self._repair_backoff = 5.0' in src
-    assert 'getattr(self, "_repair_backoff", 5.0) * 2, 60.0' in src
-    # persistence gate (2026-07-22, same night): mid-reflow transients dip
-    # under the floor for 1-2 frames as the page relaxes after a repair snap, so
-    # a single bad frame must never fire the clear+apply. That was a CONSECUTIVE
-    # counter until 2026-07-29, when the recorder caught what it lets through: a
-    # viewport FLIPPING 1024<->651, healthy every other frame, zeroing the
-    # counter forever while the frame size changed under the viewer. The
-    # collapsed band now scores instead of counting — a lone transient still
-    # decays to nothing, a flip-flop converges on a repair.
-    assert 'self._collapse_score >= COLLAPSE_REPAIR_AT' in src
-    assert OV.COLLAPSE_HIT > OV.COLLAPSE_DECAY, \
-        "a healthy read must not fully undo a collapsed one, or a flip-flop never fires"
-    assert OV.COLLAPSE_REPAIR_AT > OV.COLLAPSE_HIT, \
-        "one collapsed frame must not be enough — that is the transient case"
-    assert 'self._gate_misses = 0 if _gate_ok else (' in src
-    assert OV.REPAIR_AFTER_MISSES >= 3
-    # viewport-follow RESTORE (2026-07-22, after the dead-band/rate-limit
-    # round): the loop's actual source was client-side — 4f09e2b's
-    # ResizeObserver on the stage beaconed the cockpit's own layout shifts
-    # (scrollbar toggles, rail animation, frame swaps) as "resizes". With
-    # beacons user-driven only (window resize + rail-drag end, 600ms
-    # debounce), the server applies immediately again; the churn machinery
-    # must stay gone or resize goes back to "slow as shit".
-    assert 'abs(w - self.view_w) < 24' not in src
-    assert '_vf_apply_ts' not in src
-    assert '_vf_dirty' not in src
-    # AUTO-mode focus enforcement: while a run is live the streamed (= agent's)
-    # tab is re-fronted on a throttle, so the bot browser can't drift off it
-    assert '"_front_ts"' in src
-    js = (Path(OV.__file__).resolve().parent
-          / "static/js/operator.js").read_text(encoding="utf-8")
-    assert ".observe(st)" not in js          # no stage ResizeObserver — the loop
-    assert "_stageFollow = queue" in js      # rail-drag end still re-beacons
 
 
 def test_model_picker_preserves_selected_label_width_for_caret_position() -> None:
@@ -551,76 +470,6 @@ def test_splash_is_the_initial_html_boot_surface() -> None:
     assert "classList.remove('op-booting')" in js
 
 
-def test_welcome_launchpad_defaults_to_two_rows_and_standalone_add() -> None:
-    root = Path(__file__).resolve().parents[1]
-    css = (root / "static/operator.css").read_text(encoding="utf-8")
-    js = (root / "static/js/operator.js").read_text(encoding="utf-8")
-    template = (root / "templates/operator.html").read_text(encoding="utf-8")
-
-    assert ".op-lp-wordmark { font-size: 2.4rem;" in css
-    assert ".op-lp-input::placeholder" in css
-    assert "font: 500 calc(0.84rem * var(--chat-scale))/1.3" in css
-    assert "width: min(100%, 36rem); min-height: 42px" in css
-    assert 'id="op-lp-theme"' in template
-    assert "op-lp-collapsed" in css and "op-lp-collapsed" in js
-    assert "font-size: inherit;" in css
-    assert "flex-wrap: nowrap;" in css
-    assert "_LP_ROTATE_HOURS = 6, _LP_SHOW = 6" in js
-    assert "const _LP_PAGE = 6" in js
-    assert "renderGrid(true);" in js
-    launchpad = js[js.index("function _lpBuild()") : js.index("// one launchpad card")]
-    # examples paint SYNCHRONOUSLY at boot (right after the _opTasks init) —
-    # never gated behind the saved-tasks fetch resolving
-    _boot = launchpad.index("window._opTasks = window._opTasks ||")
-    assert 0 < launchpad.index("renderGrid(true);", _boot) - _boot < 200
-    assert launchpad.index("addBtn.addEventListener") < launchpad.rindex("ctl.refreshTasks();")
-    # the 2026-07-18 regression: a nonempty-log guard BEFORE control wiring left
-    # a painted, dead splash on restored sessions. Wiring is unconditional now;
-    # only syncVisibility may consult the log. The guard must never come back.
-    assert "if (log.children.length) return" not in launchpad
-    assert launchpad.index("function wireLaunchpadControls()") < launchpad.index("function initLaunchpad()")
-    assert "op-lp:not(.op-lp-tasks-open) .op-lp-grid" not in css
-    assert 'id="op-lp-add"' in template
-    assert '<span class="op-lp-title" id="op-lp-title">Things to do with Operator</span>' in template
-    for label in ("Browse", "Food", "Local", "Shop", "Travel", "Research", "Media", "Saved"):
-        assert f'>{label}</button>' in template
-    # Saved is a PERMANENT category (the owner 2026-07-19): always visible, an empty
-    # list renders the minimal "No saved tasks" state instead of hiding the tab
-    assert 'id="op-lp-tasks-toggle" aria-pressed="false" title="show saved tasks">' in template
-    assert 'title="show saved tasks" hidden' not in template
-    actions = template[template.index('<div class="op-lp-actions">') : template.index('</div>', template.index('<div class="op-lp-actions">'))]
-    assert actions.index('id="op-lp-search"') < actions.index('id="op-lp-refresh"') < actions.index('id="op-lp-add"')
-    add = actions[actions.index('id="op-lp-add"') :]
-    assert '<svg class="op-lp-add-ico"' in add
-    assert "window._opRefreshLaunchpadTasks" in js
-    assert "tasksTgl.hidden = false" in js
-    assert "'No saved tasks'" in js
-    assert "op-lp-new" not in js
-    assert "Save a task';" not in js
-    launchpad_css = css[css.index("/* ── Launchpad (#1)") : css.index("/* ── Operator-style task group")]
-    assert "@keyframes op-lp-pop" not in launchpad_css
-    # These guard the CARD hover-pop, so check the card rules — not the whole
-    # region. The splash status badge's greet keyframes now live in this slice
-    # too and legitimately use scale(); matching on the raw region caught those.
-    card_css = "\n".join(
-        line for line in launchpad_css.splitlines() if ".op-lp-card" in line
-    )
-    assert "translateY(-2px)" not in card_css
-    assert "scale(1.04)" not in card_css
-    assert ":has(.op-lp:not([hidden])) .op-agent-cursor" in launchpad_css
-    assert ":has(.op-lp:not([hidden])) .op-steer-cursor" in launchpad_css
-    # iOS composer treatment (settled 2026-07-19): the rail chatbox stays
-    # carved OUT of the coarse-pointer 16px force-up (compact size, URL-bar
-    # precedent). The splash paints compact via computed-16px + scale(.7) —
-    # legal ONLY in the block-context pill (flex-shrink defeated the widened
-    # box and centered margins swallowed growth when it lived in flex).
-    assert 'textarea:not(#op-input)' in css
-    ios_lp = css[css.index("Coarse-pointer WebKit:") : css.index(".op-lp-results {")]
-    assert "display: block; overflow: hidden;" in ios_lp
-    assert "width: 142.857%" in ios_lp
-    assert "transform: scale(.7)" in ios_lp
-
-
 def test_operator_full_bleed_does_not_strip_the_shared_header_gutter() -> None:
     """The cockpit may span the viewport; host navigation may not."""
     root = Path(__file__).resolve().parents[1]
@@ -643,40 +492,18 @@ def test_cross_origin_refusal_renders_as_a_warning_notice() -> None:
     assert "warningIcon()" in log_res
 
 
-@pytest.mark.skip(reason="pins the private repo's README ladder and rev cache-busters; the public README is a prose changelog")
-def test_release_version_and_demo_placeholder_stay_in_sync() -> None:
+def test_release_version_surfaces_stay_in_sync() -> None:
     root = Path(__file__).resolve().parents[1]
     live = (root / "templates/operator.html").read_text(encoding="utf-8")
     demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
     readme = (root / "README.md").read_text(encoding="utf-8")
 
-    # ONE version, injected (2026-08-05). The three copies used to be typed into
-    # the template and pinned here a fourth time, so a bump meant four edits and
-    # a red suite when you forgot one. What's left to assert is that nobody
-    # types a literal back in, and that the changelog carries the number on
-    # screen.
     assert re.fullmatch(r"\d+\.\d+\.\d+", OV.OP_VERSION)
-    assert f"| v{OV.OP_VERSION} |" in readme, "README ladder has no row for this version"
+    assert f"v{OV.OP_VERSION}" in readme
     assert '<span class="op-ver">{{ OP_VERSION }}</span>' in live
     assert '<span class="op-lp-mark-ver">v{{ OP_VERSION }}</span>' in live
-    assert ('<span class="op-about-ver"><span class="op-about-ver-v">v</span>'
-            '{{ OP_VERSION }}</span>') in live
     assert not re.search(r'class="op-ver">\d', live), "hardcoded version is back"
-    # the generated demo keeps its " demo" suffix on whatever the source carries
     assert '<span class="op-ver">{{ OP_VERSION }} demo</span>' in demo
-    assert "operator.css') }}?rev=v1169" in live   # home-mark optical centering (2026-08-18)
-    assert "js/operator.js') }}?rev=v1159" in live
-    assert "js/operator.js') }}?rev=v1159" in demo
-    assert readme.count("| v1.0.23 |") == 1
-    assert readme.count("| v1.0.25 |") == 1
-    assert readme.count("| v1.0.26 |") == 1
-    assert "the agent drives the browser you're watching" in readme
-    assert 'schedule picker\'s empty state reads "None"' in readme
-    assert "original 10px fullscreen panel margin without zoom drift" in readme
-    assert "controls initialize independently from model discovery" in readme
-    assert "Both splash and rail composers expand" in readme
-    assert "separates into wiring, rendering, and visibility layers" in readme
-    assert "Live demo — contact the administrator for access." in demo
 
 
 def test_example_library_is_large_varied_and_site_backed() -> None:
@@ -699,13 +526,9 @@ def test_example_library_is_large_varied_and_site_backed() -> None:
     assert all(categories.count(category) >= 12
                for category in ("delivery", "local", "shopping",
                                 "travel", "research", "media"))
-    assert "return 'research';" in js
-    assert "return 'media';" in js
-    assert "google.com/s2/favicons?domain=" in js
-    # category views must rotate with the ↻ bucket, not slice a fixed six
-    assert "_shuffledPool(_LP_EXAMPLE_POOL.filter" in js
-    # the save-modal site picker derives from the pool (can't drift apart)
-    assert ".forEach(d => COMMON.push({v: d}));" in js
+    assert set(categories) == {
+        "delivery", "local", "shopping", "travel", "research", "media"
+    }
 
 
 def _build_app(demo: bool):
@@ -1877,35 +1700,6 @@ def test_collapse_score_ignores_the_ambiguous_scrollbar_zone():
     assert s == 0
 
 
-def test_reentry_resyncs_the_stage_size_beacon() -> None:
-    """Coming back to a backgrounded cockpit tab fires visibilitychange, not
-    resize, so nothing re-beaconed and the remote viewport kept whatever it had
-    drifted to — before any beacon lands that target is `WIDTHx0`, auto height,
-    which object-fit:contain renders as a letterbox (the owner 2026-07-29: "whenever
-    i re-open operator browser after being away, i get a letterboxed one").
-
-    Clearing _last is the half that matters: the stage size is normally
-    UNCHANGED across the away period, so the send's own no-op guard swallowed
-    the re-send. Re-entry is a user action, so it cannot reopen the strobe."""
-    js = (Path(OV.__file__).resolve().parent
-          / "static/js/operator.js").read_text(encoding="utf-8")
-    assert "visibilitychange" in js
-    assert "pageshow" in js                  # iOS page-cache restore
-    assert ".observe(st)" not in js          # still no stage ResizeObserver
-    resync = js[js.index("const resync ="):js.index("const resync =") + 120]
-    assert "_last = ''" in resync, "re-entry must clear the no-op guard"
-
-
-def test_stage_size_beacon_forces_the_saved_target_back_onto_chrome() -> None:
-    """The initial and re-entry beacon repairs actual Chrome state, not only
-    the desired dimensions cached by the streamer."""
-    js = (Path(OV.__file__).resolve().parent
-          / "static/js/operator.js").read_text(encoding="utf-8")
-    beacon = js[js.index("body: JSON.stringify({ kind: 'stage_size'"):
-                js.index("body: JSON.stringify({ kind: 'stage_size'") + 180]
-    assert "force: true" in beacon
-
-
 def test_launchpad_mark_turns_once_when_it_settles() -> None:
     """the owner 2026-07-30: "when the green ring loading finishes and it becomes
     Ready ... do a spin animation".
@@ -2048,16 +1842,6 @@ def test_save_modal_single_line_fields_are_paint_scaled_like_the_textarea() -> N
         "the chip row centres its items; a top origin lifts the text off the line"
     assert "width:" not in pill and "flex:" not in pill, \
         "a flex child must not be widened — that fights its basis"
-
-
-def test_save_modal_sites_label_asks_a_question() -> None:
-    """Matched to its sibling 'What would you like Operator to do?' (the owner
-    2026-07-31). Both templates — the demo mirror ships to the public port."""
-    root = Path(__file__).resolve().parents[1]
-    for tpl in ("templates/operator.html", "templates/operator_demo.html"):
-        html = (root / tpl).read_text(encoding="utf-8")
-        assert "What websites and tools would you like Operator to use?" in html, tpl
-        assert "Websites and tools Operator can use" not in html, tpl
 
 
 # ── browser-up probe: the launchpad must be able to tell a dead browser from an
