@@ -27,6 +27,7 @@ def _app(monkeypatch):
     # dispatch pokes the browser streamer before starting a run — keep it inert
     monkeypatch.setattr(mod._streamer, "_ensure_chrome_alive", lambda: None)
     monkeypatch.setattr(mod._streamer, "ensure_running", lambda: None)
+    monkeypatch.setattr(mod._streamer, "require_ready", lambda: None)
     app = Flask(__name__)
     app.config["TESTING"] = True
     app.register_blueprint(mod.bp)

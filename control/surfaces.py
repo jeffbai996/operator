@@ -35,6 +35,11 @@ _CU_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "computer-use"))
 SURFACES = ("browser", "desktop-sandbox", "desktop-real")
 STOP_FILE = os.path.expanduser("~/.cache/computer-use/operator-stop.json")
 
+
+def stop_file() -> str:
+    """This run's kill switch; legacy callers retain the original shared path."""
+    return os.environ.get("OPERATOR_STOP_PATH") or STOP_FILE
+
 CDP_URL = os.environ.get("OPERATOR_CDP") or "http://127.0.0.1:9222"
 
 # Color scheme forced onto every CDP-attached page (see _force_dark_media).
@@ -52,14 +57,15 @@ class SurfaceStopped(SurfaceError):
 
 def arm_stop() -> None:
     """Arm the kill switch (the cockpit STOP button calls this via the view)."""
-    os.makedirs(os.path.dirname(STOP_FILE), exist_ok=True)
-    with open(STOP_FILE, "w", encoding="utf-8") as f:
+    path = stop_file()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump({"ts": time.time()}, f)
 
 
 def _stop_armed_since(ts: float) -> bool:
     try:
-        with open(STOP_FILE, encoding="utf-8") as f:
+        with open(stop_file(), encoding="utf-8") as f:
             return float(json.load(f).get("ts", 0)) > ts
     except (OSError, ValueError):
         return False

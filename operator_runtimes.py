@@ -22,7 +22,7 @@ _CONTROL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "control")
 def _cockpit_pin_env() -> dict:
     """MCP env pinning the agent to the browser THIS cockpit's feed streams.
 
-    Default instance (host-app, /squad/operator): the :9222 GUI Chrome —
+    Default instance (host-app, /squad/operator): the :9222 Windows Chrome —
     the bot-Chrome split (218e807) flipped playwright-mcp.sh's default to
     :9224 (the squad bots' browser), and without this override the agent drove
     a browser the feed never shows (the owner 2026-07-20).
@@ -56,6 +56,8 @@ class RunSpec:
     real_ok: bool
     resume_id: str
     config_dir: str
+    conversation_id: str = ""
+    stop_path: str = ""
 
 
 @dataclass
@@ -167,6 +169,9 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
         _pw = "mcp_servers.playwright.env."
         for _k, _v in _cockpit_pin_env().items():
             cmd += ["-c", _pw + _k + '="' + _v + '"']
+        if spec.conversation_id:
+            cmd += ["-c", _pw + 'OPERATOR_CONVERSATION_ID="'
+                    + spec.conversation_id + '"']
     if not spec.demo:
         _ctl = "mcp_servers.operator-control.env."
         cmd += ["-c", _ctl + 'OPERATOR_SURFACE="' + spec.surface + '"']
@@ -174,6 +179,12 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
             cmd += ["-c", _ctl + 'SQUAD_STORE_BOT="' + spec.bot + '"']
         if spec.real_ok:
             cmd += ["-c", _ctl + 'OPERATOR_REAL_OK="1"']
+        if spec.conversation_id:
+            cmd += ["-c", _ctl + 'OPERATOR_CONVERSATION_ID="'
+                    + spec.conversation_id + '"']
+        if spec.stop_path:
+            cmd += ["-c", _ctl + 'OPERATOR_STOP_PATH="'
+                    + spec.stop_path + '"']
     if spec.resume_id:
         cmd += ["resume", spec.resume_id, prompt]
     else:
@@ -189,6 +200,10 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     there is no per-run --mcp-config flag — so we wire the playwright server
     in there idempotently and non-destructively (preserve other servers)."""
     env = {"GEMINI_CLI_CONFIG_DIR": spec.config_dir}  # informational; agy uses ~/.gemini
+    if spec.conversation_id:
+        env["OPERATOR_CONVERSATION_ID"] = spec.conversation_id
+    if spec.stop_path:
+        env["OPERATOR_STOP_PATH"] = spec.stop_path
     if not spec.demo:
         # cockpit browser pin (see _cockpit_pin_env). agy spawns stdio MCPs with
         # an inherited env, so the process-level vars reach playwright-mcp.sh —
@@ -276,15 +291,22 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
     # a browser tool on a desktop run would mislead the model. Demo keeps
     # the original playwright-only config (the control MCP has local-
     # perception file access the public sandbox must not inherit).
+    _op_env = {"OPERATOR_SURFACE": spec.surface,
+               "SQUAD_STORE_BOT": spec.bot,
+               **({"OPERATOR_REAL_OK": "1"} if spec.real_ok else {}),
+               **({"OPERATOR_CONVERSATION_ID": spec.conversation_id}
+                  if spec.conversation_id else {}),
+               **({"OPERATOR_STOP_PATH": spec.stop_path}
+                  if spec.stop_path else {})}
     _op_entry = {"command": "bash",
                  "args": [os.path.join(_CONTROL, "operator-mcp.sh")],
-                 "env": {"OPERATOR_SURFACE": spec.surface,
-                         "SQUAD_STORE_BOT": spec.bot,
-                         **({"OPERATOR_REAL_OK": "1"} if spec.real_ok else {})}}
+                 "env": _op_env}
     _pw_entry = {"command": "bash",
                  "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}
     if not spec.demo:
         _pw_entry["env"] = _cockpit_pin_env()
+        if spec.conversation_id:
+            _pw_entry["env"]["OPERATOR_CONVERSATION_ID"] = spec.conversation_id
     if spec.demo:
         servers = {"playwright": _pw_entry}
     elif spec.surface == "browser":
@@ -309,7 +331,12 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
         cmd += ["--model", spec.model]
     if spec.effort:
         cmd += ["--effort", spec.effort]
-    return LaunchPlan(cmd=cmd, env={"CLAUDE_CONFIG_DIR": spec.config_dir},
+    _env = {"CLAUDE_CONFIG_DIR": spec.config_dir}
+    if spec.conversation_id:
+        _env["OPERATOR_CONVERSATION_ID"] = spec.conversation_id
+    if spec.stop_path:
+        _env["OPERATOR_STOP_PATH"] = spec.stop_path
+    return LaunchPlan(cmd=cmd, env=_env,
                       mcp_config_path=cfg_path)
 
 

@@ -8,6 +8,7 @@ must NEVER break a live run).
 """
 import importlib
 import json
+import sqlite3
 import time
 import types
 
@@ -24,6 +25,7 @@ def store(tmp_path, monkeypatch):
 
 def _fake_runner(**over):
     r = types.SimpleNamespace(
+        conversation_id="conv-a",
         bot="claude-a", task="price a grocery run", state="done",
         model="claude-sonnet-5", effort="medium", surface="browser",
         demo=False, started_ts=time.time() - 42.0, ended_ts=time.time(),
@@ -42,6 +44,7 @@ def test_record_and_read_back(store):
     assert len(rows) == 1
     row = rows[0]
     assert row["task"] == "price a grocery run"
+    assert row["conversation_id"] == "conv-a"
     assert row["state"] == "done" and row["reason"] == "exit 0"
     assert row["cum_in_tokens"] == 123_456
     assert row["duration_s"] == pytest.approx(42.0, abs=2.0)
@@ -55,6 +58,32 @@ def test_recent_newest_first_and_limited(store):
         store.record(_fake_runner(task=f"task {i}"), reason="exit 0")
     rows = store.recent(limit=3)
     assert [r["task"] for r in rows] == ["task 4", "task 3", "task 2"]
+
+
+def test_concurrent_conversations_record_as_distinct_rows(store):
+    store.record(_fake_runner(conversation_id="conv-a", task="one"), reason="exit 0")
+    store.record(_fake_runner(conversation_id="conv-b", task="two"), reason="exit 0")
+    rows = store.recent()
+    assert [(r["conversation_id"], r["task"]) for r in rows] == [
+        ("conv-b", "two"), ("conv-a", "one")]
+
+
+def test_live_pre_conversation_schema_migrates_without_losing_rows(store, tmp_path):
+    db = tmp_path / "history.db"
+    with sqlite3.connect(db) as c:
+        c.execute("""CREATE TABLE runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_ts REAL, ended_ts REAL,
+            bot TEXT, task TEXT, state TEXT, reason TEXT,
+            model TEXT, effort TEXT, runtime TEXT, surface TEXT,
+            demo INTEGER DEFAULT 0,
+            cum_in_tokens INTEGER, peak_in_tokens INTEGER,
+            n_messages INTEGER, trace TEXT)""")
+        c.execute("INSERT INTO runs (task) VALUES ('old row')")
+    store.record(_fake_runner(conversation_id="conv-new", task="new row"))
+    rows = store.recent()
+    assert [(r["conversation_id"], r["task"]) for r in rows] == [
+        ("conv-new", "new row"), ("", "old row")]
 
 
 def test_record_never_raises_on_garbage(store):

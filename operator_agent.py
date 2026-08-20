@@ -365,11 +365,39 @@ def _resolve_agy() -> str | None:
 
 
 
+def _conversation_id(value: str | None) -> str:
+    raw = str(value or "").strip()
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-.")
+    return clean[:80] or "legacy"
+
+
+def _conversation_slug(value: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-.")
+    return clean[:80] or "legacy"
+
+
+def _conversation_path(base: str, conversation_id: str, suffix: str) -> str:
+    return os.path.join(base + ".conversations",
+                        _conversation_slug(conversation_id) + suffix)
+
+
+def _state_base_path() -> str:
+    return os.environ.get("OPERATOR_STATE_PATH") or (
+        os.path.join(os.path.expanduser("~/.cache/computer-use"),
+                     "operator-state.json")
+        + (".demo" if os.environ.get("OPERATOR_DEMO") else ""))
+
+
 class AgentRunner:
     """Runs ONE headless agent task at a time; streams its output into buffers
     the operator endpoints read. Thread-safe single-flight."""
 
-    def __init__(self) -> None:
+    def __init__(self, conversation_id: str = "legacy",
+                 use_legacy_storage: bool | None = None) -> None:
+        self.conversation_id = _conversation_id(conversation_id)
+        if use_legacy_storage is None:
+            use_legacy_storage = self.conversation_id == "legacy"
+        self._use_legacy_storage = bool(use_legacy_storage)
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
@@ -398,10 +426,18 @@ class AgentRunner:
         # DEMO ISOLATION: same-user demo server must never share the real
         # cockpit's transcript/session-id state (launch scripts set the env;
         # the .demo suffix is the backstop — mirrors operator_steer.path()).
-        self._state_path = os.environ.get("OPERATOR_STATE_PATH") or (
+        _state_base = os.environ.get("OPERATOR_STATE_PATH") or (
             os.path.join(os.path.expanduser("~/.cache/computer-use"),
                          "operator-state.json")
             + (".demo" if os.environ.get("OPERATOR_DEMO") else ""))
+        self._state_path = (_state_base if self._use_legacy_storage else
+                            _conversation_path(_state_base, self.conversation_id,
+                                               ".json"))
+        _stop_base = os.environ.get("OPERATOR_STOP_PATH") or os.path.join(
+            os.path.expanduser("~/.cache/computer-use"), "operator-stop.json")
+        self._stop_path = (_stop_base if self._use_legacy_storage else
+                           _conversation_path(_stop_base, self.conversation_id,
+                                              ".json"))
         self._session_ids: dict = {}      # bot -> last claude session id (resume)
         self._boot_sent: dict = {}        # bot -> squad boot context DELIVERED (see dispatch)
         # NB: _boot_sent is a claim about a THREAD, not about a bot. Any path
@@ -543,7 +579,10 @@ class AgentRunner:
               real_ok: bool = False) -> dict:
         with self._lock:
             if self.is_running():
-                return {"ok": False, "error": f"{self.bot} is already running a task"}
+                return {"ok": False, "error":
+                        f"requested bot '{bot}' is blocked: conversation "
+                        f"'{self.conversation_id}' is already running "
+                        f"{self.bot or 'another bot'}"}
             b = AGENT_BOTS.get(bot)
             if not b:
                 return {"ok": False, "error": f"'{bot}' can't drive"}
@@ -589,7 +628,7 @@ class AgentRunner:
             # newborn run as dead while _thread is still the previous run's.
             self._starting = True
             self._set_state("running", f"start {bot}")
-            operator_steer.clear()   # a fresh run must not inherit stale steers
+            operator_steer.clear(self.conversation_id)  # no stale steer in this chat
             try:
                 return self._start_locked(bot, task, model, effort, demo, binpath, b)
             except Exception as e:  # noqa: BLE001 — a dead launch must surface
@@ -636,11 +675,11 @@ class AgentRunner:
         # ("--effort is not supported for model …"). So: pass the bare family
         # slug and let effort ride its own flag. Entries whose tier is already
         # fixed must dispatch WITHOUT effort: either a tier-suffixed Gemini slug
-        # (gemini-3.6-flash-low) or a parenthesised display name, which is still
+        # (gemini-3.7-flash-low) or a parenthesised display name, which is still
         # the only accepted form for the Claude/GPT-OSS entries — NB `agy models`
         # prints "claude-sonnet-4-6-thinking" but --model rejects it.
         elif b.get("runtime") == "agy":
-            if not self.model:  self.model = "gemini-3.6-flash"
+            if not self.model:  self.model = "gemini-3.7-flash"
             _m = self.model.strip()
             _baked = _m.endswith(("-low", "-medium", "-high")) or "(" in _m
             self.model = _m
@@ -656,6 +695,34 @@ class AgentRunner:
         return _prompts.build_persona(b["persona"],
                                       getattr(self, "surface", "browser"),
                                       getattr(self, "demo", False))
+
+    def cwd_for(self, bot: str) -> str:
+        """A stable work directory owned by this conversation and bot."""
+        b = AGENT_BOTS[bot]
+        root = os.environ.get("OPERATOR_SESSION_ROOT")
+        if self._use_legacy_storage:
+            cwd = os.path.join(os.path.expanduser(root), bot) if root else b["cwd"]
+        else:
+            parent = (os.path.join(os.path.expanduser(root), bot)
+                      if root else b["cwd"] + ".conversations")
+            cwd = os.path.join(parent, _conversation_slug(self.conversation_id))
+        os.makedirs(cwd, exist_ok=True)
+        if b.get("runtime") == "claude":
+            # The base session directory can carry the bot's CLAUDE.md (Claude-a
+            # does in production). A blank scoped cwd would silently drop those
+            # instructions, so project the stable instruction file while every
+            # conversation keeps its own writable directory and hook settings.
+            source_instructions = os.path.join(b["cwd"], "CLAUDE.md")
+            scoped_instructions = os.path.join(cwd, "CLAUDE.md")
+            if (not self._use_legacy_storage
+                    and os.path.lexists(source_instructions)
+                    and not os.path.lexists(scoped_instructions)):
+                try:
+                    os.symlink(source_instructions, scoped_instructions)
+                except OSError:
+                    pass
+            _ensure_steer_hook_settings(cwd)
+        return cwd
 
     def _run(self, binpath: str, b: dict, task: str) -> None:
         # Everything before the Popen try-block (prompt build, MCP config,
@@ -741,6 +808,8 @@ class AgentRunner:
         env = dict(os.environ)
         env["SQUAD_STORE_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["OPERATOR_SURFACE"] = _surface        # control MCP reads the surface
+        env["OPERATOR_CONVERSATION_ID"] = self.conversation_id
+        env["OPERATOR_STOP_PATH"] = self._stop_path
         if getattr(self, "_real_ok", False):
             env["OPERATOR_REAL_OK"] = "1"         # per-session desktop-real confirm
         else:
@@ -771,7 +840,8 @@ class AgentRunner:
             model=self.model, effort=self.effort, surface=_surface,
             demo=bool(getattr(self, "demo", False)),
             real_ok=bool(getattr(self, "_real_ok", False)),
-            resume_id=resume_id or "", config_dir=b["config_dir"])
+            resume_id=resume_id or "", config_dir=b["config_dir"],
+            conversation_id=self.conversation_id, stop_path=self._stop_path)
         plan = operator_runtimes.build_cmd(self._runtime, spec)
         env.update(plan.env)
         cmd = plan.cmd
@@ -790,7 +860,10 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=(os.path.expanduser("~/local-projects/operator-demo/workspace") if getattr(self,"demo",False) else b["cwd"]), env=env, stdin=subprocess.DEVNULL,
+                cmd, cwd=(os.path.expanduser("~/local-projects/operator-demo/workspace")
+                          if getattr(self, "demo", False)
+                          else self.cwd_for(self.bot or "")), env=env,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             self._gate_pending = False   # §3.3: the follow-up turn is live now
@@ -1269,7 +1342,7 @@ class AgentRunner:
         if not self.is_running():
             return {"ok": False, "error": "nothing running"}
         try:
-            n = operator_steer.push(text)
+            n = operator_steer.push(text, self.conversation_id)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         text = text.strip()
@@ -1295,7 +1368,7 @@ class AgentRunner:
             return ""
         if self._tok_stop_fired or self._cancel_requested:
             return ""
-        steers = operator_steer.take_all()
+        steers = operator_steer.take_all(self.conversation_id)
         if not steers:
             return ""
         self._gate_pending = True
@@ -1507,7 +1580,7 @@ class AgentRunner:
         p = self._proc
         self.handoff = None   # a takeover/stop clears any pending handoff request
         try:
-            operator_steer.clear()   # a stop abandons queued steers with the run
+            operator_steer.clear(self.conversation_id)
         except Exception:  # noqa: BLE001
             pass
         self._stopped = True  # so _flush_agy drops agy's interrupt-noise stdout
@@ -1519,8 +1592,7 @@ class AgentRunner:
         # Safe for later runs — surfaces only honor a stop newer than their own
         # start (see control/surfaces.py).
         try:
-            _stop_path = os.path.expanduser(
-                "~/.cache/computer-use/operator-stop.json")
+            _stop_path = self._stop_path
             os.makedirs(os.path.dirname(_stop_path), exist_ok=True)
             with open(_stop_path, "w", encoding="utf-8") as _f:
                 json.dump({"ts": time.time()}, _f)
@@ -1567,7 +1639,21 @@ class AgentRunner:
                                     and "--caps" in args and "--cdp-endpoint" in args
                                     and "--port" not in args)
                     is_wrapper = "browse/playwright-mcp.sh" in args
-                    if is_stdio_mcp or is_wrapper:
+                    belongs = False
+                    try:
+                        with open(f"/proc/{pid_s}/environ", "rb") as _envf:
+                            proc_env = _envf.read()
+                        marker = b"OPERATOR_CONVERSATION_ID="
+                        belongs = (marker + self.conversation_id.encode()
+                                   + b"\0" in proc_env)
+                        # Reap pre-conversations orphans only from the legacy
+                        # runner. New scoped children always carry the marker,
+                        # so stopping legacy cannot kill another live chat.
+                        if self._use_legacy_storage and marker not in proc_env:
+                            belongs = True
+                    except OSError:
+                        belongs = False
+                    if (is_stdio_mcp or is_wrapper) and belongs:
                         try: os.kill(int(pid_s), _sig2.SIGKILL)
                         except Exception: pass
             except Exception:
@@ -1642,6 +1728,7 @@ class AgentRunner:
         final = next((m["text"] for m in reversed(msgs)
                       if m.get("role") == "assistant" and m.get("text")), "")
         return {
+            "conversation_id": self.conversation_id,
             "bot": self.bot, "task": self.task, "state": self.state,
             "started_ts": self.started_ts, "ended_ts": self.ended_ts,
             "messages": [m for m in msgs if m["ts"] > since_ts],
@@ -1661,7 +1748,7 @@ class AgentRunner:
             "surface": getattr(self, "surface", "browser"),
             # 1.0.12: steers queued but not yet consumed by a delivery seam —
             # the client renders "queued" until this drops back to 0.
-            "steer_pending": len(operator_steer.pending()),
+            "steer_pending": len(operator_steer.pending(self.conversation_id)),
             # 1.0.15 live run economics: the ledger's token numbers, visible
             # WHILE the run burns (same _note_token_usage basis — cache reads
             # excluded, so these read small vs the raw API meter). NB both
@@ -1672,4 +1759,209 @@ class AgentRunner:
         }
 
 
-runner = AgentRunner()
+class RunnerRegistry:
+    """Conversation runners plus bounded admission.
+
+    This deliberately copies only Fragwire's small admission model (reap,
+    per-backend room, global room, reject). Importing Fragwire here would make
+    the production cockpit depend on a sibling repository at runtime; process
+    ownership and cancellation remain AgentRunner's existing implementation.
+    """
+
+    def __init__(self, *, runner_factory=AgentRunner,
+                 global_limit: int | None = None,
+                 per_bot_limit: int | None = None) -> None:
+        self.global_limit = (max(1, int(global_limit)) if global_limit is not None
+                             else max(1, _env_int("OPERATOR_MAX_CONCURRENT", 2)))
+        self.per_bot_limit = (max(1, int(per_bot_limit)) if per_bot_limit is not None
+                              else max(1, _env_int("OPERATOR_MAX_PER_BOT", 1)))
+        self._runner_factory = runner_factory
+        self._runners: dict[str, AgentRunner] = {}
+        self._slots: dict[str, str] = {}
+        self._lock = threading.RLock()
+        self._last_id = ""
+        self._legacy_owner = ""
+
+    def _load_legacy_owner_locked(self) -> str:
+        if self._legacy_owner:
+            return self._legacy_owner
+        marker = _state_base_path() + ".conversations/legacy-owner"
+        try:
+            with open(marker, encoding="utf-8") as f:
+                self._legacy_owner = _conversation_id(f.read())
+        except OSError:
+            pass
+        return self._legacy_owner
+
+    def _uses_legacy_storage_locked(self, conversation_id: str) -> bool:
+        if conversation_id == "legacy":
+            return True
+        owner = self._load_legacy_owner_locked()
+        base = _state_base_path()
+        if not owner and os.path.exists(base):
+            marker = base + ".conversations/legacy-owner"
+            try:
+                os.makedirs(os.path.dirname(marker), exist_ok=True)
+                fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(conversation_id)
+                self._legacy_owner = conversation_id
+            except FileExistsError:
+                self._legacy_owner = ""
+                owner = self._load_legacy_owner_locked()
+            except OSError:
+                pass
+        return (self._legacy_owner or owner) == conversation_id
+
+    def get(self, conversation_id: str | None = None) -> AgentRunner:
+        cid = _conversation_id(conversation_id)
+        with self._lock:
+            found = self._runners.get(cid)
+            if found is None:
+                found = self._runner_factory(
+                    conversation_id=cid,
+                    use_legacy_storage=self._uses_legacy_storage_locked(cid))
+                self._runners[cid] = found
+            return found
+
+    def _reap_locked(self) -> None:
+        for cid in list(self._slots):
+            r = self._runners.get(cid)
+            if r is None or not r.is_running():
+                self._slots.pop(cid, None)
+
+    def _holders_locked(self) -> str:
+        return ", ".join(
+            f"conversation '{cid}' ({bot})"
+            for cid, bot in sorted(self._slots.items()))
+
+    def start(self, bot: str, task: str, model: str = '', effort: str = '',
+              demo: bool = False, surface: str = 'browser',
+              real_ok: bool = False, conversation_id: str | None = None) -> dict:
+        cid = _conversation_id(conversation_id)
+        if bot not in AGENT_BOTS:
+            return {"ok": False, "error": f"'{bot}' can't drive"}
+        # Shared side of the service-deploy admission lock. A dispatch already
+        # here becomes visible before ExecStop may proceed; a later dispatch
+        # waits for the exclusive stop guard and then sees the drain marker.
+        with operator_restart_guard.admission_lock():
+            if operator_restart_guard.drain_path().exists():
+                return {"ok": False, "error":
+                        f"requested bot '{bot}' is blocked: Operator deployment "
+                        "in progress; retry when the cockpit is back"}
+            with self._lock:
+                self._reap_locked()
+                if cid in self._slots:
+                    current = self._slots[cid]
+                    return {"ok": False, "error":
+                            f"requested bot '{bot}' is blocked: conversation "
+                            f"'{cid}' is already running {current}"}
+                same_bot = [owner for owner, active_bot in self._slots.items()
+                            if active_bot == bot]
+                if len(same_bot) >= self.per_bot_limit:
+                    owners = ", ".join(f"conversation '{owner}'" for owner in same_bot)
+                    return {"ok": False, "error":
+                            f"requested bot '{bot}' is blocked: {owners} holds the "
+                            f"{bot} slot (per-bot limit {self.per_bot_limit})"}
+                if len(self._slots) >= self.global_limit:
+                    return {"ok": False, "error":
+                            f"requested bot '{bot}' is blocked: global limit "
+                            f"{self.global_limit} reached; slots held by "
+                            f"{self._holders_locked()}"}
+                target = self.get(cid)
+                self._slots[cid] = bot       # reserve before pre-spawn work begins
+                self._last_id = cid
+                # Keep admission serialized until AgentRunner has entered its own
+                # `_starting` state. Otherwise a racing dispatch can see the newly
+                # reserved runner as idle, reap its slot, and exceed the cap before
+                # this call reaches target.start().
+                try:
+                    result = target.start(bot, task, model=model, effort=effort,
+                                          demo=demo, surface=surface,
+                                          real_ok=real_ok)
+                except Exception:
+                    self._slots.pop(cid, None)
+                    raise
+                if not result.get("ok"):
+                    self._slots.pop(cid, None)
+                else:
+                    result.setdefault("conversation_id", cid)
+                return result
+
+    def is_running(self, conversation_id: str | None = None) -> bool:
+        if conversation_id is not None:
+            cid = _conversation_id(conversation_id)
+            with self._lock:
+                r = self._runners.get(cid)
+            return bool(r and r.is_running())
+        with self._lock:
+            self._reap_locked()
+            return bool(self._slots)
+
+    def snapshot(self, since_ts: float = 0.0,
+                 conversation_id: str | None = None) -> dict:
+        cid = _conversation_id(conversation_id)
+        out = self.get(cid).snapshot(since_ts)
+        out["conversation_id"] = cid
+        out["admission"] = self.admission_snapshot()
+        return out
+
+    def stop(self, conversation_id: str | None = None) -> dict:
+        cid = _conversation_id(conversation_id)
+        with self._lock:
+            target = self._runners.get(cid)
+        if target is None:
+            return {"ok": False, "error": "nothing running"}
+        return target.stop()
+
+    def steer(self, text: str, conversation_id: str | None = None) -> dict:
+        cid = _conversation_id(conversation_id)
+        with self._lock:
+            target = self._runners.get(cid)
+        if target is None:
+            return {"ok": False, "error": "nothing running"}
+        return target.steer(text)
+
+    def reset_session(self, bot: str = "",
+                      conversation_id: str | None = None) -> dict:
+        return self.get(conversation_id).reset_session(bot)
+
+    def admission_snapshot(self) -> dict:
+        with self._lock:
+            self._reap_locked()
+            jobs = [{"conversation_id": cid, "bot": bot}
+                    for cid, bot in sorted(self._slots.items())]
+            return {"active": len(jobs), "global_limit": self.global_limit,
+                    "per_bot_limit": self.per_bot_limit, "jobs": jobs}
+
+    def runners(self) -> list[AgentRunner]:
+        """Stable copy for observers that must track every conversation."""
+        with self._lock:
+            return list(self._runners.values())
+
+    def _latest(self) -> AgentRunner | None:
+        with self._lock:
+            if self._last_id and self._last_id in self._runners:
+                return self._runners[self._last_id]
+            return next(iter(self._runners.values()), None)
+
+    @property
+    def state(self) -> str:
+        r = self._latest()
+        return r.state if r else "idle"
+
+    def __getattr__(self, name: str):
+        # Scheduler/legacy diagnostics read task/bot/timestamps directly. Point
+        # those reads at the most recently dispatched runner without creating a
+        # phantom default conversation.
+        r = self._latest()
+        if r is None:
+            if name in {"started_ts", "ended_ts"}:
+                return 0.0
+            if name in {"task", "bot"}:
+                return None
+            raise AttributeError(name)
+        return getattr(r, name)
+
+
+runner = RunnerRegistry()

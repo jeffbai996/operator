@@ -15,6 +15,7 @@ the locked bot/model, and saved tasks only serve a demo-scoped store).
 Run (same shape as the sibling operator tests) from modules/operator:
   PYTHONPATH=. pytest tests/test_operator_view.py -q
 """
+import asyncio
 import importlib
 import os
 import re
@@ -26,8 +27,181 @@ import pytest
 from flask import Flask
 from jinja2 import ChoiceLoader, DictLoader
 
-import operator_view as OV
 import operator_agent as OA
+import operator_view as OV
+
+
+def test_zoom_split_capture_clip_preserves_requested_viewport_aspect() -> None:
+    """A 125% Windows profile zoom must not turn 1280x760 into 1280x608."""
+    assert OV._fit_clip_to_view_aspect(1280, 608, 1280, 760) == (1280, 760)
+    assert OV._fit_clip_to_view_aspect(1024, 608, 1280, 760) == (1024, 608)
+
+
+def test_zoom_split_capture_clip_can_expand_width_without_cropping() -> None:
+    assert OV._fit_clip_to_view_aspect(1024, 760, 1280, 760) == (1280, 760)
+
+
+# ---- _emu_clip_box: the capture clip is DEVICE space, always -------------
+# Page.captureScreenshot reads `clip` in device pixels. The emulated-regime
+# clip was built out of CSS-pixel readings (cssLayoutViewport + body scroll
+# box), so on a display-scaled Chrome it cut the canvas down by the scale
+# factor and the right column / footer were never captured. Measured live on
+# google.com 2026-08-14: css 1036x894, device 1295x1118, body 1036x894 — the
+# old arithmetic clipped 1036x905 out of a 1295x1118 canvas (top-left 80%),
+# and _fit_clip_to_view_aspect then matched the stage aspect exactly, so it
+# read as a narrow page rather than as the crop it was.
+
+def test_emu_clip_covers_the_whole_canvas_on_a_display_scaled_chrome() -> None:
+    """The live google.com reading: 1.25 scale must not shrink the clip."""
+    assert OV._emu_clip_box(css_w=1036, css_h=894, dev_w=1295, dev_h=1118,
+                            body_w=1036, body_h=894, page_x=0, page_y=0,
+                            view_w=1280, view_h=1118) == (1295, 1118)
+
+
+def test_emu_clip_is_unchanged_at_stock_device_scale() -> None:
+    assert OV._emu_clip_box(css_w=1280, css_h=1118, dev_w=1280, dev_h=1118,
+                            body_w=1280, body_h=1118, page_x=0, page_y=0,
+                            view_w=1280, view_h=1118) == (1280, 1118)
+
+
+def test_emu_clip_never_falls_below_the_painted_canvas() -> None:
+    """A body shorter than the viewport must not shrink the frame (the clip
+    floor is what kept a short page from capturing a blank tail)."""
+    w, h = OV._emu_clip_box(css_w=1036, css_h=894, dev_w=1295, dev_h=1118,
+                            body_w=400, body_h=200, page_x=0, page_y=0,
+                            view_w=1280, view_h=1118)
+    assert (w, h) == (1295, 1118)
+
+
+def test_emu_clip_follows_the_scroll_offset_in_css_units() -> None:
+    """pageX/pageY come off the CSS viewport, so the remaining-extent maths
+    must subtract them BEFORE converting to device pixels."""
+    w, h = OV._emu_clip_box(css_w=1036, css_h=894, dev_w=1295, dev_h=1118,
+                            body_w=1036, body_h=3000, page_x=0, page_y=600,
+                            view_w=1280, view_h=1118)
+    assert (w, h) == (1295, 1118)
+
+
+def test_emu_clip_survives_a_missing_body_reading() -> None:
+    """The body-extent read is best-effort; a zero must fall back to the
+    device viewport, not to a zero-sized clip."""
+    assert OV._emu_clip_box(css_w=1036, css_h=894, dev_w=1295, dev_h=1118,
+                            body_w=0, body_h=0, page_x=0, page_y=0,
+                            view_w=1280, view_h=1118) == (1295, 1118)
+
+
+# ---- cold start: the geometry must be right on the FIRST frame ----------
+# The cockpit beaconed its stage size 1200ms after script run, so every
+# session opened at whatever the last viewer left — or at the 1280x0 default,
+# whose auto height object-fit renders as a letterbox — until a resize fired
+# a fresh beacon. "As soon as I resize it myself it snaps" (the owner 2026-08-15).
+# The seed lets the page GET carry the returning viewer's stage, so the very
+# first captured frame is already at the right aspect.
+
+def test_clamp_stage_scales_a_narrow_stage_up_keeping_its_aspect() -> None:
+    """The measured iPad stage: 704x615 must reach the desktop floor without
+    changing shape, or the frame that fills it is the wrong one."""
+    w, h = OV._clamp_stage(704, 615)
+    assert w == 1280
+    assert abs((w / h) - (704 / 615)) < 0.005
+
+
+def test_clamp_stage_bounds_and_evens_its_output() -> None:
+    assert OV._clamp_stage(4000, 4000)[0] <= 1600
+    assert OV._clamp_stage(1280, 50)[1] >= 480
+    w, h = OV._clamp_stage(1281, 901)
+    assert w % 2 == 0 and h % 2 == 0
+
+
+def test_clamp_stage_rejects_a_degenerate_reading() -> None:
+    assert OV._clamp_stage(0, 0) == (0, 0)
+    assert OV._clamp_stage(704, 0) == (0, 0)
+
+
+def test_seed_view_sets_the_target_when_nobody_is_watching() -> None:
+    s = OV._Streamer()
+    assert s.view_h == 0          # the letterboxing default
+    assert s.seed_view_from_stage(704, 615) is True
+    assert (s.view_w, s.view_h) == OV._clamp_stage(704, 615)
+
+
+def test_seed_view_never_reaspects_under_a_live_viewer() -> None:
+    """A second device opening the cockpit must not yank the aspect out from
+    under whoever is actually watching — the same rule the beacon obeys."""
+    s = OV._Streamer()
+    s._vp_owner = "watcher"
+    s.vp_note_pull("watcher")
+    before = (s.view_w, s.view_h)
+    assert s.seed_view_from_stage(704, 615) is False
+    assert (s.view_w, s.view_h) == before
+
+
+def test_seed_view_takes_over_from_an_owner_that_stopped_pulling() -> None:
+    s = OV._Streamer()
+    s._vp_owner = "ghost"
+    s._vp_seen["ghost"] = time.monotonic() - (OV.VP_OWNER_IDLE_S + 5)
+    assert s.seed_view_from_stage(704, 615) is True
+
+
+def test_seed_view_is_a_noop_when_the_target_already_matches() -> None:
+    s = OV._Streamer()
+    s.seed_view_from_stage(704, 615)
+    assert s.seed_view_from_stage(704, 615) is False
+
+
+def test_forced_entry_beacon_reapplies_an_already_matching_target(
+        monkeypatch) -> None:
+    """A server bounce can leave Chrome at the dead runner's emulation while
+    the streamer's desired dimensions still match the returning cockpit.
+
+    The first-load beacon must therefore be able to reapply an unchanged
+    target; waiting for a divider drag to change the number is not recovery.
+    """
+    s = OV._Streamer()
+    s._page = object()
+    s.view_w, s.view_h = OV._clamp_stage(704, 615)
+    applied = []
+
+    async def apply(page):
+        applied.append(page)
+
+    async def grab(_page):
+        return b""
+
+    monkeypatch.setattr(s, "_apply_view_metrics", apply)
+    monkeypatch.setattr(s, "_grab", grab)
+    monkeypatch.setattr(OA.runner, "is_running", lambda: False)
+    result = asyncio.run(s._do_action({
+        "kind": "stage_size", "value": "704x615", "cid": "fresh-tab",
+        "force": True,
+    }))
+
+    assert result["ok"] is True
+    assert result["applied"] is True
+    assert applied == [s._page]
+
+
+def test_cockpit_page_seeds_the_viewport_from_the_stage_cookie(live) -> None:
+    """Before the browser paints: the returning viewer's stage rides up on the
+    document request, so the streamer's first attach already targets it."""
+    client, mod = live
+    mod._streamer.view_w, mod._streamer.view_h = mod.DESKTOP_LAYOUT_MIN_W, 0
+    mod._streamer._vp_owner = ""
+    mod._streamer._vp_seen.clear()
+    client.set_cookie("op_stage", "704x615")
+    assert client.get("/operator").status_code == 200
+    assert (mod._streamer.view_w,
+            mod._streamer.view_h) == mod._clamp_stage(704, 615)
+
+
+def test_cockpit_page_ignores_a_junk_stage_cookie(live) -> None:
+    client, mod = live
+    mod._streamer.view_w, mod._streamer.view_h = mod.DESKTOP_LAYOUT_MIN_W, 0
+    mod._streamer._vp_owner = ""
+    mod._streamer._vp_seen.clear()
+    client.set_cookie("op_stage", "; DROP TABLE")
+    assert client.get("/operator").status_code == 200
+    assert mod._streamer.view_h == 0
 
 
 # operator.html / operator_demo.html both `{% extends "_base.html" %}` — that base
@@ -46,6 +220,39 @@ def test_streamer_defaults_to_soft_zoom_and_desktop_width() -> None:
     assert s.zoom == 0.8
     assert s.view_w == 1280
     assert OV._VIEW_FOLLOW is True
+
+
+def test_launchpad_controls_keep_one_box_and_centerline_on_touch() -> None:
+    """Touch input must not silently make only the close control larger.
+
+    The splash row is positioned as three equal controls.  Inflating the X to
+    40px under ``pointer: coarse`` while the mark and theme toggle stay 32px
+    shifts its visual center by 4px on touch laptops and large tablets.
+    """
+    css = (Path(__file__).resolve().parents[1]
+           / "static/operator.css").read_text(encoding="utf-8")
+
+    assert "--op-lp-control-size: 32px;" in css
+    for selector in (".op-lp-mark", ".op-lp-theme", ".op-lp-close"):
+        assert f"{selector} {{" in css
+        assert f"width: var(--op-lp-control-size);" in css
+        assert f"height: var(--op-lp-control-size);" in css
+
+    touch = css[css.index("/* touch: keep the same control geometry"):
+                css.index(".op-lp-close:hover")]
+    assert "width: 40px" not in touch
+    assert "height: 40px" not in touch
+
+
+def test_home_mark_keeps_its_tiny_optical_nudge_right() -> None:
+    """The spiral is geometrically centered but reads left-heavy at scale."""
+    css = (Path(__file__).resolve().parents[1]
+           / "static/operator.css").read_text(encoding="utf-8")
+    rule = css[css.index(".op-home-btn svg {"):]
+    rule = rule[:rule.index("}")]
+    assert "left: calc(50% + 0.25px);" in rule
+    assert "top: 50%;" in rule
+    assert "margin: -26px 0 0 -26px;" in rule
 
 
 def test_view_metrics_tolerate_scrollbar_shaved_width() -> None:
@@ -424,6 +631,18 @@ def test_operator_full_bleed_does_not_strip_the_shared_header_gutter() -> None:
     assert "margin-left: auto; margin-right: auto;" in css
 
 
+def test_cross_origin_refusal_renders_as_a_warning_notice() -> None:
+    """The CSRF guard's user-facing refusal must carry the red warning mark."""
+    root = Path(__file__).resolve().parents[1]
+    js = (root / "static/js/operator.js").read_text(encoding="utf-8")
+    start = js.index("const CROSS_ORIGIN_MUTATION_ERROR")
+    log_res = js[start:js.index("// Manual steering fires", start)]
+
+    assert "CROSS_ORIGIN_MUTATION_ERROR" in log_res
+    assert "cross-origin Operator mutation refused" in log_res
+    assert "warningIcon()" in log_res
+
+
 @pytest.mark.skip(reason="pins the private repo's README ladder and rev cache-busters; the public README is a prose changelog")
 def test_release_version_and_demo_placeholder_stay_in_sync() -> None:
     root = Path(__file__).resolve().parents[1]
@@ -445,9 +664,9 @@ def test_release_version_and_demo_placeholder_stay_in_sync() -> None:
     assert not re.search(r'class="op-ver">\d', live), "hardcoded version is back"
     # the generated demo keeps its " demo" suffix on whatever the source carries
     assert '<span class="op-ver">{{ OP_VERSION }} demo</span>' in demo
-    assert "operator.css') }}?rev=v1162" in live   # v1156: midnight code wells to #000 (2026-08-05)
-    assert "js/operator.js') }}?rev=v1155" in live
-    assert "js/operator.js') }}?rev=v1155" in demo
+    assert "operator.css') }}?rev=v1169" in live   # home-mark optical centering (2026-08-18)
+    assert "js/operator.js') }}?rev=v1159" in live
+    assert "js/operator.js') }}?rev=v1159" in demo
     assert readme.count("| v1.0.23 |") == 1
     assert readme.count("| v1.0.25 |") == 1
     assert readme.count("| v1.0.26 |") == 1
@@ -541,12 +760,15 @@ class FakeRunner:
         self.calls = []          # list of (args, kwargs) for start()
         self.stopped = False
         self.reset_bot = None
+        self.stop_conversation_id = None
+        self.snapshot_conversation_id = None
 
     def start(self, bot, task, model="", effort="", demo=False,
-              surface="browser", real_ok=False):
+              surface="browser", real_ok=False, conversation_id=None):
         self.calls.append({"bot": bot, "task": task, "model": model,
                            "effort": effort, "demo": demo,
-                           "surface": surface, "real_ok": real_ok})
+                           "surface": surface, "real_ok": real_ok,
+                           "conversation_id": conversation_id})
         if self.ok:
             return {"ok": True, "bot": bot, "pid": 4242}
         return {"ok": False, "error": "already running"}
@@ -554,15 +776,17 @@ class FakeRunner:
     def is_running(self):
         return False
 
-    def stop(self):
+    def stop(self, conversation_id=None):
         self.stopped = True
+        self.stop_conversation_id = conversation_id
         return {"ok": True, "stopped": True}
 
-    def reset_session(self, bot=""):
+    def reset_session(self, bot="", conversation_id=None):
         self.reset_bot = bot
         return {"ok": True, "bot": bot}
 
-    def snapshot(self, since_ts=0.0):
+    def snapshot(self, since_ts=0.0, conversation_id=None):
+        self.snapshot_conversation_id = conversation_id
         return {"state": "idle", "messages": [], "since": since_ts}
 
 
@@ -584,6 +808,7 @@ class FakeStreamer:
         self._user_closed = False
         self.actions = []           # every dict passed to run_action
         self.tabs = []
+        self.ready_error = None
 
     # routes call these — all inert
     def ensure_running(self):
@@ -594,6 +819,9 @@ class FakeStreamer:
 
     def _ensure_chrome_alive(self, relaunch=False):
         pass
+
+    def require_ready(self, timeout=None):
+        return self.ready_error
 
     def run_action(self, action):
         self.actions.append(action)
@@ -679,7 +907,7 @@ def test_demo_task_run_applies_dispatch_lock(demo, fake_runner, monkeypatch):
     assert resp.status_code == 200
     call = fake_runner.calls[0]
     assert call["bot"] == "gemma"
-    assert call["model"] == "gemini-3.6-flash-low"   # off-list stored model → default
+    assert call["model"] == "gemini-3.7-flash-low"   # off-list stored model → default
     assert call["effort"] == ""
     assert call["demo"] is True
 
@@ -756,7 +984,7 @@ def test_models_locked_to_two_model_choice_in_demo(demo):
     # 4.6 as the only alt; tier baked into the value, effort control hidden.
     client, _ = demo
     assert client.get("/operator/models").get_json()["models"] == [
-        {"value": "gemini-3.6-flash-low", "label": "3.6 Flash"},
+        {"value": "gemini-3.7-flash-low", "label": "3.7 Flash"},
         {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
     ]
 
@@ -797,7 +1025,7 @@ def test_dispatch_demo_forces_gemma_and_default_model_and_demo_true(demo, fake_r
     assert resp.status_code == 200
     call = fake_runner.calls[0]
     assert call["bot"] == "gemma"                          # forced, client bot ignored
-    assert call["model"] == "gemini-3.6-flash-low"       # off-list model → default
+    assert call["model"] == "gemini-3.7-flash-low"       # off-list model → default
     assert call["effort"] == ""                            # lock owns effort (tier in model string)
     assert call["demo"] is True                            # strips squad context
 
@@ -823,7 +1051,7 @@ def test_dispatch_demo_sandbox_surface_forces_sonnet(demo, fake_runner, monkeypa
     client, mod = demo
     _patch_streamer(monkeypatch, mod, FakeStreamer())
     resp = client.post("/operator/dispatch", json={
-        "bot": "x", "task": "open the editor", "model": "gemini-3.6-flash-low",
+        "bot": "x", "task": "open the editor", "model": "gemini-3.7-flash-low",
         "surface": "desktop-sandbox"})
     assert resp.status_code == 200
     call = fake_runner.calls[0]
@@ -861,6 +1089,47 @@ def test_dispatch_runner_conflict_returns_409(live, monkeypatch):
     assert resp.get_json()["ok"] is False
 
 
+def test_dispatch_forwards_conversation_id_to_runner(live, fake_runner, monkeypatch):
+    client, mod = live
+    _patch_streamer(monkeypatch, mod, FakeStreamer())
+    resp = client.post("/operator/dispatch", json={
+        "bot": "claude-a", "task": "go", "conversation_id": "conv-a"})
+    assert resp.status_code == 200
+    assert fake_runner.calls[0]["conversation_id"] == "conv-a"
+
+
+def test_dispatch_refuses_to_start_agent_without_a_usable_browser(
+        live, fake_runner, monkeypatch):
+    client, mod = live
+    fs = FakeStreamer()
+    fs.ready_error = "browser connection timed out"
+    _patch_streamer(monkeypatch, mod, fs)
+
+    resp = client.post("/operator/dispatch", json={
+        "bot": "gemma", "task": "find flights", "surface": "browser"})
+
+    assert resp.status_code == 503
+    assert resp.get_json() == {
+        "ok": False, "error": "browser connection timed out"}
+    assert fake_runner.calls == [], "a blind browser run must never begin"
+
+
+def test_desktop_dispatch_does_not_require_the_browser(
+        demo, fake_runner, monkeypatch):
+    client, mod = demo
+    fs = FakeStreamer()
+    fs.ready_error = "browser is down"
+    _patch_streamer(monkeypatch, mod, fs)
+
+    resp = client.post("/operator/dispatch", json={
+        "bot": "gemma", "task": "open the editor",
+        "surface": "desktop-sandbox"})
+
+    assert resp.status_code == 200
+    assert len(fake_runner.calls) == 1
+    assert fake_runner.calls[0]["surface"] == "desktop-sandbox"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. /operator/steer — the action whitelist (regression guard for the
 #    silently-dropped-field bug class: dx/dy scroll deltas, x0..y1 drag coords)
@@ -888,6 +1157,9 @@ STEER_CASES = [
      {"value": "example.test"}),
     ("type value", {"kind": "type", "value": "hello"}, "type", {"value": "hello"}),
     ("key value", {"kind": "key", "value": "Enter"}, "key", {"value": "Enter"}),
+    ("stage size force",
+     {"kind": "stage_size", "value": "704x615", "cid": "tab-a", "force": True},
+     "stage_size", {"cid": "tab-a", "force": True}),
 ]
 
 
@@ -1070,6 +1342,26 @@ def test_task_run_dispatches_and_marks_run(live, fake_runner, monkeypatch):
     assert marked == ["deepdive"]           # last_run stamped only on ok dispatch
 
 
+def test_saved_task_run_cannot_bypass_browser_readiness(
+        live, fake_runner, monkeypatch):
+    client, mod = live
+    fs = FakeStreamer()
+    fs.ready_error = "browser connection failed"
+    _patch_streamer(monkeypatch, mod, fs)
+    import operator_tasks as OT
+    monkeypatch.setattr(mod, "operator_tasks_store", OT)
+    monkeypatch.setattr(OT, "get_task", lambda slug: {
+        "prompt": "read the filings", "bot": "claude-a", "model": "opus",
+        "effort": "high", "sites": [], "start_url": ""})
+
+    resp = client.post("/operator/tasks/deepdive/run", json={})
+
+    assert resp.status_code == 503
+    assert resp.get_json() == {
+        "ok": False, "error": "browser connection failed"}
+    assert fake_runner.calls == []
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. tabs + agent passthrough routes (thin wrappers → streamer/runner)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1109,6 +1401,14 @@ def test_agent_snapshot_parses_since_and_tolerates_garbage(live, fake_runner):
     bad = client.get("/operator/agent?since=notanumber")
     assert bad.status_code == 200
     assert bad.get_json()["since"] == 0.0
+
+
+def test_agent_stop_and_snapshot_target_the_requested_conversation(live, fake_runner):
+    client, _ = live
+    client.post("/operator/agent/stop", json={"conversation_id": "conv-a"})
+    assert fake_runner.stop_conversation_id == "conv-a"
+    client.get("/operator/agent?since=3&conversation_id=conv-b")
+    assert fake_runner.snapshot_conversation_id == "conv-b"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1401,7 +1701,9 @@ def test_splash_mark_is_a_top_right_status_ring_not_a_hero_logo() -> None:
     rule = css[css.index(".op-lp-mark { position: fixed"):]
     rule = rule[: rule.index("}")]
     assert "right: 6.9rem" in rule                      # third slot in the row
-    assert "width: 32px; height: 32px" in rule          # matches theme btn + X
+    assert "--op-lp-control-size: 32px;" in css          # shared with theme + X
+    assert "width: var(--op-lp-control-size);" in rule
+    assert "height: var(--op-lp-control-size);" in rule
 
     # health states ride #op's existing data-state — no separate status plumbing
     assert '.op[data-state="error"] .op-lp-mark-sweep' in css
@@ -1594,6 +1896,16 @@ def test_reentry_resyncs_the_stage_size_beacon() -> None:
     assert "_last = ''" in resync, "re-entry must clear the no-op guard"
 
 
+def test_stage_size_beacon_forces_the_saved_target_back_onto_chrome() -> None:
+    """The initial and re-entry beacon repairs actual Chrome state, not only
+    the desired dimensions cached by the streamer."""
+    js = (Path(OV.__file__).resolve().parent
+          / "static/js/operator.js").read_text(encoding="utf-8")
+    beacon = js[js.index("body: JSON.stringify({ kind: 'stage_size'"):
+                js.index("body: JSON.stringify({ kind: 'stage_size'") + 180]
+    assert "force: true" in beacon
+
+
 def test_launchpad_mark_turns_once_when_it_settles() -> None:
     """the owner 2026-07-30: "when the green ring loading finishes and it becomes
     Ready ... do a spin animation".
@@ -1637,12 +1949,15 @@ def test_launchpad_mark_turns_once_when_it_settles() -> None:
     assert "op-mark-glyph-turn" not in rm
 
 
-def test_launchpad_mark_reports_connected_not_ready() -> None:
+def test_launchpad_mark_reports_connected_only_for_a_live_feed() -> None:
     """Renamed by the owner 2026-07-30. The tip is CSS `content`, driven off
     #op's state — there is no JS string to grep, which is why it gets a pin."""
     root = Path(__file__).resolve().parents[1]
     css = (root / "static/operator.css").read_text(encoding="utf-8")
-    assert '.op-mark-settled .op-lp-mark-tip::before { content: "Connected"; }' in css
+    assert ('[data-state="live"].op-mark-settled '
+            '.op-lp-mark-tip::before { content: "Connected"; }') in css
+    assert '\n  .op-mark-settled .op-lp-mark-tip::before { content: "Connected"; }' not in css
+    assert '[data-state="connecting"] .op-lp-mark-sweep' in css
     assert 'content: "Ready"' not in css
 
 
@@ -1790,3 +2105,21 @@ def test_probe_is_cached_not_refired_every_poll(live, monkeypatch) -> None:
     for _ in range(5):
         client.get("/operator/status")
     assert calls["n"] == 0, "a fresh cache entry must serve every poll"
+
+
+def test_streamer_attach_has_a_hard_timeout(monkeypatch) -> None:
+    """A half-alive Chrome must become an error, not sit at Connecting forever."""
+    streamer = OV._Streamer()
+
+    async def never_attaches():
+        await asyncio.sleep(1)
+
+    async def inert_teardown():
+        return None
+
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_TIMEOUT", 0.01)
+    monkeypatch.setattr(streamer, "_attach", never_attaches)
+    monkeypatch.setattr(streamer, "_teardown", inert_teardown)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(streamer._grab_loop())

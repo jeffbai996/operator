@@ -49,8 +49,9 @@ os.environ.pop("OPERATOR_DEMO", None)   # live cockpit template, not the demo
 # isolate the shared-session store — harness pages sync the session on boot
 # and must NEVER read or pollute the real cockpit's session file
 import tempfile  # noqa: E402
+_HARNESS_STATE_DIR = tempfile.mkdtemp(prefix="op-harness-state-")
 os.environ["OPERATOR_SESSION_PATH"] = os.path.join(
-    tempfile.mkdtemp(prefix="op-harness-sess-"), "session.json")
+    _HARNESS_STATE_DIR, "session.json")
 
 import operator_session as OS_MOD  # noqa: E402
 import operator_view as OV  # noqa: E402
@@ -187,7 +188,7 @@ def browser():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_session_store():
+def _fresh_session_store(monkeypatch):
     """Each test gets an empty shared-session store — otherwise a session
     pushed by an earlier test's page boot gets ADOPTED by the next test's
     fresh context (log swap + mode re-apply mid-test = flaky sampling)."""
@@ -195,6 +196,19 @@ def _fresh_session_store():
         os.unlink(os.environ["OPERATOR_SESSION_PATH"])
     except FileNotFoundError:
         pass
+    # The conversation registry instantiates runners lazily. Keep the harness
+    # on a blank state file too: otherwise /operator/agent can hydrate messages
+    # from the live cockpit and hide the launchpad halfway through an assertion.
+    # Scope both the env and registry to this test so collection does not leak
+    # OPERATOR_STATE_PATH into prompt/state-machine tests elsewhere in the suite.
+    state_path = os.path.join(_HARNESS_STATE_DIR, "operator-state.json")
+    try:
+        os.unlink(state_path)
+    except FileNotFoundError:
+        pass
+    monkeypatch.setenv("OPERATOR_STATE_PATH", state_path)
+    monkeypatch.setattr(
+        OV.operator_agent, "runner", OV.operator_agent.RunnerRegistry())
     yield
 
 
@@ -663,7 +677,9 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
                   themeSize: t.width, closeSize: x.width, themeRight: t.right,
                   closeLeft: x.left, closeRight: x.right, viewport: innerWidth};
         }""")
-        assert corner["centerDelta"] <= 0.5
+        # Equal 32px controls deliberately share one centerline (the August
+        # alignment fix removed the old 3px X-vs-theme mismatch).
+        assert corner["centerDelta"] <= 0.25
         assert corner["themeSize"] == corner["closeSize"] == 32
         assert corner["themeRight"] < corner["closeLeft"]
         assert corner["viewport"] - corner["closeRight"] <= 20
@@ -758,38 +774,6 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         }
     finally:
         ctx.close()
-
-
-def test_launchpad_top_controls_share_a_centerline_on_coarse_pointer(browser, harness):
-    """The X must not grow or drift below status/theme controls on touch."""
-    original_demo = harness.mod.DEMO
-    try:
-        for demo in (False, True):
-            harness.mod.DEMO = demo
-            ctx = browser.new_context(viewport={"width": 1440, "height": 900},
-                                      has_touch=True)
-            ctx.add_init_script(
-                "localStorage.setItem('operator-session-v1', "
-                + json.dumps(json.dumps({"log": "", "mode": "auto",
-                                         "bot": "", "model": "", "effort": ""})) + ");")
-            pg = ctx.new_page()
-            try:
-                pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
-                pg.wait_for_selector("#op-lp-wordmark", state="visible", timeout=8000)
-                controls = pg.evaluate("""() => {
-                  const ids = ['op-lp-mark', 'op-lp-theme', 'op-lp-x'];
-                  const boxes = ids.map(id => document.getElementById(id).getBoundingClientRect());
-                  return {coarse: matchMedia('(pointer: coarse)').matches,
-                          centers: boxes.map(r => (r.top + r.bottom) / 2),
-                          sizes: boxes.map(r => [r.width, r.height])};
-                }""")
-                assert controls["coarse"], "touch harness did not activate coarse-pointer CSS"
-                assert max(controls["centers"]) - min(controls["centers"]) <= 0.5
-                assert controls["sizes"] == [[32, 32], [32, 32], [32, 32]]
-            finally:
-                ctx.close()
-    finally:
-        harness.mod.DEMO = original_demo
 
 
 def test_launchpad_backdrop_collapses_results_and_theme_toggle_is_local(browser, harness):

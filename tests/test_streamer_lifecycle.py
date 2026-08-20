@@ -199,13 +199,8 @@ def test_first_viewer_demand_starts_closed_chrome(monkeypatch):
 
 
 def test_chrome_attach_script_honors_launcher_override(monkeypatch):
-    """operator-fam's CDP lives on :9333 via its own scheduled-task launcher
-    (opfam-chrome.sh) -- generic chrome-attach.sh defaults to :9222 with no
-    way to know it should target :9333, so it silently no-ops ("already
-    running" on the WRONG port) instead of ever starting the fam browser
-    (the owner 2026-08-03: "connecting to the operator page didn't trigger a
-    restart"). OPERATOR_CHROME_LAUNCHER must win over both DEMO and the
-    chrome-attach.sh default."""
+    """operator-fam's :9333 Windows profile uses its own scheduled-task
+    launcher; the standalone override must win over every default."""
     monkeypatch.setenv("OPERATOR_CHROME_LAUNCHER", "~/local-projects/operator-fam/opfam-chrome.sh")
     import os
     assert OV._Streamer._chrome_attach_script() == os.path.expanduser(
@@ -357,6 +352,24 @@ def test_attach_existing_real_page_is_left_alone(monkeypatch, streamer):
     asyncio.run(streamer._attach())
     navs = [p for m, p in ctx.sess.sent if m == "Page.navigate"]
     assert not navs, f"a real page must not be navigated away on attach: {navs}"
+
+
+def test_attach_prefers_restored_real_page_over_launcher_blank(monkeypatch, streamer):
+    """A persistent profile can restore useful tabs while Chrome also creates
+    a synthetic about:blank launcher tab. The cockpit must show the restored
+    work, not promote the synthetic blank and stream a black rectangle."""
+    ctx = FakeCtx(n_pages=3)
+    ctx.pages[1].url = "https://example.com/dashboard"
+    ctx.pages[2].url = "https://example.com/reports"
+    pw = FakePW(ctx=ctx)
+    _install(monkeypatch, [pw])
+
+    asyncio.run(streamer._attach())
+
+    assert streamer._page is ctx.pages[1]
+    assert streamer._page.fronted == 1
+    navs = [p for m, p in ctx.sess.sent if m == "Page.navigate"]
+    assert not navs, "restored pages must be preserved, not replaced with home"
 
 
 def test_attach_forces_desktop_identity(monkeypatch, streamer):

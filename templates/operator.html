@@ -16,7 +16,7 @@
       href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
 {% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1162">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1169">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -488,5 +488,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1155"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1159"></script>
 {% endblock %}

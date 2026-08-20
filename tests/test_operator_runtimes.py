@@ -80,13 +80,29 @@ def test_claude_demo_is_playwright_only(fake_home):
 
 
 def test_claude_cockpit_pins_the_operator_chrome(fake_home):
-    """The bot-Chrome split (218e807) flipped the shared launcher's default to
-    :9224; a cockpit run must pin the browser the feed streams (:9222) and
-    refuse the invisible headless fallback (wrong-browser regression 2026-07-20)."""
+    """The bot-Chrome split flipped the shared launcher's default to :9224;
+    a cockpit run must pin the Windows browser the feed streams (:9222)."""
     plan = RT.build_cmd("claude", _spec())
     servers = json.load(open(plan.mcp_config_path))["mcpServers"]
     assert servers["playwright"]["env"]["BROWSE_CHROME_PORT"] == "9222"
     assert servers["playwright"]["env"]["OPERATOR_REQUIRE_CDP"] == "1"
+
+
+def test_conversation_scope_reaches_runtime_and_mcp_children(fake_home):
+    scoped = _spec(conversation_id="conv-a", stop_path="/tmp/conv-a-stop")
+    claude = RT.build_cmd("claude", scoped)
+    servers = json.load(open(claude.mcp_config_path))["mcpServers"]
+    assert claude.env["OPERATOR_CONVERSATION_ID"] == "conv-a"
+    assert servers["operator-control"]["env"]["OPERATOR_STOP_PATH"] == "/tmp/conv-a-stop"
+    assert servers["playwright"]["env"]["OPERATOR_CONVERSATION_ID"] == "conv-a"
+
+    codex = RT.build_cmd("codex", scoped)
+    assert 'mcp_servers.operator-control.env.OPERATOR_CONVERSATION_ID="conv-a"' in codex.cmd
+    assert 'mcp_servers.playwright.env.OPERATOR_CONVERSATION_ID="conv-a"' in codex.cmd
+
+    agy = RT.build_cmd("agy", scoped)
+    assert agy.env["OPERATOR_CONVERSATION_ID"] == "conv-a"
+    assert agy.env["OPERATOR_STOP_PATH"] == "/tmp/conv-a-stop"
 
 
 # ── codex ────────────────────────────────────────────────────────────────────
@@ -179,9 +195,7 @@ def test_agy_browser_run_strips_stale_control_entry(fake_home):
 
 
 def test_agy_cockpit_pins_the_operator_chrome(fake_home):
-    """agy inherits its process env into stdio MCPs, so the :9222 pin rides
-    plan.env — and must stay OUT of the shared ~/.gemini config, which plain
-    gemma bot sessions also read (those keep the bots' :9224 default)."""
+    """agy inherits its process env into stdio MCPs without mutating shared config."""
     plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
     assert plan.env["BROWSE_CHROME_PORT"] == "9222"
     assert plan.env["OPERATOR_REQUIRE_CDP"] == "1"
@@ -190,11 +204,11 @@ def test_agy_cockpit_pins_the_operator_chrome(fake_home):
 
 
 def test_agy_resume_and_model_flags():
-    plan = RT.build_cmd("agy", _spec(resume_id="conv-3", model="gemini-3.6-flash",
+    plan = RT.build_cmd("agy", _spec(resume_id="conv-3", model="gemini-3.7-flash",
                                      config_dir=os.path.expanduser("~/.gemini")))
     c = plan.cmd
     assert c[c.index("--conversation") + 1] == "conv-3"
-    assert c[c.index("--model") + 1] == "gemini-3.6-flash"
+    assert c[c.index("--model") + 1] == "gemini-3.7-flash"
 
 
 def test_unknown_runtime_raises():
@@ -204,13 +218,13 @@ def test_unknown_runtime_raises():
 
 # ── second full-function instance (operator-fam) — instance CDP override ───────
 
-_OP2_CDP = "http://127.0.0.1:9334"
+_OP2_CDP = "http://127.0.0.1:9333"
 
 
 def test_claude_cockpit_honors_instance_cdp_override(fake_home, monkeypatch):
     """operator-fam runs full-function against its OWN Chrome: the server's
-    OPERATOR_DEMO_CDP (historical name for the explicit-endpoint override)
-    must replace the default :9222 pin — explicitly, not via inheritance."""
+    OPERATOR_DEMO_CDP (the historical explicit-endpoint name) must replace the
+    default :9222 pin explicitly."""
     monkeypatch.setenv("OPERATOR_DEMO_CDP", _OP2_CDP)
     plan = RT.build_cmd("claude", _spec())
     servers = json.load(open(plan.mcp_config_path))["mcpServers"]

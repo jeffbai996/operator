@@ -235,6 +235,31 @@ def test_watcher_ignores_interrupted():
     assert pings == []
 
 
+def test_watcher_tracks_concurrent_registry_runners_independently():
+    a, b = FakeRunner(), FakeRunner()
+    a.conversation_id, a.bot, a.task = "scheduled-a", "claude-a", "task a"
+    b.conversation_id, b.bot, b.task = "chat-b", "gemma", "task b"
+
+    class FakeRegistry:
+        def runners(self):
+            return [a, b]
+
+    pings = []
+    w = OS.CompletionWatcher(FakeRegistry(), notify=pings.append)
+    a.state = b.state = "running"
+    w.poll()
+    w.mark_scheduled("morning-check", conversation_id="scheduled-a")
+    b.state = "done"
+    w.poll()
+    a.state = "done"
+    w.poll()
+    assert len(pings) == 2
+    assert any("gemma finished" in text and "scheduled:" not in text
+               for text in pings)
+    assert any("claude-a finished (scheduled: morning-check)" in text
+               for text in pings)
+
+
 def test_cron_valid():
     assert OS.cron_valid("15 6 * * 1-5")
     assert OS.cron_valid("*/10 * * * *")

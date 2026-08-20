@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 MAX_TEXT = 4000      # one steer's text cap (it rides inside a prompt)
@@ -30,17 +31,23 @@ _DEFAULT = os.path.join(os.path.expanduser("~/.cache/computer-use"),
                         "operator-steer.ndjson")
 
 
-def path() -> str:
+def _scope(conversation_id: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", conversation_id).strip("-.")
+    return clean[:80] or "legacy"
+
+
+def path(conversation_id: str | None = None) -> str:
     p = os.environ.get("OPERATOR_STEER_PATH")
-    if p:
-        return p
-    # DEMO ISOLATION (review finding 2026-07-11): the demo server runs as the
-    # same user — an unscoped default would share this queue with the real
-    # cockpit, letting a demo visitor's steer reach a live production run.
-    # The launch scripts set OPERATOR_STEER_PATH; this is the backstop.
-    if os.environ.get("OPERATOR_DEMO"):
-        return _DEFAULT + ".demo"
-    return _DEFAULT
+    if not p:
+        # DEMO ISOLATION (review finding 2026-07-11): the demo server runs as the
+        # same user — an unscoped default would share this queue with the real
+        # cockpit, letting a demo visitor's steer reach a live production run.
+        # The launch scripts set OPERATOR_STEER_PATH; this is the backstop.
+        p = _DEFAULT + (".demo" if os.environ.get("OPERATOR_DEMO") else "")
+    cid = conversation_id or os.environ.get("OPERATOR_CONVERSATION_ID") or ""
+    if cid and cid != "legacy":
+        return p + ".conversations/" + _scope(cid) + ".ndjson"
+    return p
 
 
 def _read(p: str) -> list[dict]:
@@ -59,7 +66,7 @@ def _read(p: str) -> list[dict]:
     return out
 
 
-def push(text: str) -> int:
+def push(text: str, conversation_id: str | None = None) -> int:
     """Queue one steer; returns the pending count. Raises ValueError on
     empty/oversize text or a full queue (the caller surfaces it to the UI)."""
     text = (text or "").strip()
@@ -67,7 +74,7 @@ def push(text: str) -> int:
         raise ValueError("empty steer")
     if len(text) > MAX_TEXT:
         raise ValueError(f"steer too long (max {MAX_TEXT} chars)")
-    p = path()
+    p = path(conversation_id)
     n = len(_read(p))
     if n >= MAX_PENDING:
         raise ValueError(f"steer queue full ({MAX_PENDING} pending)")
@@ -78,13 +85,13 @@ def push(text: str) -> int:
     return n + 1
 
 
-def pending() -> list[dict]:
-    return _read(path())
+def pending(conversation_id: str | None = None) -> list[dict]:
+    return _read(path(conversation_id))
 
 
-def take_all() -> list[dict]:
+def take_all(conversation_id: str | None = None) -> list[dict]:
     """Atomically claim and return every queued steer ([] when none)."""
-    p = path()
+    p = path(conversation_id)
     claim = f"{p}.claim.{os.getpid()}.{time.monotonic_ns()}"
     try:
         os.rename(p, claim)
@@ -98,9 +105,9 @@ def take_all() -> list[dict]:
     return out
 
 
-def clear() -> None:
+def clear(conversation_id: str | None = None) -> None:
     try:
-        os.unlink(path())
+        os.unlink(path(conversation_id))
     except OSError:
         pass
 

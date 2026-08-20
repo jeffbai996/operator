@@ -8,7 +8,7 @@ same browser (shared mouse; last action wins). "See it, steer it." (the owner
 
 Zero new deps — playwright + aiohttp are already in the host-app venv:
   - VIEW: a background thread holds a Playwright connect_over_cdp() attach to the
-    Chrome on :9222 and grabs JPEG frames of the active page into a buffer. The
+    Windows Chrome on :9222 and grabs JPEG frames of the active page into a buffer. The
     Flask route streams that as multipart/x-mixed-replace (MJPEG) → an <img>.
   - CONTROL: POST actions run on the SAME attached page. Coordinate clicks come in
     normalized (0..1) so the frontend needn't know the viewport; we scale to the
@@ -23,8 +23,10 @@ import time
 from collections import deque as _deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from flask import Blueprint, Response, jsonify, render_template, request, send_file
+from flask import (Blueprint, Response, jsonify, render_template, request,
+                   send_file, has_request_context)
 import operator_agent  # the headless-claude agent runner (option 1)
 import operator_prefs  # server-side cockpit settings (the landing page)
 import operator_tasks as operator_tasks_store  # saved-task store (#30)
@@ -38,7 +40,7 @@ import os as _os_cfg
 # the generated public demo, whose label appends " demo" to whatever it finds.
 # The README's version ladder must carry a row for this version; a test asserts
 # it, so the changelog cannot silently fall behind the number on screen.
-OP_VERSION = "1.0.35"
+OP_VERSION = "1.0.37"
 # DEMO isolation (the public demo): a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
 # unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
@@ -65,6 +67,12 @@ IDLE_FRAME_INTERVAL = 0.35  # ~3fps after the pixels have stayed quiet
 MOTION_HOLD_S = 1.4         # keep full cadence through short UI animations
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
+# A browser-surface run is allowed to start only after the same Playwright/CDP
+# path that paints the cockpit has produced a real frame. HTTP /json can stay
+# healthy while one restored renderer is wedged; connect_over_cdp then waits
+# forever on that target and the agent used to start against no usable browser.
+BROWSER_ATTACH_TIMEOUT = 10.0
+BROWSER_READY_TIMEOUT = 12.0
 # F1 adaptive frame tier — ?tier=lo (narrow viewport / Save-Data clients) gets
 # lean frames. Browser lo frames are downscaled PER-CAPTURE via CDP clip+scale
 # (never Emulation.setDeviceMetricsOverride, which would resize the SHARED page
@@ -141,6 +149,85 @@ def collapse_score(prev: int, *, gate_ok: bool, css_w: float,
     if not gate_ok and css_w and css_w < floor:
         return min(COLLAPSE_SCORE_CAP, prev + COLLAPSE_HIT)
     return max(0, prev - COLLAPSE_DECAY)
+
+
+def _fit_clip_to_view_aspect(width: float, height: float,
+                             view_w: float, view_h: float) -> tuple[float, float]:
+    """Expand a zoom-split capture clip to the requested viewport aspect.
+
+    Windows Chrome profiles can carry a default page zoom (125% here). CDP then
+    reports a CSS viewport smaller than the device-metrics canvas. Some pages
+    still lay their body out at the full canvas width, so the existing extent
+    guard widened the clip without growing its height: a requested 1280x760
+    viewport became a 1280x608 frame and object-fit letterboxed it. Both source
+    dimensions are already capped to the requested canvas; expanding only the
+    deficient axis therefore restores the aspect without cropping content.
+    """
+    if width <= 0 or height <= 0 or view_w <= 0 or view_h <= 0:
+        return width, height
+    target = view_w / view_h
+    current = width / height
+    if current > target:
+        height = min(view_h, width / target)
+    elif current < target:
+        width = min(view_w, height * target)
+    return width, height
+
+
+def _clamp_stage(w: float, h: float) -> tuple[int, int]:
+    """A viewer's stage size → the remote viewport target it may ask for.
+
+    Scales a narrow stage up to the desktop layout floor without changing its
+    shape (the captured frame has to fill that stage), then bounds the result
+    so no client can ask the shared browser for something absurd. Returns
+    (0, 0) for a degenerate reading — a stage measured mid-layout reports zero,
+    and a zero target is the letterbox.
+    """
+    try:
+        w, h = int(float(w)), int(float(h))
+    except (TypeError, ValueError):
+        return 0, 0
+    if w <= 0 or h <= 0:
+        return 0, 0
+    if w < DESKTOP_LAYOUT_MIN_W:
+        h = round(h * DESKTOP_LAYOUT_MIN_W / max(1, w))
+        w = DESKTOP_LAYOUT_MIN_W
+    w = min(1600, w)
+    h = max(480, min(1300, h))
+    if w * h > 1_900_000:
+        h = 1_900_000 // w
+    return w - w % 2, h - h % 2
+
+
+def _emu_clip_box(*, css_w: float, css_h: float, dev_w: float, dev_h: float,
+                  body_w: float, body_h: float, page_x: float, page_y: float,
+                  view_w: float, view_h: float) -> tuple[float, float]:
+    """Capture clip for the emulated regime, in DEVICE pixels.
+
+    Page.captureScreenshot reads `clip` in device pixels, but every page
+    reading available here — cssLayoutViewport, document.body's scroll box,
+    the scroll offset — is in CSS pixels. On a display-scaled Chrome the two
+    differ by the scale factor, so feeding CSS numbers straight into a
+    device-space clip captured only the top-left 1/scale of the canvas: the
+    right column and the footer were never in the frame at all. Measured live
+    on google.com 2026-08-14 — css 1036x894 against a 1295x1118 canvas, so
+    the clip came out 1036x905 and lost a fifth of the page. Worse, the
+    aspect fitter below then matched the stage exactly, so it presented as a
+    narrow page rather than as the crop it was. Convert first, then clip.
+
+    The floor is the device layout viewport, which IS the painted canvas — it
+    can neither crop real content nor pad a blank band. The body scroll box
+    only ever grows the clip, and only as far as the requested view target.
+    """
+    scale = (dev_w / css_w) if css_w else 1.0
+    bw, bh = dev_w, dev_h
+    if body_w:
+        bw = max(dev_w, min(view_w, (body_w - page_x) * scale))
+    if body_h and view_h:
+        bh = max(dev_h, min(view_h, (body_h - page_y) * scale))
+    if view_h:
+        bw, bh = _fit_clip_to_view_aspect(bw, bh, view_w, view_h)
+    return bw, bh
 # Frames after a run starts during which we re-assert view metrics if the
 # agent's CDP attach knocked them off. The loop paces 0.45s while busy, so 5
 # covers roughly the first ~2.2s — long enough for a slow attach, short enough
@@ -169,6 +256,61 @@ VP_OWNER_IDLE_S = 2.5
 bp = Blueprint("operator", __name__,
                 template_folder="templates", static_folder="static",
                 static_url_path="/operator-static")
+
+
+def _origin_tuple(url: str) -> tuple[str, str, int | None] | None:
+    """Canonical origin for browser CSRF checks, including default ports."""
+    try:
+        parsed = urlsplit(url)
+        if not parsed.scheme or not parsed.hostname:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(parsed.scheme.lower())
+    return parsed.scheme.lower(), parsed.hostname.lower(), port
+
+
+@bp.before_request
+def _reject_cross_origin_mutations():
+    """Keep hostile pages from driving a tailnet user's Operator session.
+
+    Tailnet remains the identity boundary. Browser-supplied Origin, Referer,
+    and Fetch Metadata provide the narrower CSRF boundary; headerless CLI and
+    internal callers remain compatible because they are already inside that
+    trusted perimeter.
+    """
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+
+    expected = _origin_tuple(request.host_url)
+    supplied = request.headers.get("Origin")
+    fetch_site = (request.headers.get("Sec-Fetch-Site") or "").lower()
+    referer = request.referrer
+
+    # Fetch Metadata's ``same-site`` is broader than same-origin. Safari and
+    # installed PWAs can report it even for a request whose explicit Origin is
+    # exactly this Operator. Trust that exact origin (or referer) match; keep
+    # rejecting same-site requests that provide no origin evidence at all.
+    if supplied is not None:
+        foreign = (
+            _origin_tuple(supplied) != expected
+            or fetch_site == "cross-site"
+        )
+    elif referer is not None:
+        foreign = (
+            _origin_tuple(referer) != expected
+            or fetch_site == "cross-site"
+        )
+    else:
+        foreign = fetch_site in {"cross-site", "same-site"}
+    if foreign:
+        return jsonify(
+            ok=False,
+            error="cross-origin Operator mutation refused",
+        ), 403
+    return None
 
 
 @bp.after_request
@@ -344,6 +486,34 @@ class _Streamer:
         ts = self._vp_seen.get(owner)
         return ts is None or time.monotonic() - ts > VP_OWNER_IDLE_S
 
+    def seed_view_from_stage(self, w: float, h: float) -> bool:
+        """Pre-load the viewport target from a returning viewer's stage size.
+
+        The cockpit could only tell the server its stage AFTER its script ran
+        and its layout settled, so every session opened on whatever the last
+        viewer left — or on the WIDTHx0 default, whose auto height object-fit
+        renders as a letterbox — until a real resize fired a beacon. That is
+        the "wrong size until I drag it, then it snaps" report (the owner
+        2026-08-15). The stage is knowable earlier than that: the browser
+        sends it on the document request, so the target can be in place before
+        the streamer has attached, and the FIRST captured frame is already
+        right.
+
+        Only a hint, deliberately: it never touches CDP and never overrides a
+        viewer who is actually watching (same arbiter the beacon obeys). The
+        client's own beacon remains the authority and corrects a stale hint.
+        """
+        if not _VIEW_FOLLOW:
+            return False
+        w, h = _clamp_stage(w, h)
+        if not w or not h or (w, h) == (self.view_w, self.view_h):
+            return False
+        if not self.vp_beacon_allowed(""):
+            return False
+        self.view_w, self.view_h = w, h
+        self._vp_log("seed", f"{w}x{h}")
+        return True
+
     def _vp_log(self, kind: str, detail: str = "") -> None:
         """Flight recorder: every path that can reflow the remote page leaves a
         trace (the strobe/zoom hunts took 5 rounds because nothing recorded the
@@ -392,6 +562,36 @@ class _Streamer:
                                             name="operator-streamer")
             self._thread.start()
 
+    def require_ready(self, timeout: float = BROWSER_READY_TIMEOUT) -> str | None:
+        """Synchronously prove the cockpit browser before dispatch.
+
+        This is deliberately stronger than _cdp_alive(): Chrome can keep its
+        HTTP target list alive while Playwright cannot attach to one of the
+        renderers. A fresh frame proves the exact control/capture path the
+        agent and the user are about to share. Returns a user-facing error;
+        it never lets a browser task fail open into runner.start().
+        """
+        try:
+            self._user_closed = False
+            self._ensure_chrome_alive()
+            self.ensure_running()
+        except Exception as e:  # noqa: BLE001 — dispatch must fail closed
+            return self.detail or str(e) or "browser could not start"
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if (self.status == "live" and self.frame
+                    and now - self.frame_ts <= 3.0):
+                return None
+            if self.status == "error":
+                return self.detail or "browser connection failed"
+            thread = self._thread
+            if thread is not None and not thread.is_alive():
+                return self.detail or "browser connection stopped"
+            time.sleep(0.05)
+        return self.detail or "browser connection timed out"
+
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
@@ -420,18 +620,15 @@ class _Streamer:
     @staticmethod
     def _chrome_attach_script() -> str:
         """Path to the (re)launcher for the active mode — the demo's isolated
-        headless Chrome under DEMO, the owner's logged-in GUI Chrome otherwise.
+        headless Chrome under DEMO, the Windows Chrome otherwise.
 
         OPERATOR_CHROME_LAUNCHER overrides both: operator-fam's CDP lives on
-        :9333 (a dedicated persistent-profile Windows Chrome, launched via its
-        own "OperatorFamChrome" scheduled task — opfam-chrome.sh), but generic
+        :9333 (a dedicated persistent-profile Windows Chrome launched by
+        opfam-chrome.sh), but generic
         chrome-attach.sh defaults to :9222/browse-automation-chrome with no way
-        to know it should target :9333 instead. Landing on the operator-fam
-        page found chrome-attach.sh reporting :9222 "already running" and
-        exiting — a no-op relaunch that never touched :9333 at all (the owner
-        2026-08-03, "connecting to the operator page didn't trigger a
-        restart"). Each standalone instance now points this at its own
-        launcher via env; unset falls back to the historical behavior."""
+        to know it should target :9333 instead. Each standalone instance points
+        this at its own launcher via env; unset falls back to the primary
+        Windows launcher."""
         import os
         override = _os_cfg.environ.get("OPERATOR_CHROME_LAUNCHER")
         if override:
@@ -557,7 +754,14 @@ class _Streamer:
         if pages:
             for page in pages:
                 await self._force_desktop_page(page)
-            self._page = pages[0]
+            # Headless Chromium may restore the real session AND manufacture a
+            # synthetic about:blank launcher target. Target ordering then calls
+            # the blank "foreground", so the cockpit streams a perfectly healthy
+            # black rectangle while the user's real tabs sit behind it. Prefer
+            # the first restored page with content; only use a blank when there
+            # is nothing else to show.
+            real_pages = [p for p in pages if p.url not in ("", "about:blank")]
+            self._page = real_pages[0] if real_pages else pages[0]
             # The sweep left the session cache bound to the LAST page swept —
             # drop it so nothing reuses a session for a page we didn't select.
             self._cdp = None
@@ -577,6 +781,10 @@ class _Streamer:
                     await self._cdp_navigate(self._page, _NEWTAB_DATA_URL)
                 except Exception:  # noqa: BLE001 — landing nav is best-effort
                     pass
+            try:
+                await asyncio.wait_for(self._page.bring_to_front(), timeout=2)
+            except Exception:  # noqa: BLE001 — foregrounding is best-effort
+                pass
         else:
             # fallback page: navigate it to the landing URL — a bare new_page()
             # sits on about:blank forever ("new tab doesn't load the home page")
@@ -723,7 +931,7 @@ class _Streamer:
         # freshly-started driver orphaned; combined with per-poll relaunch this
         # leaked one node process per second all night).
         try:
-            await self._attach()
+            await asyncio.wait_for(self._attach(), timeout=BROWSER_ATTACH_TIMEOUT)
             await self._grab_loop_inner()
         finally:
             self.frame = None      # stopping → no stale 'live' with no frames
@@ -1043,18 +1251,13 @@ class _Streamer:
                         and (not self.view_h or abs(_dh - self.view_h) <= 2))
                 if _emu:
                     # PAGE-ZOOM SPLIT (2026-07-26 rev 3 — google.com "cuts
-                    # off"): the bot Chrome profile runs a page zoom (110%
-                    # default; per-site strays higher), so the css viewport is
-                    # view/zoom — but body-min-width pages (google.com) still
-                    # lay out at the FULL override width. A css-sized clip
-                    # cuts their right/bottom real content (the gmail/avatar
-                    # corner); a view-sized clip on a fluid page pads the
-                    # white chin band instead. Neither is right for both, so
-                    # clip to the page's actual laid-out extent: css viewport
-                    # at minimum, grown to the body scroll box, capped at the
-                    # view target (and at the content remaining below the
-                    # scroll offset, so a scrolled tail can't pad a band).
-                    _bw, _bh = _cw, _ch
+                    # off"): the bot Chrome profile is display-scaled, so the
+                    # css viewport reads view/scale while the capture canvas
+                    # stays the full device size. Every reading below is CSS
+                    # px and the clip is device px — _emu_clip_box owns that
+                    # conversion, and the arithmetic is unit-tested there
+                    # rather than inline against a live browser.
+                    _bv = [0, 0]
                     try:
                         import json as _json
                         _ext = await asyncio.wait_for(
@@ -1065,18 +1268,26 @@ class _Streamer:
                                     "document.body.scrollHeight]:[0,0])",
                                 "returnByValue": True}),
                             timeout=0.6)
-                        _bv = _json.loads(
+                        _parsed = _json.loads(
                             (_ext.get("result") or {}).get("value") or "[0,0]")
-                        _px = float(_css.get("pageX") or 0)
-                        _py = float(_css.get("pageY") or 0)
-                        _bw = max(_cw, min(float(self.view_w),
-                                           float(_bv[0] or 0) - _px))
-                        if self.view_h:
-                            _bh = max(_ch, min(float(self.view_h),
-                                               float(_bv[1] or 0) - _py))
+                        # normalise INSIDE the guard: a page with no body
+                        # answers `null`, and a subscript on that outside the
+                        # try escapes to the outer handler, which drops the
+                        # clip entirely and serves an unclipped frame
+                        if isinstance(_parsed, list) and len(_parsed) >= 2:
+                            _bv = _parsed
                     except Exception:  # noqa: BLE001 — extent read is best-effort
                         pass
-                    _src = _css
+                    _bw, _bh = _emu_clip_box(
+                        css_w=_cw, css_h=_ch, dev_w=_dw, dev_h=_dh,
+                        body_w=float(_bv[0] or 0), body_h=float(_bv[1] or 0),
+                        page_x=float(_css.get("pageX") or 0),
+                        page_y=float(_css.get("pageY") or 0),
+                        view_w=float(self.view_w), view_h=float(self.view_h))
+                    # device-space clip → device-space origin (same convention
+                    # as the native branch below); a css origin here would
+                    # under-scroll the capture by the display scale.
+                    _src = _dev
                 else:
                     _src, _bw, _bh = _dev, _dw, _dh
                 if self._accept_viewport(_cw, _ch) and _bw and _bh:
@@ -2243,14 +2454,12 @@ class _Streamer:
                     return {"ok": False, "error": "stage_size wants value=WxH"}
                 # Preserve a desktop-class responsive layout even when the
                 # viewer is narrow. Scale height with the width floor so the
-                # captured frame keeps the stage aspect on tablets.
-                if w < DESKTOP_LAYOUT_MIN_W:
-                    h = round(h * DESKTOP_LAYOUT_MIN_W / max(1, w))
-                    w = DESKTOP_LAYOUT_MIN_W
-                w = min(1600, w); h = max(480, min(1300, h))
-                if w * h > 1_900_000:
-                    h = 1_900_000 // w
-                w -= w % 2; h -= h % 2
+                # captured frame keeps the stage aspect on tablets. Shared
+                # with the page-load seed so a hint and a beacon can never
+                # disagree about what the same stage means.
+                w, h = _clamp_stage(w, h)
+                if not w or not h:
+                    return {"ok": False, "error": "stage_size wants value=WxH"}
                 cid = str(action.get("cid") or "")
                 if not self.vp_beacon_allowed(cid):
                     # another viewer OWNS the aspect and is actively pulling
@@ -2261,9 +2470,12 @@ class _Streamer:
                             "applied": False, "owned": True}
                 self._vp_owner = cid or "anon"   # anon can't hold it (no liveness)
                 self.vp_note_pull(cid)
-                if (w, h) == (self.view_w, self.view_h):
+                force = action.get("force") is True
+                same_target = (w, h) == (self.view_w, self.view_h)
+                if same_target and not force:
                     return {"ok": True, "view": [w, h], "applied": False}
-                self._vp_log("beacon", f"{cid or 'anon'} {val} -> {w}x{h}")
+                self._vp_log("beacon-force" if same_target else "beacon",
+                             f"{cid or 'anon'} {val} -> {w}x{h}")
                 self.view_w, self.view_h = w, h
                 busy = False
                 try:
@@ -2653,6 +2865,14 @@ def operator_page():
     # demo: serve the standalone, de-PII'd template (no squad chrome/nav, no owner
     # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
     _tmpl = "operator_demo.html" if DEMO else "operator.html"
+    # Seed the viewport BEFORE the page paints. The cockpit writes its stage
+    # size to op_stage, so a returning viewer's geometry rides up on the
+    # document request and the streamer's first attach already targets it —
+    # no opening frame at the last viewer's aspect, no resize-to-snap.
+    _stage = (request.cookies.get("op_stage") or "").lower()
+    if "x" in _stage:
+        _w, _, _h = _stage.partition("x")
+        _streamer.seed_view_from_stage(_w, _h)
     resp = make_response(render_template(_tmpl, standalone=STANDALONE))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -2672,13 +2892,43 @@ def _cockpit_redirect():  # legacy path → operator
     return redirect(url_for("operator.operator_page"))
 
 
+# Per-client tier + liveness. The tier used to be last-viewer-wins on the
+# shared buffer, which the old docstring called "fine for a single-user
+# cockpit". It is not a single-user cockpit — iPad and desktop watch together,
+# and the viewport recorder routinely shows three pullers. With one client on
+# lo and one on hi, EVERY frame request restamped the shared field, so
+# consecutive captures alternated between the 900px lo cap and full device
+# resolution and the <img> rescaled on each swap. That is the flicker: the same
+# "spasming between small and big at constant frequency" the capture path
+# already documents for the 2026-07-12 CDP-fallback version of this bug.
+#
+# Serve the HIGHEST tier any live viewer wants. A lo client can downscale what
+# it receives; a hi client cannot invent the resolution back. Liveness reuses
+# the viewport owner's window — a closed tab stops polling within one frame.
+TIER_IDLE_S = VP_OWNER_IDLE_S
+_TIER_SEEN: dict = {}
+
+
+def effective_tier(seen: dict, now: float) -> str:
+    """Highest tier among clients that have polled inside the idle window."""
+    live = [t for t, ts in seen.values() if now - ts <= TIER_IDLE_S]
+    if not live:
+        return "hi"
+    return "hi" if "hi" in live else "lo"
+
+
 def _apply_feed_tier() -> None:
-    """F1: read ?tier=lo|hi off the request and stamp BOTH feed sources.
-    Anything but 'lo' is 'hi'. Last-viewer-wins on the shared frame buffer —
-    fine for a single-user cockpit (per-viewer buffers are a 1.0.10 idea)."""
+    """F1: read ?tier=lo|hi and ?cid off the request and stamp both feeds."""
     tier = "lo" if request.args.get("tier") == "lo" else "hi"
-    _streamer.tier = tier
-    _desktop_feed.tier = tier
+    cid = request.args.get("cid") or "anon"
+    now = time.monotonic()
+    _TIER_SEEN[cid] = (tier, now)
+    for k, (_t, ts) in list(_TIER_SEEN.items()):
+        if now - ts > TIER_IDLE_S:
+            _TIER_SEEN.pop(k, None)
+    resolved = effective_tier(_TIER_SEEN, now)
+    _streamer.tier = resolved
+    _desktop_feed.tier = resolved
 
 
 def _frame_source():
@@ -2966,17 +3216,27 @@ def operator_session():
         return jsonify(ok=False, error="demo sessions are per-visitor"), 403
     import operator_session as _sess_store
     if request.method == "GET":
-        got = _sess_store.load()
-        return jsonify(ok=True, rev=got["rev"], data=got["data"])
+        cid = (request.args.get("conversation_id") or "").strip()
+        try:
+            got = _sess_store.load(conversation_id=cid or None)
+        except KeyError:
+            return jsonify(ok=False, error="no such conversation"), 404
+        cid = cid or _sess_store.active_id() or "legacy"
+        return jsonify(ok=True, rev=got["rev"], data=got["data"],
+                       conversation_id=cid)
     body = request.get_json(silent=True) or {}
     data = body.get("data")
     if not isinstance(data, dict):
         return jsonify(ok=False, error="body must be {data: {...}}"), 400
     try:
-        rev = _sess_store.save(data)
+        cid = str(body.get("conversation_id") or "").strip()
+        rev = _sess_store.save(data, conversation_id=cid or None)
     except ValueError as e:
         return jsonify(ok=False, error=str(e)), 413
-    return jsonify(ok=True, rev=rev)
+    except KeyError:
+        return jsonify(ok=False, error="no such conversation"), 404
+    cid = cid or _sess_store.active_id() or "legacy"
+    return jsonify(ok=True, rev=rev, conversation_id=cid)
 
 
 @bp.route("/operator/sessions", methods=["GET", "POST"])
@@ -3164,7 +3424,10 @@ def operator_steer():
               "count": data.get("count"),
               # cid identifies the cockpit tab for viewport ownership
               # (kind=="stage_size") — same whitelist-drop class as dx/dy above.
-              "cid": data.get("cid")}
+              "cid": data.get("cid"),
+              # force makes an entry/re-entry beacon repair actual Chrome
+              # metrics even when the streamer's desired WxH already matches.
+              "force": data.get("force") is True}
     if not action["kind"]:
         return jsonify(ok=False, error="missing action kind"), 400
     # desktop surfaces: same gestures, injected via the surface backend instead
@@ -3416,6 +3679,25 @@ def _desktop_real_preflight() -> str | None:
     return None
 
 
+def _conversation_for(data=None, *, scheduled: str = "") -> str:
+    """Resolve the runner key while preserving old clients that send no id."""
+    if scheduled:
+        return "scheduled-" + scheduled
+    data = data or {}
+    cid = str(data.get("conversation_id") or "").strip()
+    if not cid and has_request_context():
+        cid = str(request.args.get("conversation_id") or "").strip()
+    if cid:
+        return cid
+    if not DEMO:
+        try:
+            import operator_session as _sess_store
+            cid = _sess_store.active_id()
+        except Exception:
+            cid = ""
+    return cid or "legacy"
+
+
 @bp.route("/operator/dispatch", methods=["POST"])
 def operator_dispatch():
     """Start a headless Claude Code agent (as the chosen persona) to do the task
@@ -3427,6 +3709,7 @@ def operator_dispatch():
         return jsonify(ok=False, error="empty task"), 400
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
+    conversation_id = _conversation_for(data)
     # surface: explicit in the request, else the cockpit's active pick. The
     # runner re-validates (gating is server-side, not a UI courtesy).
     surface = (data.get("surface") or _active_surface["name"] or "browser").strip()
@@ -3448,17 +3731,17 @@ def operator_dispatch():
     if surface != _active_surface["name"] \
             and surface in [s["key"] for s in _SURFACE_DEFS]:
         _active_surface["name"] = surface     # feed follows the dispatch
-    # Explicit user intent also counts as demand: ensure the browser is alive
-    # before handing the task to an agent.
-    try:
-        _streamer._user_closed = False
-        _streamer._ensure_chrome_alive()
-        _streamer.ensure_running()
-    except Exception:
-        pass
+    # A browser task and its visible feed are one transaction: do not start the
+    # agent unless the exact Playwright/CDP path has produced a fresh frame.
+    # The old best-effort block swallowed every attach failure, so the runner
+    # cheerfully began "Browsing" behind a SIGNAL LOST cockpit.
+    if surface == "browser":
+        browser_error = _streamer.require_ready()
+        if browser_error:
+            return jsonify(ok=False, error=browser_error), 503
     if DEMO:
         # public demo: gemma/agy runtime, model locked to the 2-entry demo list
-        # (off-list → Flash 3.6 Low default). The tier lives in the model string
+        # (off-list → Flash 3.7 Low default). The tier lives in the model string
         # ("(Thinking)"/"(Low)"), so client-sent effort is discarded — the lock
         # owns effort. demo=True strips squad context/identity/tools.
         bot = "gemma"
@@ -3470,16 +3753,18 @@ def operator_dispatch():
             model = "Claude Sonnet 4.6 (Thinking)"
         effort = ""
         r = operator_agent.runner.start(bot, task, model=model, effort=effort,
-                                        demo=True, surface=surface)
+                                        demo=True, surface=surface,
+                                        conversation_id=conversation_id)
     else:
         r = operator_agent.runner.start(bot, task, model=model, effort=effort,
-                                        surface=surface, real_ok=real_ok)
+                                        surface=surface, real_ok=real_ok,
+                                        conversation_id=conversation_id)
         if r.get("ok"):
             # An untitled conversation takes the name of the first task run in
             # it, so the switcher reads as a list of errands rather than a
             # column of "New chat". Best-effort by contract.
             import operator_session as _sess_store
-            _sess_store.title_if_unset(task)
+            _sess_store.title_if_unset(task, conversation_id=conversation_id)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
@@ -3575,10 +3860,13 @@ def operator_task_run(slug):
     return jsonify(r), status
 
 
-def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict, int]:
+def _dispatch_saved_task(slug: str, overrides: dict | None = None,
+                         *, scheduled: bool = False) -> tuple[dict, int]:
     """The shared saved-task dispatch path — the ▶ run route and the scheduler
     (operator_schedule) both come through here."""
     overrides = overrides or {}
+    conversation_id = _conversation_for(
+        overrides, scheduled=slug if scheduled else "")
     t = operator_tasks_store.get_task(slug)
     if not t:
         return {"ok": False, "error": "no such task"}, 404
@@ -3600,13 +3888,11 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict
                     "error": "task needs variable values: "
                              + ", ".join(missing)}, 400
 
-    # Same demand-start behavior as /dispatch.
-    try:
-        _streamer._user_closed = False
-        _streamer._ensure_chrome_alive()
-        _streamer.ensure_running()
-    except Exception:
-        pass
+    # Saved tasks and scheduled runs obey the same fail-closed browser gate as
+    # an ordinary dispatch. No alternate entry point may launch blind.
+    browser_error = _streamer.require_ready()
+    if browser_error:
+        return {"ok": False, "error": browser_error}, 503
 
     # Optional: navigate to the task's start_url before handing off to the agent.
     start_url = (t.get("start_url") or "").strip()
@@ -3628,9 +3914,12 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None) -> tuple[dict
         if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
             model = OPERATOR_MODELS_DEMO[0]["value"]
         r = operator_agent.runner.start(bot, task_prompt, model=model,
-                                        effort="", demo=True)
+                                        effort="", demo=True,
+                                        conversation_id=conversation_id)
     else:
-        r = operator_agent.runner.start(bot, task_prompt, model=model, effort=effort)
+        r = operator_agent.runner.start(
+            bot, task_prompt, model=model, effort=effort,
+            conversation_id=conversation_id)
     if r.get("ok"):
         operator_tasks_store.mark_run(slug)
         return r, 200
@@ -3654,12 +3943,15 @@ def operator_agent_state():
         since = float(request.args.get("since", "0") or 0)
     except (TypeError, ValueError):
         since = 0.0
-    return jsonify(operator_agent.runner.snapshot(since))
+    return jsonify(operator_agent.runner.snapshot(
+        since, conversation_id=_conversation_for(request.args)))
 
 
 @bp.route("/operator/agent/stop", methods=["POST"])
 def operator_agent_stop():
-    return jsonify(operator_agent.runner.stop())
+    data = request.get_json(silent=True) or request.form or {}
+    return jsonify(operator_agent.runner.stop(
+        conversation_id=_conversation_for(data)))
 
 
 @bp.route("/operator/agent/say", methods=["POST"])
@@ -3678,15 +3970,18 @@ def operator_agent_say():
         return jsonify(ok=False, error="empty message"), 400
     if len(text) > 4000:
         return jsonify(ok=False, error="message too long (max 4000 chars)"), 413
-    r = operator_agent.runner.steer(text)
+    r = operator_agent.runner.steer(
+        text, conversation_id=_conversation_for(data))
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
 @bp.route("/operator/agent/reset", methods=["POST"])
 def operator_agent_reset():
     """Clear the agent's conversation memory (wired to the operator trash button)."""
-    bot = (request.get_json(silent=True) or {}).get("bot", "")
-    return jsonify(operator_agent.runner.reset_session(bot))
+    data = request.get_json(silent=True) or {}
+    bot = data.get("bot", "")
+    return jsonify(operator_agent.runner.reset_session(
+        bot, conversation_id=_conversation_for(data)))
 
 
 @bp.route("/operator/driver-status")
@@ -3881,7 +4176,7 @@ OPERATOR_MODELS_GPT = [
 # "Gemini 3.5 Flash (High)" display form together with --effort — it now errors
 # "--effort is not supported for model …". Gemini values must be slugs.
 OPERATOR_MODELS_GEMMA = [
-    {"value": "gemini-3.6-flash", "label": "3.6 Flash"},
+    {"value": "gemini-3.7-flash", "label": "3.7 Flash"},
     {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
     {"value": "Claude Opus 4.6 (Thinking)", "label": "Opus 4.6"},
     {"value": "GPT-OSS 120B (Medium)", "label": "GPT-OSS 120B"},
@@ -3889,12 +4184,12 @@ OPERATOR_MODELS_GEMMA = [
 
 
 # public demo: LOCKED 2-model choice on the gemma/agy runtime (the owner 2026-07-09):
-# Flash 3.6 Low default (first = picker default + server fallback), Sonnet 4.6
+# Flash 3.7 Low default (first = picker default + server fallback), Sonnet 4.6
 # as the heavier alt. Tier is baked into each value — the effort control is
 # hidden in the demo UI, the lock owns effort (dispatch sends effort="", so the
 # baked-tier form is what agy gets).
 OPERATOR_MODELS_DEMO = [
-    {"value": "gemini-3.6-flash-low", "label": "3.6 Flash"},
+    {"value": "gemini-3.7-flash-low", "label": "3.7 Flash"},
     {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
 ]
 
@@ -3920,7 +4215,8 @@ def operator_models():
 if not DEMO:
     try:
         import operator_schedule as _op_sched
-        _op_sched.start(run_fn=lambda slug: _dispatch_saved_task(slug)[0],
+        _op_sched.start(run_fn=lambda slug: _dispatch_saved_task(
+                            slug, scheduled=True)[0],
                         runner=operator_agent.runner)
     except Exception:  # noqa: BLE001 — housekeeping must never block the app
         pass

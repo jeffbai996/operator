@@ -116,11 +116,25 @@
 
   // ── session persistence: chat + selections survive a refresh (localStorage) ──
   const LS_KEY = 'operator-session-v1';
+  const CONVERSATION_KEY = 'operator-conversation-v1';
   // ── one shared server-side session (2026-07-11): localStorage stays the
   // fast-path cache, but the source of truth lives on the server so the chat
   // survives across devices. _srev = the server revision this device last
   // saw; a differing server rev at boot means another device wrote — adopt.
   let _srev = 0;
+  let _conversationId = '';
+  try { _conversationId = sessionStorage.getItem(CONVERSATION_KEY) || ''; } catch {}
+  function _setConversationId(id){
+    _conversationId = String(id || '').trim();
+    try { if (_conversationId) sessionStorage.setItem(CONVERSATION_KEY, _conversationId); } catch {}
+  }
+  function _conversationPayload(extra){
+    return Object.assign({conversation_id: _conversationId || undefined}, extra || {});
+  }
+  function _conversationPost(extra){
+    return {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(_conversationPayload(extra))};
+  }
   let _sessPushT = null;
   function _sessionPayload() {
     return {
@@ -144,13 +158,14 @@
     if (_sessPushT) { clearTimeout(_sessPushT); _sessPushT = null; }
     try {
       const d = _sessionPayload();
-      localStorage.setItem(LS_KEY, JSON.stringify(Object.assign({_srev: _srev}, d)));
+      localStorage.setItem(LS_KEY, JSON.stringify(Object.assign(
+        {_srev: _srev, _conversation_id: _conversationId}, d)));
       // push to the server; fire-and-forget (a failed push just means this
       // device's copy wins on its NEXT successful save)
       (async () => { try {
         const r = await fetch(SESSION, {method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({data: d})});
+          body: JSON.stringify(_conversationPayload({data: d}))});
         const j = await r.json();
         if (j && j.ok) {
           _srev = j.rev;
@@ -172,6 +187,7 @@
   function restoreSession() {
     try { const d = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (d && typeof d._srev === 'number') _srev = d._srev;
+      if (!_conversationId && d && d._conversation_id) _setConversationId(d._conversation_id);
       if (d && d.log) { log.innerHTML = d.log;
         // a LIVE restored handoff card has dead listeners (innerHTML loses them)
         // — drop it; if the agent still needs control, the next poll re-renders
@@ -241,19 +257,40 @@
       // ok:true with owned:true (another live viewer holds the aspect) is a
       // real answer, not a failure — no retry, exactly as before.
       fetch(STEER, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: 'stage_size', value: v, cid: CID }) })
+        // A service bounce can leave Chrome at the dead runner's last
+        // emulation while the streamer's desired WxH still matches us. Force
+        // the real CDP metrics back on even when the target number is unchanged.
+        body: JSON.stringify({ kind: 'stage_size', value: v, cid: CID,
+          force: true }) })
         .then((res) => res.json())
         .then((j) => {
           if (!j || j.ok !== true) throw 0;
           _tries = 0;
+          // Persist for the NEXT page load. The server reads this on the
+          // document request and pre-loads the viewport target, so the first
+          // captured frame of a session already has the right aspect instead
+          // of opening at whatever the last viewer left (the owner 2026-08-15,
+          // "wrong size until I resize it myself, then it snaps"). Written on
+          // ok:true whatever the ownership answer — the stage is this
+          // browser's own property, not the server's to grant.
+          try {
+            document.cookie = 'op_stage=' + v +
+              ';path=/;max-age=31536000;SameSite=Lax';
+          } catch (e) { /* cookies blocked — the live beacon still works */ }
           // owned:true = another viewer holds the aspect. On ENTRY that's
           // usually the dead previous tab still inside the owner-idle window
           // (the "letterboxed until I move the resize bar" report) — re-fire a
           // couple of times past the window so the handoff lands by itself.
           // A genuinely live other viewer keeps refusing; we stop after 2.
-          if (j.applied === false && j.owned && _ownRetries < 2) {
+          // Retry inside the owner-idle window, not once past it: a dead
+          // previous tab releases the aspect 2.5s after its last frame pull,
+          // and a 3500ms retry meant the handoff always cost a full refusal
+          // plus most of a second sitting at the wrong aspect. 700ms x 6
+          // covers the window several times over; a genuinely live viewer
+          // keeps refusing and we still give up.
+          if (j.applied === false && j.owned && _ownRetries < 6) {
             _ownRetries++; _last = '';
-            clearTimeout(_t); _t = setTimeout(send, 3500);
+            clearTimeout(_t); _t = setTimeout(send, 700);
           } else if (j.applied !== false) { _ownRetries = 0; }
         })
         .catch(() => { _last = ''; if (_tries++ < 8) { clearTimeout(_t); _t = setTimeout(send, 1500); } });
@@ -288,7 +325,19 @@
     // iOS restores from the page cache without a visibilitychange
     window.addEventListener('pageshow', (e) => { if (e.persisted) resync(); });
     _stageFollow = queue;
-    setTimeout(send, 1200);   // after first layout settles
+    // FIRST BEACON: fire the frame the stage HAS a size, not on a timer. The
+    // old `setTimeout(send, 1200)` guaranteed that every session's opening
+    // second was served at the previous viewer's aspect — long enough to see,
+    // and the thing a manual resize was "fixing". Layout is usually settled
+    // within one or two frames; poll rAF until the rect is real, capped at
+    // ~1s of frames so a hidden stage can't spin forever.
+    let _prime = 0;
+    const primeEntry = () => {
+      const r = st.getBoundingClientRect();
+      if (r.width && r.height) { send(); return; }
+      if (_prime++ < 60) requestAnimationFrame(primeEntry);
+    };
+    requestAnimationFrame(primeEntry);
   })();
 
   // ── full-window toggle (hides host-app header) ──
@@ -1286,7 +1335,7 @@
     const btn = card && card.querySelector('.op-takeover-btn');
     if (btn) { btn.disabled = true; const l = btn.querySelector('.tk-lab'); if (l) l.textContent = 'Took control'; }
     if (card) card.classList.add('done');
-    try { fetch(STOP_URL, {method:'POST'}); } catch(_){}
+    try { fetch(STOP_URL, _conversationPost()); } catch(_){}
     // close the running turn quietly + clear in-flight state
     _interrupting = true; _handledState = 'done'; _postSteerUntil = Date.now() + 1500;
     if (_task) { try { finishTask(false, 'Handed off'); } catch(_){} }
@@ -1643,8 +1692,16 @@
     setFollowUp();   // agent done → revert placeholder to "Message Operator"
   }
 
+  const CROSS_ORIGIN_MUTATION_ERROR = 'cross-origin Operator mutation refused';
+  function warningIcon() {
+    const w = document.createElement('span');
+    w.className = 'warn';
+    w.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+    return w;
+  }
   function logRes(text, ok) {
     const m = document.createElement('div'); m.className='op-msg step ' + (ok?'':'err');
+    if (!ok && text === CROSS_ORIGIN_MUTATION_ERROR) m.appendChild(warningIcon());
     const b = document.createElement('span'); b.className='body'; b.textContent=text;
     m.appendChild(b); log.appendChild(m); trim();
   }
@@ -1660,8 +1717,7 @@
   function logActionFail() {
     if (_failEl && _failEl.isConnected && _failEl === log.lastElementChild) return;
     const m = document.createElement('div'); m.className = 'op-msg step err';
-    const w = document.createElement('span'); w.className = 'warn';
-    w.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+    const w = warningIcon();
     const b = document.createElement('span'); b.className = 'body'; b.textContent = FAIL_TEXT;
     m.appendChild(w); m.appendChild(b); log.appendChild(m); trim();
     _failEl = m;
@@ -1721,9 +1777,8 @@
       try { saveSession(); } catch(_){}
     };
     // wipe agent memory immediately (network); animate the UI out, then empty.
-    try { fetch(OP_URLS.agent_reset, {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({bot: selectedBot()})}); } catch {}
+    try { fetch(OP_URLS.agent_reset,
+      _conversationPost({bot: selectedBot()})); } catch {}
     _clearBtn.classList.add('op-clearing');              // shake the icon
     setTimeout(()=>_clearBtn.classList.remove('op-clearing'), 440);
     if (!log.children.length) { finishClear(); return; } // nothing to animate
@@ -1810,7 +1865,7 @@
     attributeFilter: ['data-busy', 'data-surface'] });
   panicBtn.addEventListener('click', async () => {
     panicBtn.disabled = true;
-    try { await fetch(PANIC_STOP_URL, { method: 'POST' }); } catch(_){}
+    try { await fetch(PANIC_STOP_URL, _conversationPost()); } catch(_){}
     panicBtn.disabled = false;
   });
   function renderSurfacePop(){
@@ -3399,7 +3454,8 @@
       logUser('▶ ' + t.name);
       op.dataset.busy = '1'; setCardText(actTxt, 'Starting up'); setCardSub(t.bot || selectedBot(), '');
       try { const d = await (await fetch(RUN_URL.replace('__S__', encodeURIComponent(t.slug)), {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(_conversationPayload()) })).json();
         // fresh watchdog anchor per turn — same reason as dispatchTask's reset
         if (d.ok) { _lastAssistant = ''; _runProgressTs = 0; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
         else { logRes(d.error || 'failed to run task', false); settleAction(false); } }
@@ -3417,7 +3473,7 @@
         o.value=x.value; o.textContent=x.label; sel.appendChild(o); });
       let savedModel = (typeof _sess!=='undefined' && _sess) ? _sess.model : '';
       if (!savedModel) { try { const _sv = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (_sv) savedModel = _sv.model || ''; } catch {} }
-      const want = (driver === 'gpt') ? 'gpt-5.6-sol' : (driver === 'gemma') ? 'gemini-3.6-flash' : 'claude-sonnet-5';
+      const want = (driver === 'gpt') ? 'gpt-5.6-sol' : (driver === 'gemma') ? 'gemini-3.7-flash' : 'claude-sonnet-5';
       if (savedModel && [].some.call(sel.options, o=>o.value===savedModel)) sel.value = savedModel;
       else if ([].some.call(sel.options, o=>o.value===want)) sel.value = want;
       if (typeof syncEffort === 'function') syncEffort();
@@ -3449,11 +3505,11 @@
     // gemma/agy: pick the Gemini family in the model picker, the tier in the effort
     // picker; start() passes the slug as --model and the tier as --effort (agy
     // stopped accepting the folded "Gemini X (Tier)" form, 2026-07-24).
-    "gemini-3.6-flash": ["low", "medium", "high"],
+    "gemini-3.7-flash": ["low", "medium", "high"],
     "gemini-3.1-pro": ["low", "high"],
     "Claude Sonnet 4.6 (Thinking)": [], "Claude Opus 4.6 (Thinking)": [], "GPT-OSS 120B (Medium)": [],
   };
-  // a width:auto <select> sizes to its WIDEST option, so a short selection (e.g. '3.6 Flash')
+  // a width:auto <select> sizes to its WIDEST option, so a short selection (e.g. '3.7 Flash')
   // leaves the caret floating right. fitMini measures the SELECTED option's text and sets the
   // select width to it so the caret stays snug. Uses a shared hidden measuring span.
   let _measSpan = null;
@@ -3685,8 +3741,14 @@
   async function pollAgent() {
     if (MODE !== 'auto' || _agentPolling) return;   // guard re-entrancy
     _agentPolling = true;
+    const pollConversation = _conversationId || 'legacy';
     try {
-      const d = await (await fetch(AGENT_URL + '?since=' + _agentSince)).json();
+      const d = await (await fetch(AGENT_URL + '?since=' + _agentSince
+        + '&conversation_id=' + encodeURIComponent(pollConversation))).json();
+      // A Chats switch can happen while this request is in flight. Never let
+      // the old conversation's late telemetry paint into the newly selected
+      // transcript; its next selected poll will read that runner directly.
+      if (pollConversation !== (_conversationId || 'legacy')) return;
       let maxTs = _agentSince;
       const msgs = (d.messages||[]);
       // The live verb is decided per poll BATCH, actions outranking narration:
@@ -3806,7 +3868,7 @@
           op.dataset.busy='0'; setCardText(actTxt, 'Failed');
           setCardSub(d.bot||'', 'stalled'); op.dataset.agent='errored';
           turnError('Turn failed', 'The agent stopped responding and was ended.'); finishTask(true); setInFlight(false);
-          try { fetch(STOP_URL, {method:'POST'}); } catch {}
+          try { fetch(STOP_URL, _conversationPost()); } catch {}
           _runProgressTs = 0;
         }
       }
@@ -4383,7 +4445,8 @@
   // boot adoption and switching conversations (2026-08-06) — so it lives in one
   // function. `clear` empties the log first: a switch must not leave the
   // previous chat's bubbles above the new one.
-  async function applySessionData(d, rev, clear) {
+  async function applySessionData(d, rev, clear, conversationId) {
+    if (conversationId) _setConversationId(conversationId);
     if (typeof rev === 'number') _srev = rev;
     if (clear) log.innerHTML = '';
     d = d || {};
@@ -4411,14 +4474,18 @@
     if (d.effort) { const c = document.getElementById('op-effort');
       if (c && [].some.call(c.options, o => o.value === d.effort)) c.value = d.effort; }
     // cache the adopted copy locally WITH its rev — and no re-push (nothing new)
-    try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign({_srev: _srev}, _sessionPayload()))); } catch {}
+    try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign(
+      {_srev: _srev, _conversation_id: _conversationId}, _sessionPayload()))); } catch {}
   }
   window._opApplySession = applySessionData;
   (async () => { try {
-    const r = await fetch(SESSION, {cache: 'no-store'});
+    const r = await fetch(SESSION + (_conversationId
+      ? '?conversation_id=' + encodeURIComponent(_conversationId) : ''),
+      {cache: 'no-store'});
     const j = await r.json();
+    if (j && j.ok && j.conversation_id) _setConversationId(j.conversation_id);
     if (!j || !j.ok || !j.data || j.rev === _srev) return;
-    await applySessionData(j.data, j.rev, false);
+    await applySessionData(j.data, j.rev, false, j.conversation_id);
   } catch(_){} })();
   setTimeout(async () => { try {
     // Restore the bot FIRST, then reload the model list for THAT bot — otherwise the
@@ -4504,13 +4571,18 @@
       listEl.textContent = '';
       const rows = j.sessions || [];
       if (!rows.length) { listEl.textContent = 'no chats yet'; return; }
-      rows.forEach(s => listEl.appendChild(row(s, j.active)));
+      rows.forEach(s => listEl.appendChild(row(s, _conversationId || j.active)));
     }
     async function switchTo(id, keepOpen){
       const j = await api(one(id), {method:'POST', headers:{'Content-Type':'application/json'},
                                     body: JSON.stringify({action:'activate'})});
       if (!j || !j.ok) return;
-      await window._opApplySession(j.data, j.rev, true);
+      _sessionFlush();                 // persist the chat we are leaving under its id
+      _setConversationId(id);
+      _agentSince = Date.now()/1000; _seenMsg.clear(); _sawRunning = false;
+      _handledState = ''; _lastAssistant = ''; _queue = []; _inFlight = false;
+      await window._opApplySession(j.data, j.rev, true, id);
+      refreshSendButton(); setFollowUp();
       try { const ctl = wireLaunchpadControls();
         if (!j.data || !j.data.log) ctl.showDefault();
         ctl.syncVisibility(); } catch(_){}
@@ -4521,7 +4593,12 @@
       if (!j || !j.ok) return;
       // New chat lands on the welcome view — the wordmark-and-composer splash,
       // which is what a fresh cockpit looks like.
-      await window._opApplySession(null, j.rev, true);
+      _sessionFlush();                 // persist the chat we are leaving under its id
+      _setConversationId(j.id);
+      _agentSince = Date.now()/1000; _seenMsg.clear(); _sawRunning = false;
+      _handledState = ''; _lastAssistant = ''; _queue = []; _inFlight = false;
+      await window._opApplySession(null, j.rev, true, j.id);
+      refreshSendButton(); setFollowUp();
       try { const ctl = wireLaunchpadControls(); ctl.showDefault(); ctl.syncVisibility(); } catch(_){}
       pop.hidden = true;
     };
@@ -4632,8 +4709,8 @@
     op.dataset.busy='1'; setCardText(actTxt, 'Starting up');
     setCardSub(bot, '');
     try { const d = await (await fetch(DISPATCH, { method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify({bot, task:txt, model: o.model || (document.getElementById('op-model')||{}).value||'', effort: o.effort || (document.getElementById('op-effort')||{}).value||'',
-        surface: o.surface || _surfaceActive, real_ok: (_surfaceActive==='desktop-real' && _realOk)}) })).json();
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(_conversationPayload({bot, task:txt, model: o.model || (document.getElementById('op-model')||{}).value||'', effort: o.effort || (document.getElementById('op-effort')||{}).value||'',
+        surface: o.surface || _surfaceActive, real_ok: (_surfaceActive==='desktop-real' && _realOk)})) })).json();
       // _runProgressTs is the dead-run watchdog's anchor and MUST start fresh
       // each turn: the 'done' path used to leave it at the previous run's last
       // progress time, so the next dispatch compared "dead for 15s?" against an
@@ -4657,7 +4734,7 @@
         // steering, NOT an error — close the current turn quietly as "Steered"
         // (no Interrupted/error UI, no extra message). Stop (■) is unchanged.
         _interrupting = true; _steering = true;   // hard-suppress terminal handling until the new run is RUNNING
-        try { await fetch(STOP_URL, {method:'POST'}); } catch(_){}
+        try { await fetch(STOP_URL, _conversationPost()); } catch(_){}
         if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
         op.dataset.busy='0'; op.dataset.agent='';
         _inFlight = false;
@@ -4711,7 +4788,7 @@
   let _interrupting = false;
   async function stopAgent(){
     _interrupting = true;
-    try { await fetch(STOP_URL, {method:'POST'}); } catch {}
+    try { await fetch(STOP_URL, _conversationPost()); } catch {}
     if (_task) { try { taskError('Interrupted', 'Stopped by user.'); finishTask(true, 'Interrupted'); } catch(_){} }
     op.dataset.busy='0'; op.dataset.agent='errored'; setCardText(actTxt, 'Interrupted');
     setCardSub(selectedBot()||'', '');

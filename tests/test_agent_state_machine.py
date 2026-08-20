@@ -336,15 +336,15 @@ def _agy_start(runner, monkeypatch, **kw):
 
 
 def test_agy_bare_slug_keeps_separate_effort(runner, monkeypatch):
-    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.6-flash", effort="medium")
-    assert model == "gemini-3.6-flash"   # no "(Medium)" folded in
+    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.7-flash", effort="medium")
+    assert model == "gemini-3.7-flash"   # no "(Medium)" folded in
     assert effort == "medium"            # rides its own --effort flag
 
 
 def test_agy_baked_tier_slug_drops_effort(runner, monkeypatch):
     # tier already in the slug → sending --effort too would 400 in agy
-    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.6-flash-low", effort="high")
-    assert model == "gemini-3.6-flash-low"
+    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.7-flash-low", effort="high")
+    assert model == "gemini-3.7-flash-low"
     assert effort == ""
 
 
@@ -359,5 +359,5 @@ def test_agy_display_name_entry_drops_effort(runner, monkeypatch):
 
 def test_agy_defaults_to_current_flash_slug(runner, monkeypatch):
     model, effort = _agy_start(runner, monkeypatch, model="", effort="")
-    assert model == "gemini-3.6-flash"
+    assert model == "gemini-3.7-flash"
     assert effort == "high"
