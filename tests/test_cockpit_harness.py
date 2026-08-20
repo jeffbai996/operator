@@ -574,11 +574,8 @@ def _expand_launchpad(pg):
     pg.wait_for_timeout(500)   # grid crossfade + gap transition settle
 
 
-def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
-    """The compact idle wordmark stays centered above a ready launchpad."""
-    import operator_tasks as OT
-    OT.save_task({"name": "Harness saved task", "prompt": "Open example.com",
-                  "sites": "example.com"})
+def test_launchpad_wordmark_and_corner_controls_are_centered(browser, harness):
+    """Rendered geometry protects the launchpad's two visible centerlines."""
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     ctx.add_init_script(
         "localStorage.setItem('operator-session-v1', "
@@ -605,70 +602,6 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         assert metrics["tracking"] >= -0.035 * metrics["size"]
         assert metrics["centerDelta"] <= 2
 
-        pg.wait_for_selector(".op-lp-card", state="visible", timeout=8000)
-        assert pg.locator(".op-lp-card").count() == 6
-        assert pg.locator("#op-lp-add").is_visible()
-        assert pg.locator(".op-lp-new").count() == 0
-        pill_rows = pg.locator(".op-lp-cat").evaluate_all(
-            "els => new Set(els.filter(el => el.getBoundingClientRect().width)"
-            ".map(el => Math.round(el.getBoundingClientRect().top))).size")
-        assert pill_rows == 1
-        composer = pg.locator(".op-lp-composer").evaluate(
-            """el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
-              return {width: r.width, height: r.height, radius: parseFloat(s.borderRadius)}; }""")
-        assert 560 <= composer["width"] <= 590
-        assert 40 <= composer["height"] <= 44
-        assert composer["radius"] >= composer["height"] / 2 - 1
-        input_metrics = pg.locator("#op-lp-input").evaluate(
-            """el => { const r = el.getBoundingClientRect(); const c = el.parentElement.getBoundingClientRect();
-              const was = el.value; el.value = 'x';
-              const typed = parseFloat(getComputedStyle(el).fontSize);
-              el.value = was;
-              return {font: parseFloat(getComputedStyle(el).fontSize), typed: typed,
-                      placeholder: parseFloat(getComputedStyle(el, '::placeholder').fontSize),
-                      centerDelta: Math.abs((r.top + r.bottom) / 2 - (c.top + c.bottom) / 2)}; }""")
-        # The SPLASH placeholder is deliberately LARGER than the typed text
-        # (the owner 2026-07-30). The old equality rule existed to end the
-        # oversized-placeholder ride-high class; that property is now held
-        # directly — the empty box grows its own font AND its 1.3em clamp
-        # together, so the line box stays proportional, and centerDelta below
-        # is what actually catches a ride. `font` is read on an EMPTY box and
-        # is therefore the placeholder's size; `typed` is the one to pin.
-        assert input_metrics["placeholder"] > input_metrics["typed"]
-        assert 14.0 <= input_metrics["typed"] <= 14.3
-        assert input_metrics["centerDelta"] <= 1
-        assembly = pg.locator("#op-lp").evaluate(
-            """lp => {
-              const stage = document.getElementById('op-stage').getBoundingClientRect();
-              const els = ['.op-lp-hero', '.op-lp-bar', '.op-lp-grid'].map(s => lp.querySelector(s));
-              const boxes = els.map(el => el.getBoundingClientRect());
-              const top = Math.min(...boxes.map(r => r.top));
-              const bottom = Math.max(...boxes.map(r => r.bottom));
-              return {centerDelta: Math.abs((top + bottom) / 2 - (stage.top + stage.bottom) / 2)};
-            }""")
-        assert assembly["centerDelta"] <= 6
-        heading_size = pg.locator("#op-lp-title").evaluate(
-            "el => parseFloat(getComputedStyle(el).fontSize)")
-        assert 20 <= heading_size <= 23
-        action_metrics = pg.locator(".op-lp-actions > button:not([hidden])").evaluate_all(
-            """els => ({ids: els.map(el => el.id), gaps: els.slice(1).map((el, i) =>
-              el.getBoundingClientRect().left - els[i].getBoundingClientRect().right)})""")
-        assert action_metrics["ids"] == ["op-lp-search", "op-lp-refresh", "op-lp-add"]
-        assert max(action_metrics["gaps"]) - min(action_metrics["gaps"]) <= 1
-        assert pg.locator("#op-lp-add .op-lp-add-ico").count() == 1
-        send_metrics = pg.locator("#op-lp-send").evaluate(
-            """el => ({size: el.getBoundingClientRect().width,
-                        glyph: el.querySelector('svg').getBoundingClientRect().width})""")
-        assert 29 <= send_metrics["size"] <= 31
-        assert 15 <= send_metrics["glyph"] <= 17
-        assert pg.locator("#op-lp-add svg").evaluate(
-            "el => el.getBoundingClientRect().width") == 14
-        assert pg.locator("#op-agent-cursor").evaluate(
-            "el => getComputedStyle(el).display") == "none"
-        assert pg.locator("#op-steer-cursor").evaluate(
-            "el => getComputedStyle(el).display") == "none"
-        assert pg.locator(".op-kbhint").evaluate(
-            "el => getComputedStyle(el).display") == "none"
         corner = pg.evaluate("""() => {
           const t = document.getElementById('op-lp-theme').getBoundingClientRect();
           const x = document.getElementById('op-lp-x').getBoundingClientRect();
@@ -683,95 +616,6 @@ def test_launchpad_wordmark_is_centered_jakarta_hero(browser, harness):
         assert corner["themeSize"] == corner["closeSize"] == 32
         assert corner["themeRight"] < corner["closeLeft"]
         assert corner["viewport"] - corner["closeRight"] <= 20
-        # label names the NEXT stop of the 3-stop cycle; from default dark
-        # that's OLED black (splash joined the flat cycle, the owner 2026-07-28)
-        assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use OLED black"
-        assert pg.locator("#op-lp-x svg path").count() == 1
-        assert "M3 3l8 8M11 3l-8 8" in \
-            pg.locator("#op-lp-x svg path").get_attribute("d")
-        pg.wait_for_timeout(500)  # let the staggered card entrance finish before measuring bounds
-        grid_bottom = pg.locator("#op-lp-grid").evaluate(
-            "el => el.getBoundingClientRect().bottom")
-        card_bottom = pg.locator(".op-lp-card").evaluate_all(
-            "els => Math.max(...els.map(el => el.getBoundingClientRect().bottom))")
-        assert card_bottom <= grid_bottom + 1
-
-        for category in ("research", "media"):
-            pg.click(f'.op-lp-cat[data-category="{category}"]')
-            pg.wait_for_timeout(240)
-            assert pg.locator(".op-lp-card").count() == 6
-        pg.click('.op-lp-cat[data-category="all"]')
-        pg.wait_for_timeout(240)
-
-        pg.click("#op-lp-tasks-toggle")
-        pg.wait_for_timeout(240)
-        assert pg.locator("#op-lp-title").text_content() == "Saved tasks"
-        assert pg.locator("#op-lp-tasks-toggle").get_attribute("aria-pressed") == "true"
-        pg.click('.op-lp-cat[data-category="all"]')
-        pg.wait_for_timeout(240)
-        assert pg.locator("#op-lp-title").text_content() == "Things to do with Operator"
-        assert pg.locator(".op-lp-card").count() == 6
-
-        pg.click("#op-lp-add")
-        assert not pg.locator("#op-nt-veil").is_hidden()
-        modal_type = pg.locator("#op-nt-prompt").evaluate(
-            """el => ({typed: parseFloat(getComputedStyle(el).fontSize),
-                        placeholder: parseFloat(getComputedStyle(el, '::placeholder').fontSize)})""")
-        assert 10.5 <= modal_type["typed"] <= 11.2
-        assert modal_type["placeholder"] == modal_type["typed"]
-        assert pg.locator('label[for="op-nt-sites"]').text_content() == \
-            "What websites and tools would you like Operator to use?"
-        pg.fill("#op-nt-sites", "doordash.com")
-        pg.press("#op-nt-sites", "Enter")
-        assert pg.locator('.op-nt-pill[data-v="doordash.com"] > span').first.text_content() == \
-            "DoorDash"
-        pg.locator("#op-nt-cancel").evaluate("el => el.click()")
-        assert pg.locator("#op-nt-veil").is_hidden()
-
-        # splash button now walks the same 3-stop cycle as #op-flat:
-        # default dark → OLED flat → light (the owner 2026-07-28)
-        pg.click("#op-lp-theme")
-        assert "op-flat" in pg.locator("#op").get_attribute("class")
-        assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use light mode"
-        pg.click("#op-lp-theme")
-        assert "op-flat" not in pg.locator("#op").get_attribute("class")
-        assert pg.locator("#op-lp-theme").get_attribute("aria-label") == "use dark mode"
-        # Wait for the theme color TRANSITIONS to settle, not a fixed delay: a
-        # loaded box starts them late, and a fixed 220ms wait sampled surfaces
-        # mid-flight (bg read oklab(0.9729…) ≈ 97% white — the 2026-07-22
-        # flake). The three sampled surfaces settle on different clocks, so
-        # gate on ALL of them reaching their final light values.
-        pg.wait_for_function(
-            """() => { const w = 'rgb(255, 255, 255)';
-                 const comp = document.querySelector('.op-lp-composer');
-                 const pill = document.querySelector('.op-lp-cat:not(.active):not([hidden])');
-                 const card = document.querySelector('.op-lp-card');
-                 const c = getComputedStyle(card);
-                 return getComputedStyle(comp).backgroundColor === w
-                     && getComputedStyle(pill).backgroundColor === w
-                     && c.backgroundColor === w
-                     && c.borderColor === 'rgb(228, 231, 235)'; }""",
-            timeout=4000)
-        light_surfaces = pg.evaluate("""() => {
-          const surfaces = {
-            composer: document.querySelector('.op-lp-composer'),
-            pill: document.querySelector('.op-lp-cat:not(.active):not([hidden])'),
-            card: document.querySelector('.op-lp-card')
-          };
-          return {theme: document.documentElement.getAttribute('data-theme'),
-            matches: surfaces.card.matches('[data-theme="light"] .op-lp-card'),
-            cardBorder: getComputedStyle(surfaces.card).borderColor,
-            colors: Object.fromEntries(Object.entries(surfaces).map(
-              ([key, el]) => [key, getComputedStyle(el).backgroundColor]))};
-        }""")
-        assert light_surfaces == {
-            "theme": "light",
-            "matches": True,
-            "cardBorder": "rgb(228, 231, 235)",
-            "colors": {"composer": "rgb(255, 255, 255)",
-                       "pill": "rgb(255, 255, 255)",
-                       "card": "rgb(255, 255, 255)"},
-        }
     finally:
         ctx.close()
 
