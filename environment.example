@@ -1,0 +1,20 @@
+# Operator configuration — copy values into your preferred private environment file.
+
+# Server (all optional; defaults are loopback:5005)
+OPERATOR_HOST=127.0.0.1
+OPERATOR_PORT=5005
+# OPERATOR_DEBUG=1
+
+# Browser
+OPERATOR_CHROME_PORT=9222
+# OPERATOR_CHROME_BIN=/path/to/chrome
+# OPERATOR_CHROME_PROFILE=/path/to/private/profile
+OPERATOR_VIEWPORT=1500x1360
+
+# Agent runtime: prefer a logged-in local CLI subscription.
+# CLAUDE_CONFIG_DIR=/path/to/private/claude/config
+# CODEX_HOME=/path/to/private/codex/config
+
+# Metered API fallback; keep actual keys only in an untracked private file.
+# ANTHROPIC_API_KEY=
+# OPENAI_API_KEY=

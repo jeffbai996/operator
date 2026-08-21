@@ -45,6 +45,10 @@ OP_VERSION = "1.0.40"
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
 # unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
 DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
+DEMO_INTERACTIVE = (
+    DEMO
+    and _os_cfg.environ.get("OPERATOR_UNSAFE_DEMO_INTERACTIVE") == "1"
+)
 # Standalone full-function instances (operator-fam): the cockpit is the whole
 # app — the template hides the host-app site chrome and takes the viewport.
 # Unset for the host-app-mounted cockpit (no behavior change).
@@ -281,6 +285,14 @@ def _reject_cross_origin_mutations():
     internal callers remain compatible because they are already inside that
     trusted perimeter.
     """
+    if DEMO and not DEMO_INTERACTIVE and request.endpoint not in {
+            "operator.operator_page",
+            "operator.operator_demo_page",
+            "operator._cockpit_redirect",
+            "operator.operator_models",
+            "operator.static",
+    }:
+        return jsonify(ok=False, error="the public Operator demo is read-only"), 403
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
 
@@ -323,16 +335,19 @@ def _revisioned_static_delivery(resp):
     and cache for a year; unrevisioned assets retain Flask's conservative
     policy so a forgotten revision bump cannot pin stale bytes indefinitely.
     """
-    if request.endpoint != "operator.static" or not request.args.get("rev"):
-        return resp
-    if resp.status_code < 200 or resp.status_code >= 300:
-        return resp
-    ctype = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip()
-    if ctype in ("text/css", "application/javascript", "text/javascript"):
-        # The app-level compression hook runs after this blueprint hook. Let it
-        # read the body rather than skipping Flask's send-file passthrough.
-        resp.direct_passthrough = False
-    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    if DEMO and not DEMO_INTERACTIVE:
+        resp.headers["X-Operator-Demo"] = "read-only"
+    if request.endpoint == "operator.static" and request.args.get("rev"):
+        if 200 <= resp.status_code < 300:
+            ctype = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip()
+            if ctype in ("text/css", "application/javascript", "text/javascript"):
+                # The app-level compression hook runs after this blueprint hook.
+                resp.direct_passthrough = False
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
 import base64 as _b64ph
@@ -2984,7 +2999,8 @@ def operator_page():
     if "x" in _stage:
         _w, _, _h = _stage.partition("x")
         _streamer.seed_view_from_stage(_w, _h)
-    resp = make_response(render_template(_tmpl, standalone=STANDALONE))
+    resp = make_response(render_template(
+        _tmpl, standalone=STANDALONE, demo_interactive=DEMO_INTERACTIVE))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
@@ -3238,7 +3254,7 @@ def operator_shot(name):
     if d is None:
         abort(404)
     resp = send_from_directory(d, base)
-    resp.headers["Cache-Control"] = "public, max-age=86400"
+    resp.headers["Cache-Control"] = "private, no-store, max-age=0"
     return resp
 
 
@@ -3579,6 +3595,8 @@ _EVENT_LOG = _os.path.expanduser("~/.cache/computer-use/operator-events.ndjson")
 
 def _recent_events(limit: int = 40) -> list:
     """Tail the action-tap event log → recent {bot,action,detail,ts} events."""
+    if DEMO:
+        return []
     try:
         with open(_EVENT_LOG, encoding="utf-8") as f:
             lines = f.readlines()[-limit:]
