@@ -211,10 +211,19 @@ def test_harmony_final_channel_extracted():
 # ── shot_dirs (R3: the single source of truth) ───────────────────────────────
 
 def test_shot_dirs_env_override_and_bot_dirs(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPERATOR_DEMO", raising=False)
     monkeypatch.setenv("COMPUTER_USE_OUTPUT_DIR", str(tmp_path))
     dirs = OT.shot_dirs()
     assert dirs[0] == str(tmp_path)
     assert any(d.endswith("/.operator-sessions/gpt") for d in dirs)
+
+
+def test_demo_shot_dirs_are_dedicated(monkeypatch, tmp_path):
+    demo_dir = tmp_path / "demo"
+    monkeypatch.setenv("OPERATOR_DEMO", "1")
+    monkeypatch.setenv("OPERATOR_DEMO_OUTPUT_DIR", str(demo_dir))
+    monkeypatch.setenv("COMPUTER_USE_OUTPUT_DIR", str(tmp_path / "private"))
+    assert OT.shot_dirs() == [str(demo_dir)]
 
 
 def test_view_and_trace_agree_on_shot_dirs():

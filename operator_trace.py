@@ -20,6 +20,10 @@ def shot_dirs() -> list[str]:
     the MCP screenshot output dir, plus each bot's session cwd (gpt/codex
     save screenshots there rather than in the MCP output dir).
     """
+    if os.environ.get("OPERATOR_DEMO") == "1":
+        return [os.path.realpath(os.path.expanduser(
+            os.environ.get("OPERATOR_DEMO_OUTPUT_DIR")
+            or "~/.cache/computer-use/operator-demo"))]
     return [os.path.realpath(os.path.expanduser(
         os.environ.get("COMPUTER_USE_OUTPUT_DIR")
         or os.environ.get("PLAYWRIGHT_OUTPUT_DIR")

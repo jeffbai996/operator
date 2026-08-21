@@ -5,6 +5,26 @@
 // (Jinja mangles it — see the 1.0.13 post-mortem in the module docs).
 (function () {
   const op = document.getElementById('op');
+  const demoReadOnly = document.body.classList.contains('op-demo')
+    && document.body.dataset.operatorInteractive !== '1';
+  if (demoReadOnly) {
+    const launchpad = document.getElementById('op-lp');
+    if (launchpad) {
+      launchpad.style.transition = 'none';
+      launchpad.style.transform = 'none';
+      launchpad.style.opacity = '1';
+    }
+    op.classList.remove('op-booting');
+    op.classList.add('op-ready');
+    op.dataset.state = 'idle';
+    if (launchpad) launchpad.classList.remove('op-lp-collapsed');
+    document.querySelectorAll('button, input, textarea, select').forEach(el => {
+      if (!el.closest('#op-about')) el.disabled = true;
+    });
+    const note = document.getElementById('op-lp-demonote');
+    if (note) note.textContent = 'Read-only preview — interactive control is not exposed publicly.';
+    return;
+  }
   // Double-tap/click on the chat rail was selecting the last word of the nearest
   // message bubble (the owner: "double-tap highlights the last word in the chat box").
   // Swallow the native word-select EXCEPT inside a real input/textarea, where
@@ -1112,7 +1132,8 @@
     const users = log.querySelectorAll('.op-msg.user');
     users.forEach((u,i)=> u.classList.toggle('op-last-user', i === users.length-1));
   }
-  function _esc(t){ return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function _esc(t){ return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   function _mdInline(t){
     // operate on already-escaped text; safe because no raw HTML survives _esc.
     // Order: inline-code first (so its contents aren't re-formatted), then bold,

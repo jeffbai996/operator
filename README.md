@@ -1,14 +1,14 @@
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.0.37.svg">
-    <img src="docs/img/operator-lockup-light-v1.0.37.svg" height="72" alt="Operator v1.0.37">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.0.40.svg">
+    <img src="docs/img/operator-lockup-light-v1.0.40.svg" height="72" alt="Operator v1.0.40">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
 
 <p>
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
-  <img src="https://img.shields.io/badge/version-1.0.37-5965d8" alt="version 1.0.37">
+  <img src="https://img.shields.io/badge/version-1.0.40-5965d8" alt="version 1.0.40">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
   <img src="https://img.shields.io/badge/agents-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini-8a63d2" alt="agent runtimes">
   <img src="https://img.shields.io/badge/auth-subscription%2C%20no%20API%20keys-2ea44f" alt="subscription auth">
@@ -49,14 +49,14 @@ cd operator
 One script does everything: venv + deps, launches the automation Chrome
 (sign into your sites in that window, once), reports which agent runtimes and
 surfaces it found, and serves the cockpit. Idempotent — re-run it any time.
-No required config; `.env.example` documents the optional knobs.
+No required config; `environment.example` documents the optional knobs without
+using a filename that could be mistaken for a safe place to commit secrets.
 
 <details>
 <summary>Manual steps (what start.sh does)</summary>
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env          # optional — defaults are fine
 bash browse/chrome-attach.sh  # the browser the agent drives (logged-in, separate profile)
 python app.py                 # open http://127.0.0.1:5005
 ```
@@ -67,13 +67,20 @@ python app.py                 # open http://127.0.0.1:5005
 - **GPT** — install the `codex` CLI and sign in (creds in `~/.codex`)
 
 Operator detects whichever you have and drives the browser with it. An API-key
-fallback is documented in `.env.example`, but driving a browser over the API is
+fallback is documented in `environment.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.37** — conversation-scoped runners with bounded concurrency,
-> correct viewport sizing on first paint and re-entry, hard browser-availability
-> preflight, and restart draining that refuses new work before a deployment and
-> lets active runs finish.
+> **Status:** **v1.0.40** — a cleaner, truthful cockpit header: the version is
+> close-set in Urbanist, SANDBOX and COMPUTER stay visibly labeled, and the
+> three-stop theme control moves smoothly. Human-handoff alerts now say exactly
+> what needs attention once.
+
+## Distribution
+
+Operator ships as a runnable application, not a Python library. Use the tagged
+source archive and `./start.sh`; a PyPI wheel would omit or awkwardly relocate
+the browser launcher, templates, static assets, and desktop-control helpers that
+must stay together, without making installation meaningfully easier.
 
 ## Things worth trying
 
@@ -185,6 +192,24 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.0.40** — **one clear handoff + a finished header**. Human-handoff alerts
+use one clear headline and keep the specific takeover instruction in the body,
+without repeating it. The compact wordmark sets its close-coupled version in a
+self-hosted Urbanist subset; yellow SANDBOX and red COMPUTER badges both remain
+explicit and optically centered. The theme control now crossfades and rotates
+between its sun/moon states instead of snapping through `display:none`, with an
+instant reduced-motion path.
+
+**v1.0.39** — **alerts mean the human is needed**. Routine activity, failures,
+and completions stay in the cockpit. The optional alert channel receives a card
+only for an explicit `TAKE_CONTROL` handoff, including token-cap takeovers.
+
+**Public-demo hardening (2026-08-21)** — demo mode is an inert preview by
+default. Runtime state, frames, screenshots, tasks, steering, and dispatch stay
+behind an explicit unsafe local-test flag; screenshot responses are non-cacheable,
+browser mutations receive same-origin checks, and markdown attributes escape
+quote delimiters.
 
 **v1.0.37** — **correct on arrival + restart-safe runs**. The cockpit force-sends
 its visible stage geometry on first load and on re-entry, even when its saved

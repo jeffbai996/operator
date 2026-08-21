@@ -231,3 +231,26 @@ def test_fenced_pipe_table_promotion(page, src, want_table, why):
     html = page.evaluate("(s) => window._opMdToHtml(s)", src)
     got = "<table" in html
     assert got is want_table, f"{why}\n  src={src!r}\n  html={html[:200]!r}"
+
+
+@pytest.mark.parametrize("src,selector", [
+    ('[safe](https://example.test"/onmouseover="window.__operatorPwned=1)', 'a'),
+    ('![safe](https://example.test"/onerror="window.__operatorPwned=1)', 'img'),
+])
+def test_markdown_urls_cannot_break_out_of_attributes(page, src, selector):
+    got = page.evaluate("""([src, selector]) => {
+      window.__operatorPwned = 0;
+      const host = document.createElement('div');
+      host.innerHTML = window._opMdToHtml(src);
+      document.body.appendChild(host);
+      const node = host.querySelector(selector);
+      if (node && selector === 'img') node.dispatchEvent(new Event('error'));
+      if (node && selector === 'a') node.dispatchEvent(new MouseEvent('mouseover'));
+      const out = {found: !!node,
+        eventAttr: node && (node.getAttribute('onerror') || node.getAttribute('onmouseover')),
+        executed: window.__operatorPwned, html: host.innerHTML};
+      host.remove(); return out;
+    }""", [src, selector])
+    assert got["found"] is True
+    assert got["eventAttr"] is None, got["html"]
+    assert got["executed"] == 0, got["html"]

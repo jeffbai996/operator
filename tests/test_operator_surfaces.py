@@ -20,11 +20,15 @@ _STUB_BASE = ("<!doctype html><title>{% block title %}{% endblock %}</title>"
               "{% block content %}{% endblock %}")
 
 
-def _build_app(demo: bool):
+def _build_app(demo: bool, *, interactive: bool = False):
     if demo:
         os.environ["OPERATOR_DEMO"] = "1"
     else:
         os.environ.pop("OPERATOR_DEMO", None)
+    if interactive:
+        os.environ["OPERATOR_UNSAFE_DEMO_INTERACTIVE"] = "1"
+    else:
+        os.environ.pop("OPERATOR_UNSAFE_DEMO_INTERACTIVE", None)
     mod = importlib.reload(OV)
     app = Flask(__name__)
     app.config["TESTING"] = True
@@ -81,10 +85,42 @@ def demo():
     yield app.test_client(), mod, rec
     OA.runner = orig
     os.environ.pop("OPERATOR_DEMO", None)
+    os.environ.pop("OPERATOR_UNSAFE_DEMO_INTERACTIVE", None)
     # the demo module scopes the sandbox to its own container via env — scrub it
     # so a later live reload in this process doesn't inherit the demo name
     os.environ.pop("OPERATOR_SANDBOX_CONTAINER", None)
     importlib.reload(OV)
+
+
+@pytest.fixture
+def unsafe_demo():
+    """Exercise the retired interactive design behind its local-test flag."""
+    app, mod = _build_app(demo=True, interactive=True)
+    rec = StartRecorder()
+    orig = OA.runner
+    OA.runner = rec
+    mod._streamer.ensure_running = lambda: None
+    mod._streamer._ensure_chrome_alive = lambda: None
+    yield app.test_client(), mod, rec
+    OA.runner = orig
+    os.environ.pop("OPERATOR_DEMO", None)
+    os.environ.pop("OPERATOR_UNSAFE_DEMO_INTERACTIVE", None)
+    os.environ.pop("OPERATOR_SANDBOX_CONTAINER", None)
+    importlib.reload(OV)
+
+
+def test_read_only_demo_blocks_surface_and_dispatch_routes(demo):
+    c, _mod, rec = demo
+    for method, path in (
+        ("get", "/operator/surfaces"),
+        ("get", "/operator/maps"),
+        ("post", "/operator/surface"),
+        ("post", "/operator/dispatch"),
+    ):
+        response = getattr(c, method)(path, json={} if method == "post" else None)
+        assert response.status_code == 403
+        assert response.get_json()["error"] == "the public Operator demo is read-only"
+    assert rec.calls == []
 
 
 # ── /operator/surfaces ───────────────────────────────────────────────────────
@@ -97,8 +133,8 @@ def test_surfaces_lists_all_three_live(live):
     assert all("available" in s for s in d["surfaces"])
 
 
-def test_surfaces_demo_grays_out_real_keeps_sandbox(demo):
-    c, mod, _ = demo
+def test_unsafe_local_demo_grays_out_real_keeps_sandbox(unsafe_demo):
+    c, mod, _ = unsafe_demo
     mod._surface_available = lambda k: k != "desktop-real"
     d = c.get("/operator/surfaces").get_json()
     by = {s["key"]: s for s in d["surfaces"]}
@@ -117,8 +153,8 @@ def test_maps_lists_shipped_maps_live(live):
     assert "lichess" in d["maps"] and "openrsc" in d["maps"]
 
 
-def test_maps_empty_in_demo(demo):
-    c, mod, _ = demo
+def test_maps_empty_in_unsafe_local_demo(unsafe_demo):
+    c, mod, _ = unsafe_demo
     assert c.get("/operator/maps").get_json()["maps"] == []
 
 
@@ -158,8 +194,8 @@ def test_switch_unavailable_surface_409(live):
     assert r.status_code == 409
 
 
-def test_switch_demo_allows_sandbox_blocks_real(demo):
-    c, mod, _ = demo
+def test_switch_unsafe_local_demo_allows_sandbox_blocks_real(unsafe_demo):
+    c, mod, _ = unsafe_demo
     mod._surface_available = lambda k: True
     mod._desktop_feed.ensure_running = lambda s: None
     # real desktop: hard 403, even with confirm — live-cockpit only
@@ -271,9 +307,9 @@ def test_dispatch_passes_surface_and_real_ok(live):
     mod._active_surface["name"] = "browser"
 
 
-def test_dispatch_demo_never_reaches_real_desktop(demo):
+def test_dispatch_unsafe_local_demo_never_reaches_real_desktop(unsafe_demo):
     # #27: a crafted desktop-real ask (even with real_ok) coerces to browser
-    c, mod, rec = demo
+    c, mod, rec = unsafe_demo
     r = c.post("/operator/dispatch", json={
         "bot": "claude-a", "task": "x", "surface": "desktop-real",
         "real_ok": True})
@@ -283,9 +319,9 @@ def test_dispatch_demo_never_reaches_real_desktop(demo):
     assert not rec.calls[-1].get("real_ok")
 
 
-def test_dispatch_demo_may_drive_the_isolated_sandbox(demo):
+def test_dispatch_unsafe_local_demo_may_drive_the_isolated_sandbox(unsafe_demo):
     # #27: the demo forwards desktop-sandbox (the isolated demo container)
-    c, mod, rec = demo
+    c, mod, rec = unsafe_demo
     r = c.post("/operator/dispatch", json={
         "bot": "claude-a", "task": "x", "surface": "desktop-sandbox"})
     assert r.status_code == 200

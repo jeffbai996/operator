@@ -531,7 +531,7 @@ def test_example_library_is_large_varied_and_site_backed() -> None:
     }
 
 
-def _build_app(demo: bool):
+def _build_app(demo: bool, *, interactive: bool = False):
     """Reload operator_view under the requested DEMO env, mount its blueprint on
     a throwaway Flask app, return (app, module). Reloading rebinds the module's
     DEMO constant + re-decorates the routes; it does NOT re-import operator_agent
@@ -546,6 +546,10 @@ def _build_app(demo: bool):
         os.environ["OPERATOR_DEMO"] = "1"
     else:
         os.environ.pop("OPERATOR_DEMO", None)
+    if demo and interactive:
+        os.environ["OPERATOR_UNSAFE_DEMO_INTERACTIVE"] = "1"
+    else:
+        os.environ.pop("OPERATOR_UNSAFE_DEMO_INTERACTIVE", None)
     mod = importlib.reload(OV)
     app = Flask(__name__)
     app.config["TESTING"] = True
@@ -566,10 +570,55 @@ def live():
 
 @pytest.fixture
 def demo():
-    """Public-demo app (OPERATOR_DEMO=1)."""
-    app, mod = _build_app(demo=True)
+    """Explicit local-only interactive demo used by legacy behavior tests."""
+    app, mod = _build_app(demo=True, interactive=True)
     yield app.test_client(), mod
     _build_app(demo=False)   # always restore live so we don't leak DEMO into siblings
+
+
+@pytest.fixture
+def public_demo():
+    """The Internet-facing default: visible shell, inert runtime boundary."""
+    app, mod = _build_app(demo=True, interactive=False)
+    yield app.test_client(), mod
+    _build_app(demo=False)
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/operator/frame"),
+    ("GET", "/operator/status"),
+    ("GET", "/operator/agent"),
+    ("GET", "/operator/driver-status"),
+    ("GET", "/operator/shot/guess.png"),
+    ("POST", "/operator/steer"),
+    ("POST", "/operator/dispatch"),
+    ("POST", "/operator/tasks"),
+    ("DELETE", "/operator/tasks/example"),
+])
+def test_public_demo_is_read_only_by_default(public_demo, method, path):
+    client, _ = public_demo
+    response = client.open(path, method=method, json={})
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "the public Operator demo is read-only"
+    assert response.headers["X-Operator-Demo"] == "read-only"
+
+
+def test_public_demo_page_is_static_and_security_headered(public_demo):
+    client, _ = public_demo
+    response = client.get("/operator")
+    assert response.status_code == 200
+    assert 'data-operator-interactive="0"' in response.get_data(as_text=True)
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_demo_never_reads_shared_action_log(demo, monkeypatch, tmp_path):
+    _, mod = demo
+    private_log = tmp_path / "operator-events.ndjson"
+    private_log.write_text('{"bot":"private","detail":"private"}\n', encoding="utf-8")
+    monkeypatch.setattr(mod, "_EVENT_LOG", str(private_log))
+    assert mod._recent_events() == []
 
 
 # ── runner / streamer fakes ──────────────────────────────────────────────────
