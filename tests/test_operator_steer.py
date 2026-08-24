@@ -402,7 +402,7 @@ def test_say_route_validation_and_states(store, monkeypatch):
 def test_snapshot_exposes_live_token_burn(store, monkeypatch):
     """1.0.15: the ledger's token numbers are visible WHILE the run burns."""
     r = _runner(monkeypatch, store)
-    r._cum_in_tokens = 2_400_000
+    r._cumulative_in_tokens = 2_400_000
     r._peak_in_tokens = 900_000
     snap = r.snapshot()
     assert snap["cum_in_tokens"] == 2_400_000

@@ -16,7 +16,7 @@
       href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
 {% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1169">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1172">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -266,6 +266,12 @@
     </div>
     <div class="op-stage" id="op-stage" tabindex="0" aria-label="live browser — click to interact, focus to type">
       <img class="op-view" id="op-view" alt="">
+      {# A focusable div receives hardware-key events, but iOS will not open its
+         software keyboard. A quick feed tap focuses this offscreen textarea;
+         operator.js drains its input into /operator/steer. #}
+      <textarea class="op-key-capture" id="op-key-capture" tabindex="-1" rows="1"
+                aria-label="remote browser keyboard input" autocomplete="off"
+                autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
       <!-- ships COLLAPSED: initLaunchpad() runs post-paint (setTimeout 0), so an
            expanded first paint flashed the category tabs + card grid for ~400ms
            on every splash refresh before the JS collapse landed (the owner 2026-07-20). -->
@@ -488,5 +494,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1159"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1164"></script>
 {% endblock %}

@@ -29,7 +29,7 @@ def _fake_runner(**over):
         bot="claude-a", task="price a grocery run", state="done",
         model="claude-sonnet-5", effort="medium", surface="browser",
         demo=False, started_ts=time.time() - 42.0, ended_ts=time.time(),
-        _runtime="claude", _cum_in_tokens=123_456, _peak_in_tokens=45_000,
+        _runtime="claude", _cumulative_in_tokens=123_456, _peak_in_tokens=45_000,
         messages=[{"ts": time.time(), "role": "assistant", "text": "done!"}],
     )
     for k, v in over.items():
@@ -89,7 +89,7 @@ def test_live_pre_conversation_schema_migrates_without_losing_rows(store, tmp_pa
 def test_record_never_raises_on_garbage(store):
     r = _fake_runner(messages=[{"ts": 1, "obj": object()}],   # unserializable
                      started_ts=None, ended_ts=None,
-                     _cum_in_tokens="not a number")
+                     _cumulative_in_tokens="not a number")
     rid = store.record(r, reason="exit 0")
     assert rid is not None                    # degraded, but recorded
     assert store.get(rid)["task"] == "price a grocery run"

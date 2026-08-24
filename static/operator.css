@@ -16,6 +16,13 @@
     font-display: swap;
     src: url('fonts/pjs-wordmark-750.woff2') format('woff2');
   }
+  @font-face {
+    font-family: 'Urbanist';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('fonts/urbanist-latin.woff2') format('woff2');
+  }
   /* color-scheme drives the UA's overlay-scrollbar thumb shade (and form
      control chrome): without it WebKit kept painting LIGHT thumbs over the
      light theme's bubbles — the out-of-place white scrollbar (the owner 2026-07-27). */
@@ -239,11 +246,8 @@
     min-width: 0; overflow: hidden; }   /* tight header (low zoom): clip the wordmark instead of letting the MAN/AUTO pill paint over the version */
   .op-brand-text { display: inline-flex; flex-direction: column; justify-content: center;
     flex: 0 0 auto; white-space: nowrap; }   /* fixed wordmark — never let the flex row squeeze it to 0 */
-  /* Anthropic Sans (the owner 2026-07-29) — the wordmark keeps PJS, the version line
-     under it moves to the chat face. It reads a touch smaller at the same size,
-     so 0.46 -> 0.48rem holds the previous optical weight. */
-  .op-ver { font: 600 0.48rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);
-    opacity: 0.7; letter-spacing: .02em; margin-top: 3.5px; padding-left: 1.5px; white-space: nowrap; }   /* tiny right nudge to optically align under Operator */
+  .op-ver { font: 600 0.48rem/1 'Urbanist', sans-serif; color: var(--muted);
+    opacity: 0.7; letter-spacing: .02em; padding-left: 1.5px; white-space: nowrap; }
   /* wordmark weight experiment (the owner 2026-07-26): +50 over the old 700.
      Served by a self-hosted single-weight instance ('PJS Wordmark' @font-face
      below) so the GENERAL UI keeps the static Jakarta files — the variable
@@ -950,6 +954,16 @@
   /* tab bar reveal + per-tab pop-in / close-out */
   .op-tabs:not([hidden]) { animation: op-tabs-in .22s cubic-bezier(.2,1,.3,1); }
   @keyframes op-tabs-in { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+  /* The way out. Without this the strip animated open and then vanished on a
+     bare hidden=true — smooth in, hard cut out, which is the "steps" (the owner
+     2026-08-22). Shorter than the entrance: a dismissal should feel quicker
+     than a reveal. */
+  .op-tabs.op-tabs-closing { animation: op-tabs-out .16s cubic-bezier(.4,0,1,1) forwards;
+    pointer-events: none; }
+  @keyframes op-tabs-out { to{opacity:0;transform:translateY(-6px)} }
+  @media (prefers-reduced-motion: reduce) {
+    .op-tabs:not([hidden]), .op-tabs.op-tabs-closing { animation: none; }
+  }
   .op-tab { animation: op-tab-pop .24s cubic-bezier(.2,1.3,.4,1); }
   @keyframes op-tab-pop { from{opacity:0;transform:scale(.85) translateY(-2px)} to{opacity:1;transform:none} }
   .op-tab.op-tab-closing { animation: op-tab-out .2s cubic-bezier(.5,0,.75,0) forwards; pointer-events:none; }
@@ -1055,10 +1069,18 @@
     touch-action: pinch-zoom; -webkit-touch-callout: none;
     -webkit-user-select: none; user-select: none; }
   .op[data-state="live"] .op-stage { box-shadow: inset 0 0 26px -8px var(--glow); }
-  .op-stage:focus { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 26px -8px var(--glow); }
+  .op-stage:focus, .op-stage:focus-within {
+    box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 26px -8px var(--glow); }
   .op-view { display: block; width: 100%; height: 100%; object-fit: contain;
     background: #05060a; cursor: crosshair; font-size: 0; color: transparent;
     -webkit-user-select: none; user-select: none; pointer-events: none; }
+  /* iOS only raises its software keyboard for an editable control. Keep the
+     capture field inside the stage (so focus-within still communicates focus)
+     without putting it off-canvas, which would make Safari scroll to it. */
+  .op-key-capture { position: absolute; left: 50%; top: 50%; width: 1px; height: 1px;
+    margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none;
+    resize: none; overflow: hidden; font-size: 16px; caret-color: transparent;
+    -webkit-user-select: text; user-select: text; }
   .op-kbhint { position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
     font: 500 0.6rem/1 'JetBrains Mono', monospace; color: var(--muted);
     background: rgba(10,12,20,.8); border: 1px solid var(--border); padding: 0.22rem 0.45rem;
@@ -1397,9 +1419,15 @@
     backdrop-filter: blur(6px); border-bottom: 1px solid var(--border); overflow-x: auto; }
   .op-tab { flex: 0 0 auto; max-width: 160px; display: flex; align-items: center; gap: 4px; background: var(--bg-3); border: 1px solid var(--border);
     border-radius: 8px; color: var(--muted); cursor: pointer; padding: 0.34rem 0.7rem;
-    font: 500 0.72rem/1.4 'Plus Jakarta Sans', sans-serif; transition: all .15s;
+    font: 500 0.72rem/1.4 'Plus Jakarta Sans', sans-serif;
+    transition: background .16s ease, color .16s ease, border-color .16s ease,
+                transform .16s cubic-bezier(.2,1,.3,1), box-shadow .16s ease;
     white-space: nowrap; box-shadow: none; }
-  .op-tab:hover { background: var(--bg-4); color: var(--fg-2); }
+  /* Colour alone did not read as clickable. A small lift does, and it is the
+     same language the close button and + already speak (the owner 2026-08-22). */
+  .op-tab:hover { background: var(--bg-4); color: var(--fg-2);
+    transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.28); }
+  .op-tab:active { transform: translateY(0) scale(.985); box-shadow: none; }
   .op-tab.active { background: var(--bg); color: var(--fg); border-color: #ededea; }
   .op-tab { cursor: grab; touch-action: pinch-zoom; }   /* custom drag owns one finger; native pinch remains available */
   .op-tab.dragging { opacity: 0.55; cursor: grabbing; transform: scale(1.04);
@@ -1411,8 +1439,15 @@
   .op-tab-x svg { display: block; }
   .op-tab-x:hover { background: var(--bad); color: #fff; }
   .op-tab-add { flex: 0 0 auto; background: var(--bg-3); border: 1px solid var(--border); color: var(--fg-2);
-    border-radius: 8px; cursor: pointer; font-size: 0.95rem; padding: 0.3rem 0.55rem; }
-  .op-tab-add:hover { background: var(--bg-4); color: var(--accent); }
+    border-radius: 8px; cursor: pointer; font-size: 0.95rem; padding: 0.3rem 0.55rem;
+    transition: background .16s ease, color .16s ease, border-color .16s ease,
+                transform .16s cubic-bezier(.2,1,.3,1), box-shadow .16s ease; }
+  .op-tab-add:hover { background: var(--bg-4); color: var(--accent);
+    border-color: var(--accent); transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0,0,0,.28); }
+  .op-tab-add:hover svg { transform: rotate(90deg); }
+  .op-tab-add svg { transition: transform .22s cubic-bezier(.2,1,.3,1); }
+  .op-tab-add:active { transform: translateY(0) scale(.94); box-shadow: none; }
   .op-tab-add { display: inline-flex; align-items: center; justify-content: center; }
   .op-tab-add svg { flex: 0 0 auto; display: block; }
 
@@ -2331,26 +2366,34 @@
      THREE icons rendered side by side (the owner 2026-07-28, iPad). Qualifying
      ties the specificity so these later rules win. Same classes also drive
      the brow #op-flat button. */
-  /* sunrise on swap (the owner 2026-07-28): a display:none→shown flip restarts CSS
-     animations, so the INCOMING icon plays a rise-over-the-horizon each cycle
-     click for free — no JS. `from`-only keyframes: the end state is the
-     element's natural style, so #op-flat's static nudge transform is landed
-     on exactly instead of being snapped to after a hardcoded `to`. */
-  .op-lp-theme svg, #op-flat svg {
-    animation: op-theme-rise .45s cubic-bezier(.22,.8,.28,1); }
-  /* the button IS the horizon: clip the rise so the icon climbs into view
-     instead of sliding up over the surrounding chrome */
+  /* Keep all three glyphs painted in one stack. State changes crossfade the
+     outgoing and incoming marks instead of snapping one away with display:none. */
   .op-lp-theme, #op-flat { overflow: hidden; }
-  @keyframes op-theme-rise {
-    from { transform: translateY(58%) rotate(-40deg); opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) {
-    .op-lp-theme svg, #op-flat svg { animation: none; } }
-  svg.op-lp-theme-day, svg.op-lp-theme-night { display: none; }
-  .op.op-flat svg.op-lp-theme-oled { display: none; }
-  .op.op-flat svg.op-lp-theme-day { display: block; }
+  #op-flat { position: relative; }
+  .op-lp-theme svg, #op-flat svg {
+    position: absolute; left: 50%; top: 50%; display: block;
+    opacity: 0; pointer-events: none;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(.72) rotate(-24deg);
+    transition: opacity .28s ease,
+                transform .42s cubic-bezier(.22,.8,.28,1); }
+  .op svg.op-lp-theme-oled {
+    opacity: 1;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(1) rotate(0deg); }
+  .op.op-flat svg.op-lp-theme-oled {
+    opacity: 0;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(.72) rotate(24deg); }
+  .op.op-flat svg.op-lp-theme-day {
+    opacity: 1;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(1) rotate(0deg); }
   [data-theme="light"] .op svg.op-lp-theme-day,
-  [data-theme="light"] .op svg.op-lp-theme-oled { display: none; }
-  [data-theme="light"] .op svg.op-lp-theme-night { display: block; }
+  [data-theme="light"] .op svg.op-lp-theme-oled {
+    opacity: 0;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(.72) rotate(24deg); }
+  [data-theme="light"] .op svg.op-lp-theme-night {
+    opacity: 1;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(1) rotate(0deg); }
+  @media (prefers-reduced-motion: reduce) {
+    .op-lp-theme svg, #op-flat svg { transition: none; } }
   .op-lp-cats { width: min(100%, var(--op-lp-w)); display: flex; align-items: center;
     /* `safe center` (NOT plain center): when the pill row overflows its width —
        browser zoomed out, so the container shrinks while the pills keep their
@@ -3033,13 +3076,15 @@
     transition: opacity .15s ease, width .18s ease, transform .2s cubic-bezier(.4,0,.2,1); will-change: transform; }
   .op-titlewrap:not([role="button"]) .op-brand-caret { display: none; }   /* nothing to switch → no caret */
   .op-titlewrap[aria-expanded="true"] .op-brand-caret { transform: rotate(180deg); opacity: .9; }
-  .op-verline { display: inline-flex; align-items: center; gap: 5px; }
-  .op-surface-chip { font: 700 0.42rem/1 'Plus Jakarta Sans', sans-serif;
+  .op-verline { display: inline-flex; align-items: center; gap: 5px; margin-top: 0.5px; }
+  .op-surface-chip { display: inline-flex; align-items: center; justify-content: center;
+    font: 700 0.42rem/1 'Urbanist', sans-serif;
     letter-spacing: .04em; text-transform: uppercase; white-space: nowrap;
     color: #eab308; background: rgba(234,179,8,.12); border: 1px solid rgba(234,179,8,.35);
-    border-radius: 4px; padding: 1.5px 3.5px; margin-top: 2px;
+    border-radius: 4px; padding: 1.5px 3.5px;
     overflow: hidden;   /* width:0 at the narrow tier actually hides it */
     transition: font-size .18s ease, padding .18s ease, opacity .18s ease, width .18s ease; }
+  .op-surface-chip-label { display: block; transform: translateY(-0.5px); }
   .op-surface-chip.real { color: #f87171; background: rgba(248,113,113,.12);
     border-color: rgba(248,113,113,.4); }
 

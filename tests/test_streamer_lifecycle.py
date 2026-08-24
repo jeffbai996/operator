@@ -502,6 +502,60 @@ def test_capture_and_metrics_share_the_same_persistent_target_session(streamer):
                for method, _ in capture.sent)
 
 
+def test_new_tab_click_activates_the_shadow_dom_control(streamer):
+    """Chrome's privileged NTP ignores otherwise valid CDP mouse clicks."""
+    class NewTabSess(FakeSess):
+        def __init__(self):
+            super().__init__()
+            self.activated = False
+
+        async def send(self, method, params=None):
+            self.sent.append((method, params))
+            if method == "Page.getLayoutMetrics":
+                return {"cssLayoutViewport": {
+                    "clientWidth": 1024, "clientHeight": 800}}
+            if method == "Runtime.evaluate":
+                expr = (params or {}).get("expression", "")
+                if "__opSelectOverlay" in expr:
+                    return {"result": {"value": False}}
+                self.activated = True
+                return {"result": {"value": True}}
+            return {}
+
+    ctx = FakeCtx(n_pages=1)
+    ctx.sess = NewTabSess()
+    page = ctx.pages[0]
+    page.url = "chrome://new-tab-page/"
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = page
+
+    result = asyncio.run(streamer._do_action({
+        "kind": "click_at", "x": 0.2, "y": 0.3, "count": 1}))
+
+    assert result["ok"] is True
+    assert ctx.sess.activated is True
+    assert not any(method == "Input.dispatchMouseEvent"
+                   for method, _ in ctx.sess.sent)
+
+
+def test_crashed_active_page_drops_stale_frame_and_uses_survivor(streamer):
+    """A renderer crash may leave a Playwright page that is not `closed`."""
+    ctx = FakeCtx(n_pages=2)
+    survivor, crashed = ctx.pages
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = crashed
+    streamer.frame = b"stale pixels"
+    streamer.frame_ts = time.monotonic()
+    streamer.status = "live"
+
+    streamer._mark_page_crashed(crashed)
+    asyncio.run(streamer._refresh_active_page())
+
+    assert streamer._page is survivor
+    assert streamer.frame is None
+    assert streamer.status == "connecting"
+
+
 def test_switch_tab_reapplies_desktop_metrics(streamer):
     ctx = FakeCtx(n_pages=2)
     streamer._browser = FakeBrowser(ctx)

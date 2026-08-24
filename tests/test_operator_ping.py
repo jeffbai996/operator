@@ -1,9 +1,8 @@
-"""Run-completion pings — the cockpit's notification surface.
+"""Human-handoff pings — the cockpit's notification surface.
 
-A finished run used to be invisible unless you were looking at the cockpit
-(the owner 2026-08-05: "Polished for 7m 13s" is a thing you found out by looking).
-These tests pin the two things that matter: the message says what happened
-without being opened, and a ping failure can never touch the run.
+These tests pin the two things that matter: ordinary Operator activity is
+silent, and an explicit TAKE_CONTROL request produces one useful card without
+letting a Discord failure touch the run.
 """
 import os
 import time
@@ -11,6 +10,7 @@ import types
 
 import pytest
 
+import operator_agent as OA
 import operator_ping as OP
 
 
@@ -21,7 +21,7 @@ def _facts(**over) -> dict:
         "bot": "claude-d", "model": "claude-opus-5", "effort": "high",
         "surface": "browser", "runtime": "claude",
         "duration_s": 433.0, "n_messages": 41, "tokens": 128_400,
-        "demo": False,
+        "demo": False, "handoff": "approve the final purchase",
     }
     f.update(over)
     return f
@@ -32,7 +32,8 @@ def _runner(**over):
         bot="claude-d", task="book a flight", state="done",
         model="claude-opus-5", effort="high", surface="browser",
         demo=False, started_ts=time.time() - 42.0, ended_ts=time.time(),
-        _runtime="claude", _cum_in_tokens=1234, _peak_in_tokens=999,
+        _runtime="claude", _cumulative_in_tokens=1234, _peak_in_tokens=999,
+        handoff={"reason": "approve the final purchase", "ts": time.time()},
         messages=[{"role": "assistant", "text": "done"}],
     )
     for k, v in over.items():
@@ -48,22 +49,21 @@ def _head(out: str) -> str:
 
 # ── the message itself ──────────────────────────────────────────────────
 
-def test_ping_leads_with_the_outcome_and_carries_the_task():
+def test_ping_leads_with_the_human_need_and_carries_the_task():
     out = OP.format_ping(_facts())
-    assert OP.GLYPHS["done"] in _head(out)
+    assert OP.GLYPHS["handoff"] in _head(out)
+    assert "Operator needs your input" in _head(out)
+    assert "approve the final purchase" not in _head(out)
+    assert out.count("approve the final purchase") == 1
     assert "book AC 8807 SEA to YVR" in out
 
 
-def test_a_stopped_run_reads_differently_from_a_clean_finish():
-    done = OP.format_ping(_facts(state="done"))
-    stopped = OP.format_ping(_facts(state="interrupted", reason="user stop"))
-    assert _head(done) != _head(stopped)
-    assert "user stop" in stopped
-
-
-def test_an_errored_run_names_its_reason():
-    out = OP.format_ping(_facts(state="error", reason="no progress for 4m"))
-    assert "no progress for 4m" in out
+def test_handoff_reason_outranks_the_terminal_process_state():
+    done = OP.format_ping(_facts(state="done", reason="exit 0"))
+    errored = OP.format_ping(_facts(state="error", reason="no progress for 4m"))
+    assert _head(done) == _head(errored)
+    assert "approve the final purchase" in done
+    assert "no progress for 4m" not in errored
 
 
 def test_duration_reads_exactly_like_the_agent_view():
@@ -97,6 +97,28 @@ def test_a_demo_run_never_pings():
     run must not buzz the owner's phone."""
     assert OP.should_ping(_facts(demo=True)) is False
     assert OP.should_ping(_facts(demo=False)) is True
+
+
+def test_an_ordinary_operator_event_never_pings():
+    assert OP.should_ping(_facts(handoff="")) is False
+
+
+def test_runner_terminal_transition_pages_only_for_handoff(monkeypatch):
+    pings = []
+    monkeypatch.setattr(OA.operator_history, "record", lambda *a, **k: None)
+    monkeypatch.setattr(OA.operator_restart_guard, "consume_and_restart",
+                        lambda: None)
+    monkeypatch.setattr(OA.operator_ping, "notify_async",
+                        lambda runner, reason="": pings.append(reason))
+    runner = types.SimpleNamespace(
+        state="running", handoff=None, last_progress_ts=0)
+    OA.AgentRunner._set_state(runner, "done", "exit 0")
+    assert pings == []
+
+    runner.state = "running"
+    runner.handoff = {"reason": "solve the captcha", "ts": time.time()}
+    OA.AgentRunner._set_state(runner, "done", "exit 0")
+    assert pings == ["exit 0"]
 
 
 # ── the final frame ─────────────────────────────────────────────────────
@@ -152,7 +174,7 @@ def test_a_send_failure_never_reaches_the_run(monkeypatch):
     assert OP.notify(_runner()) is False   # returns, does not raise
 
 
-def test_a_finished_run_posts_once(monkeypatch):
+def test_a_human_handoff_posts_once(monkeypatch):
     monkeypatch.setenv(OP.CHANNEL_ENV, "123")
     monkeypatch.setattr(OP, "_token", lambda: "t")
     calls = []
@@ -163,6 +185,15 @@ def test_a_finished_run_posts_once(monkeypatch):
     channel, text, _img = calls[0]
     assert channel == "123"
     assert "book a flight" in text
+    assert "approve the final purchase" in text
+
+
+def test_an_ordinary_completion_stays_silent(monkeypatch):
+    monkeypatch.setenv(OP.CHANNEL_ENV, "123")
+    monkeypatch.setattr(OP, "_token", lambda: "t")
+    monkeypatch.setattr(OP, "_post",
+                        lambda *a, **k: pytest.fail("ordinary completion posted"))
+    assert OP.notify(_runner(handoff=None), reason="exit 0") is False
 
 
 def test_a_run_with_no_token_does_not_post(monkeypatch):
@@ -181,16 +212,12 @@ def test_the_whole_ping_is_one_block_with_nothing_loose_above_it():
     out = OP.format_ping(_facts())
     assert out.startswith("```diff") and out.rstrip().endswith("```")
     assert "**" not in out            # no markdown — none of it renders in a fence
-    assert "Finished" in _head(out)
+    assert "Operator needs your input" in _head(out)
     assert "book AC 8807" in out
 
 
-def test_the_outcome_is_carried_by_the_diff_marker():
-    """Inside a fence there is no bold, so green/red is the only signal left
-    for whether the run worked."""
-    assert _head(OP.format_ping(_facts(state="done"))).startswith("+")
-    assert _head(OP.format_ping(_facts(state="error"))).startswith("-")
-    assert _head(OP.format_live(_facts(state="running"), [])).startswith(" ")
+def test_human_attention_is_carried_by_the_warning_marker():
+    assert _head(OP.format_ping(_facts())).startswith("- ⚠")
 
 
 def test_a_task_containing_a_fence_cannot_break_out_of_the_block():
@@ -198,217 +225,3 @@ def test_a_task_containing_a_fence_cannot_break_out_of_the_block():
     channel as prose — the runaway-fence failure."""
     out = OP.format_ping(_facts(task="run ```rm -rf``` for me"))
     assert out.count("```") == 2
-
-
-# ── the in-flight card ──────────────────────────────────────────────────
-
-def test_the_live_card_shows_only_what_it_is_doing_now():
-    """Printing every completed action grew a wall of Clicking/Took screenshot
-    rows that pushed the card past the fence width and buried the one thing you
-    want at a glance (the owner 2026-08-11). The history lives in the cockpit."""
-    steps = [("Navigating", "aircanada.com", 100.0), ("Typing", "SEA", 104.0),
-             ("Clicking", "(420, 315)", 110.0)]
-    out = OP.format_live(_facts(state="running", ended_ts=115.0), steps)
-    assert "Clicking" in out and "(420, 315)" in out
-    assert "Navigating" not in out and "Typing" not in out
-    assert "Running" in _head(out)
-    row = [ln for ln in out.splitlines() if "Clicking" in ln][0]
-    assert OP._STEP_LIVE in row          # it pulses while the run is live
-    assert "5s" in row                   # and says how long it has been on it
-
-
-def test_every_row_stays_inside_the_card_width():
-    """Same clamp the claude bot's tool trace uses. A line past the fence wraps,
-    and a wrapped line loses its diff marker and renders as its own unstyled
-    chunk — so overflow breaks the colouring, not just the tidiness."""
-    steps = [("Clicking", "y" * 300, 100.0)]
-    out = OP.format_live(_facts(state="running", task="x" * 400,
-                                ended_ts=200.0), steps)
-    body = out.split("\n")[1:-1]                 # drop the fences
-    assert body, "card rendered empty"
-    assert max(len(ln) for ln in body) <= OP.LINE_MAX
-    assert OP.LINE_MAX == 88                     # the card width, not a new number
-
-
-def test_the_card_is_a_fixed_size_however_chatty_the_run():
-    """A 60-step run and a 1-step run produce the same card, because only the
-    current action is on it."""
-    one = OP.format_live(_facts(state="running", ended_ts=200.0),
-                         [("Step59", "x", 199.0)])
-    many = OP.format_live(_facts(state="running", ended_ts=200.0),
-                          [(f"Step{i}", "x", 100.0 + i) for i in range(60)])
-    assert len(one.splitlines()) == len(many.splitlines())
-    assert "Step0 " not in many and "Step59" in many
-
-
-def test_a_short_trace_is_not_padded_or_truncated():
-    steps = [("Navigating", "example.com", 100.0)]
-    out = OP.format_live(_facts(state="running", ended_ts=101.0), steps)
-    assert "earlier" not in out
-    assert "Navigating" in out
-
-
-def test_a_run_that_has_done_nothing_yet_says_so():
-    assert "(starting)" in OP.format_live(_facts(state="running"), [])
-
-
-def test_the_headline_names_the_driver():
-    """Four bots share the cockpit — whose run this is comes before anything
-    else about it (the owner 2026-08-06)."""
-    for bot in ("claude-a", "claude-b", "gpt", "gemma"):
-        head = _head(OP.format_live(_facts(state="running", bot=bot), []))
-        assert bot in head
-    assert "gpt" in _head(OP.format_ping(_facts(bot="gpt")))
-
-
-def test_the_running_card_spins_and_a_finished_one_does_not():
-    frames = {_head(OP.format_live(_facts(state="running"), [], i)).split()[0]
-              for i in range(len(OP._SPINNER))}
-    assert frames == set(OP._SPINNER)
-    # a retired card gets its outcome mark back, not a stopped wheel
-    assert OP.GLYPHS["done"] in _head(OP.format_live(_facts(state="done"), [], 3))
-    assert OP.GLYPHS["done"] == "●"       # the agent view's settled dot
-
-
-def test_the_spinner_is_not_a_content_change():
-    """Otherwise the change-detector would fire on every poll and the edit
-    throttle would mean nothing."""
-    a = OP.live_body(_facts(state="running", ended_ts=100.0), [("Clicking", "x", 90.0)])
-    b = OP.live_body(_facts(state="running", ended_ts=100.0), [("Clicking", "x", 90.0)])
-    assert a == b
-
-
-def test_a_quiet_run_still_ticks_the_wheel(monkeypatch):
-    clock, edits = _Clock(), []
-    r = _runner(state="running", messages=[])
-    _live_env(monkeypatch, r, edits)
-    polls = {"n": 0}
-
-    def sleep(s):
-        clock.sleep(s)
-        polls["n"] += 1
-        if polls["n"] > 20:
-            r.state = "done"
-
-    OP.watch(r, now=clock.now, sleep=sleep)
-    # 20 polls x 3s = 60s of silence: a few heartbeat ticks, not one per poll
-    assert 3 <= len(edits) <= 6
-    spun = {_head(e).split()[0] for e in edits if "Running" in e}
-    assert len(spun) > 1, "the wheel never moved"
-
-
-def test_a_gemma_run_says_why_it_has_no_trace():
-    """agy returns plain text with no event stream, so there is no live trace
-    to show. An empty card would read as a wedged run."""
-    out = OP.format_live(_facts(state="running", runtime="agy"), [])
-    assert "no live trace" in out
-    assert "(starting)" not in out
-
-
-def test_the_card_stops_claiming_to_be_running_once_it_is_not():
-    """The watcher's last edit retires the card. A dashboard still showing
-    Running an hour after the run ended is worse than no dashboard."""
-    out = OP.format_live(_facts(state="done"), [("Clicking", "Submit", 100.0)])
-    assert "Finished" in _head(out)
-    assert "Running" not in out
-
-
-def test_live_steps_reads_actions_and_errors_off_the_runner():
-    r = _runner(messages=[
-        {"role": "action", "text": "Navigating", "detail": "aircanada.com"},
-        {"role": "assistant", "text": "thinking out loud"},
-        {"role": "error", "text": "Action failed"},
-    ])
-    assert OP.live_steps(r) == [("Navigating", "aircanada.com", 0.0),
-                                ("⚠", "Action failed", 0.0)]
-
-
-class _Clock:
-    """Monotonic-ish fake: every sleep advances it, so the edit floor is real
-    without the test taking real seconds."""
-
-    def __init__(self):
-        self.t = 0.0
-
-    def now(self):
-        return self.t
-
-    def sleep(self, s):
-        self.t += s
-
-
-def _live_env(monkeypatch, runner, edits):
-    monkeypatch.setenv(OP.CHANNEL_ENV, "123")
-    monkeypatch.setattr(OP, "_token", lambda: "t")
-    monkeypatch.setattr(OP, "_post", lambda ch, text, img: (True, "", "77"))
-    monkeypatch.setattr(OP, "_edit",
-                        lambda ch, mid, text: edits.append(text) or (True, "", mid))
-
-
-def test_the_card_follows_the_newest_action(monkeypatch):
-    clock, edits = _Clock(), []
-    r = _runner(state="running", messages=[])
-    _live_env(monkeypatch, r, edits)
-
-    def sleep(s):
-        clock.sleep(s)
-        n = len(r.messages)
-        if n < 3:
-            r.messages.append({"role": "action", "text": f"Step{n}", "detail": ""})
-        else:
-            r.state = "done"
-
-    assert OP.watch(r, now=clock.now, sleep=sleep) == "77"
-    assert edits, "the card never updated"
-    # the card FOLLOWS the newest action rather than accumulating them
-    assert "Step2" in edits[-1] and "Step0" not in edits[-1]
-
-
-def test_a_quiet_run_does_not_burn_an_edit_per_poll(monkeypatch):
-    """Discord rate-limits PATCH. A silent agent costs the spinner's heartbeat
-    (LIVE_SPIN_S) and nothing more — never one edit per poll. The heartbeat is
-    a deliberate cost added on 2026-08-06: before the spinner, a silent run
-    cost exactly one edit, the retire."""
-    clock, edits = _Clock(), []
-    r = _runner(state="running", messages=[])
-    _live_env(monkeypatch, r, edits)
-    polls = {"n": 0}
-
-    def sleep(s):
-        clock.sleep(s)
-        polls["n"] += 1
-        if polls["n"] > 8:
-            r.state = "done"
-
-    OP.watch(r, now=clock.now, sleep=sleep)
-    assert len(edits) <= 3                  # 8 polls (24s) → 1 tick + the retire
-    assert "Finished" in _head(edits[-1])
-
-
-def test_the_watcher_lets_go_when_the_run_ends(monkeypatch):
-    clock, edits = _Clock(), []
-    r = _runner(state="done", messages=[])
-    _live_env(monkeypatch, r, edits)
-    assert OP.watch(r, now=clock.now, sleep=clock.sleep) == "77"   # returns, no hang
-
-
-def test_no_channel_means_no_live_card(monkeypatch):
-    monkeypatch.delenv(OP.CHANNEL_ENV, raising=False)
-    monkeypatch.setattr(OP, "_post", lambda *a, **k: pytest.fail("posted with no channel"))
-    assert OP.watch(_runner(state="running")) is None
-
-
-def test_a_demo_run_gets_no_live_card(monkeypatch):
-    monkeypatch.setenv(OP.CHANNEL_ENV, "123")
-    monkeypatch.setattr(OP, "_token", lambda: "t")
-    monkeypatch.setattr(OP, "_post", lambda *a, **k: pytest.fail("demo posted"))
-    assert OP.watch(_runner(state="running", demo=True)) is None
-
-
-def test_an_error_row_is_marked_once_not_twice():
-    """`●  ⚠  Action failed` marks the same row twice and reads as two events."""
-    out = OP.format_live(_facts(state="running", ended_ts=110.0),
-                         [("Navigating", "x", 100.0), ("⚠", "Action failed", 105.0)])
-    err = [ln for ln in out.splitlines() if "Action failed" in ln][0]
-    assert err.startswith("- ⚠")           # red, and marked exactly once
-    assert OP._STEP_DONE not in err

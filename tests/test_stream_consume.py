@@ -89,7 +89,7 @@ def test_usage_as_non_dict_keeps_token_state_sane(runner):
     runner._consume(_line({"type": "assistant",
                            "message": {"usage": "oops", "content": []}}))
     assert runner._peak_in_tokens == 0
-    assert runner._cum_in_tokens == 0
+    assert runner._cumulative_in_tokens == 0
 
 
 def test_wellformed_usage_lands_input_tokens(runner):
@@ -97,7 +97,7 @@ def test_wellformed_usage_lands_input_tokens(runner):
         "usage": {"input_tokens": 1234},
         "content": [{"type": "text", "text": "hi"}]}}))
     assert runner._peak_in_tokens == 1234
-    assert runner._cum_in_tokens == 1234
+    assert runner._cumulative_in_tokens == 1234
     assert runner.messages[-1]["text"] == "hi"
 
 

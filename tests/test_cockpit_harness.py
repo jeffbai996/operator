@@ -287,6 +287,44 @@ def test_boot_clean_seeded_session(browser, harness):
         ctx.close()
 
 
+def test_gpt_picker_offers_supported_reasoning_ladders(page, harness):
+    """Every GPT option must render exactly the effort its runtime accepts.
+
+    This drives the actual model selector and its change listener rather than
+    inspecting the JavaScript table, so it catches a broken picker even if the
+    mapping gets moved or refactored.
+    """
+    page.goto(harness.base + "/operator", wait_until="domcontentloaded")
+    page.wait_for_function(
+        "document.querySelector('#op-action-caret option[value=gpt]')")
+    page.evaluate("""() => {
+        const driver = document.getElementById('op-action-caret');
+        driver.value = 'gpt';
+        driver.dispatchEvent(new Event('change'));
+    }""")
+    page.wait_for_function(
+        "document.querySelector('#op-model option[value=\\\"gpt-5.6-luna\\\"]')")
+    observed = page.evaluate("""() => {
+        const model = document.getElementById('op-model');
+        const effort = document.getElementById('op-effort');
+        const out = {};
+        for (const name of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+                            'gpt-5.5']) {
+          model.value = name;
+          model.dispatchEvent(new Event('change'));
+          out[name] = Array.from(effort.options, option => option.value);
+        }
+        return out;
+    }""")
+    ladder_56 = ["none", "low", "medium", "high", "xhigh", "max"]
+    assert observed == {
+        "gpt-5.6-sol": ladder_56,
+        "gpt-5.6-terra": ladder_56,
+        "gpt-5.6-luna": ladder_56,
+        "gpt-5.5": ["none", "low", "medium", "high", "xhigh"],
+    }
+
+
 def test_placeholder_frames_not_treated_as_signal(page, harness):
     """Backend in the 2026-07-10 failure state: /frame serves HTTP 200
     PLACEHOLDER frames while /status reports error. Placeholders must not
@@ -673,6 +711,99 @@ def test_launchpad_backdrop_collapses_results_and_theme_toggle_is_local(browser,
         ctx.close()
 
 
+def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, harness):
+    """The version hugs the wordmark and both desktop modes stay explicit."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v1', "
+        + json.dumps(json.dumps({"log": "<div>restored</div>", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+
+    def sandbox_surfaces(route):
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({
+            "active": "desktop-sandbox",
+            "surfaces": [
+                {"key": "browser", "label": "Browser", "hint": "", "available": True},
+                {"key": "desktop-sandbox", "label": "Sandbox", "hint": "", "available": True},
+                {"key": "desktop-real", "label": "Computer", "hint": "", "available": True,
+                 "gated": True},
+            ],
+        }))
+
+    pg.route("**/operator/surfaces*", sandbox_surfaces)
+    pg.route("**/operator/agent*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({
+            "state": "idle", "surface": "desktop-sandbox", "messages": [],
+            "bot": "gpt", "alive": False, "stalled": False,
+        })))
+    pg.route("**/operator/status", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({
+            **_STATUS_DEAD, "surface": "desktop-sandbox",
+        })))
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op-surface-chip').textContent === 'sandbox'")
+        metrics = pg.evaluate("""() => {
+          const title = document.querySelector('.op-title').getBoundingClientRect();
+          const version = document.querySelector('.op-ver').getBoundingClientRect();
+          const chip = document.getElementById('op-surface-chip').getBoundingClientRect();
+          const line = document.querySelector('.op-verline').getBoundingClientRect();
+          const css = getComputedStyle(document.querySelector('.op-ver'));
+          return {
+            version: document.querySelector('.op-ver').textContent,
+            family: css.fontFamily,
+            wordmarkGap: version.top - title.bottom,
+            chip: document.getElementById('op-surface-chip').textContent,
+            chipCenterDelta: Math.abs((chip.top + chip.bottom) / 2 -
+                                      (line.top + line.bottom) / 2),
+          };
+        }""")
+        assert metrics["version"] == "1.0.40"
+        assert metrics["family"].startswith("Urbanist")
+        assert metrics["wordmarkGap"] <= 1.5
+        assert metrics["chip"] == "sandbox"
+        assert metrics["chipCenterDelta"] <= 0.25
+    finally:
+        ctx.close()
+
+
+def test_theme_icons_crossfade_instead_of_hard_swapping(browser, harness):
+    """A theme step keeps both icons painted while one exits and one enters."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v1', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_selector("#op-lp-theme", state="visible", timeout=8000)
+        pg.evaluate("document.documentElement.setAttribute('data-theme', 'dark');"
+                    "document.getElementById('op').classList.remove('op-flat')")
+        pg.click("#op-lp-theme")  # default dark -> OLED flat: moon exits, sun enters
+        pg.wait_for_timeout(80)
+        opacity = pg.locator("#op-lp-theme").evaluate("""el => ({
+          day: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity),
+          oled: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity),
+          dayDisplay: getComputedStyle(el.querySelector('.op-lp-theme-day')).display,
+          oledDisplay: getComputedStyle(el.querySelector('.op-lp-theme-oled')).display,
+        })""")
+        assert opacity["dayDisplay"] != "none"
+        assert opacity["oledDisplay"] != "none"
+        assert 0 < opacity["day"] < 1
+        assert 0 < opacity["oled"] < 1
+        pg.wait_for_timeout(400)
+        settled = pg.locator("#op-lp-theme").evaluate("""el => ({
+          day: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity),
+          oled: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity),
+        })""")
+        assert settled == {"day": 1, "oled": 0}
+    finally:
+        ctx.close()
+
+
 def test_operator_origin_and_fullscreen_are_zoom_invariant(browser, harness):
     """Fullscreen keeps its panel frame through viewport changes (8px since
     2026-07-19 "slightly slightly wider", superseding the 6px slim frame that
@@ -968,6 +1099,80 @@ def test_mobile_launchpad_uses_the_full_screen(browser, harness):
         ctx.close()
 
 
+def test_touch_stage_captures_software_keyboard_input(browser, harness):
+    """A quick tap must arm a real input control so iOS can show its keyboard."""
+    ctx = browser.new_context(
+        viewport={"width": 820, "height": 1180},
+        has_touch=True,
+        is_mobile=True,
+    )
+    pg = ctx.new_page()
+
+    def record_steer(route):
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"ok": True, "url": "https://example.com"}))
+
+    pg.route("**/operator/steer", record_steer)
+    harness.mode = "live"
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op-view').naturalWidth > 0")
+        pg.locator("#op-lp").evaluate("el => { el.hidden = true; }")
+        stage = pg.locator("#op-stage").bounding_box()
+        assert stage is not None
+
+        pg.touchscreen.tap(stage["x"] + stage["width"] / 2,
+                           stage["y"] + stage["height"] / 2)
+        pg.wait_for_function(
+            "document.activeElement.id === 'op-key-capture'")
+
+        # Mobile Safari can deliver software-keyboard text as an input event
+        # without a useful keydown. Exercise that path directly.
+        with pg.expect_request(lambda r: (
+                r.url.endswith("/operator/steer")
+                and r.post_data_json.get("kind") == "type")) as sent:
+            pg.locator("#op-key-capture").evaluate("""el => {
+              el.value = 'hello';
+              el.dispatchEvent(new InputEvent('input', {
+                bubbles: true, inputType: 'insertText', data: 'hello'
+              }));
+            }""")
+        assert sent.value.post_data_json["value"] == "hello"
+    finally:
+        harness.mode = "real"
+        ctx.close()
+
+
+def test_desktop_stage_keeps_hardware_keyboard_input(browser, harness):
+    """The iOS capture path must not replace ordinary stage focus on desktop."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    pg = ctx.new_page()
+
+    def record_steer(route):
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"ok": True, "url": "https://example.com"}))
+
+    pg.route("**/operator/steer", record_steer)
+    harness.mode = "live"
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op-view').naturalWidth > 0")
+        pg.locator("#op-lp").evaluate("el => { el.hidden = true; }")
+        pg.click("#op-stage", position={"x": 100, "y": 100})
+        assert pg.evaluate("document.activeElement.id") == "op-stage"
+
+        with pg.expect_request(lambda r: (
+                r.url.endswith("/operator/steer")
+                and r.post_data_json.get("kind") == "type")) as sent:
+            pg.keyboard.type("x")
+        assert sent.value.post_data_json["value"] == "x"
+    finally:
+        harness.mode = "real"
+        ctx.close()
+
+
 def test_history_run_again_redispatches_row_bundle(browser, harness):
     """1.0.13: ↻ on a History row re-dispatches with the ROW's bot/model/
     effort/surface — not the current pickers."""
@@ -978,7 +1183,7 @@ def test_history_run_again_redispatches_row_bundle(browser, harness):
         bot="gpt", task="scan the weekly filings", state="done",
         model="gpt-5.6-sol", effort="low", surface="browser", demo=False,
         started_ts=_t.time() - 120, ended_ts=_t.time() - 60,
-        _runtime="codex", _cum_in_tokens=1000, _peak_in_tokens=500,
+        _runtime="codex", _cumulative_in_tokens=1000, _peak_in_tokens=500,
         messages=[{"ts": _t.time() - 90, "role": "assistant",
                    "text": "found the filings summary"}]), reason="exit 0")
     assert rid is not None

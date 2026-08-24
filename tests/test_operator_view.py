@@ -632,6 +632,7 @@ class FakeStreamer:
         self.actions = []           # every dict passed to run_action
         self.tabs = []
         self.ready_error = None
+        self.attached = True
 
     # routes call these — all inert
     def ensure_running(self):
@@ -645,6 +646,9 @@ class FakeStreamer:
 
     def require_ready(self, timeout=None):
         return self.ready_error
+
+    def has_attached_page(self):
+        return self.attached
 
     def run_action(self, action):
         self.actions.append(action)
@@ -1078,6 +1082,21 @@ def test_status_happy_path_shape(live, monkeypatch):
     assert body["url"] == "https://example.test"
     assert body["vw"] == 1280 and body["vh"] == 800
     assert body["has_frame"] is False        # no frame set → not fresh
+
+
+def test_status_never_calls_a_detached_stale_frame_live(live, monkeypatch):
+    client, mod = live
+    fs = FakeStreamer()
+    fs.status = "live"
+    fs.attached = False
+    fs.frame = b"stale pixels"
+    fs.frame_ts = time.monotonic()
+    _patch_streamer(monkeypatch, mod, fs)
+
+    body = client.get("/operator/status").get_json()
+
+    assert body["status"] == "connecting"
+    assert body["has_frame"] is False
 
 
 def test_status_survives_schedule_module_blowup(live, monkeypatch):

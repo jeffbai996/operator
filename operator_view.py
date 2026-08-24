@@ -40,7 +40,7 @@ import os as _os_cfg
 # the generated public demo, whose label appends " demo" to whatever it finds.
 # The README's version ladder must carry a row for this version; a test asserts
 # it, so the changelog cannot silently fall behind the number on screen.
-OP_VERSION = "1.0.37"
+OP_VERSION = "1.0.40"
 # DEMO isolation (the public demo): a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
 # unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
@@ -444,6 +444,7 @@ class _Streamer:
     _cdp = None
     _metric_sessions: dict = field(default_factory=dict)
     _target_ids: dict = field(default_factory=dict)   # page -> CDP target id (stable per page)
+    _crashed_pages: set = field(default_factory=set)
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
     _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch (the owner)
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
@@ -546,6 +547,47 @@ class _Streamer:
         return IDLE_FRAME_INTERVAL
 
     # ---- lifecycle -------------------------------------------------------
+    def has_attached_page(self) -> bool:
+        """Whether input and capture currently have a usable renderer target."""
+        page = self._page
+        if page is None or page in self._crashed_pages:
+            return False
+        try:
+            return not page.is_closed()
+        except Exception:
+            return False
+
+    def _mark_page_crashed(self, page) -> None:
+        """Invalidate a crashed target immediately, even if Playwright leaves
+        its page object open and addressable for a while."""
+        self._crashed_pages.add(page)
+        if page is self._page:
+            self._page = None
+            self._cdp = None
+            self._cdp_for = None
+            self.frame = None
+            self.frame_ts = 0.0
+            self.status = "connecting"
+            self.detail = "browser tab crashed — reconnecting"
+
+    def _track_page(self, page) -> None:
+        try:
+            page.on("crash", lambda _page=None: self._mark_page_crashed(page))
+        except Exception:
+            pass
+
+    def _live_pages(self, ctx) -> list:
+        pages = []
+        for page in ctx.pages:
+            if page in self._crashed_pages:
+                continue
+            try:
+                if not page.is_closed():
+                    pages.append(page)
+            except Exception:
+                continue
+        return pages
+
     def ensure_running(self) -> None:
         with self._lock:
             self.last_view = time.monotonic()
@@ -750,7 +792,10 @@ class _Streamer:
         self._browser = await self._pw.chromium.connect_over_cdp(CDP_URL)
         ctx = self._browser.contexts[0] if self._browser.contexts else \
             await self._browser.new_context()
-        pages = [p for p in ctx.pages if not p.is_closed()]
+        self._crashed_pages.clear()
+        pages = self._live_pages(ctx)
+        for page in pages:
+            self._track_page(page)
         if pages:
             for page in pages:
                 await self._force_desktop_page(page)
@@ -789,6 +834,7 @@ class _Streamer:
             # fallback page: navigate it to the landing URL — a bare new_page()
             # sits on about:blank forever ("new tab doesn't load the home page")
             self._page = await ctx.new_page()
+            self._track_page(self._page)
             self._cdp = None
             try:
                 await self._force_desktop_page(self._page)
@@ -796,7 +842,10 @@ class _Streamer:
             except Exception:  # noqa: BLE001 — landing nav is best-effort
                 pass
         try:
-            ctx.on("page", lambda page: asyncio.create_task(self._force_desktop_page(page)))
+            def _on_page(page):
+                self._track_page(page)
+                asyncio.create_task(self._force_desktop_page(page))
+            ctx.on("page", _on_page)
         except Exception:
             pass
         try:
@@ -949,6 +998,8 @@ class _Streamer:
                     png = await self._grab(self._page)
                 if png:
                     self._publish_frame(png)
+                    if self.status == "connecting":
+                        self.status, self.detail = "live", ""
                     try: self.cur_url = self._page.url or ""
                     except Exception: pass
                     _misses = 0
@@ -1344,7 +1395,7 @@ class _Streamer:
     async def _refresh_active_page(self) -> None:
         try:
             ctx = self._browser.contexts[0]
-            live = [p for p in ctx.pages if not p.is_closed()]
+            live = self._live_pages(ctx)
             if not live:
                 return
             switch_to = None
@@ -1390,7 +1441,7 @@ class _Streamer:
                 return
             self._tab_check_ts = now
             ctx = self._browser.contexts[0]
-            live = [p for p in ctx.pages if not p.is_closed()]
+            live = self._live_pages(ctx)
             try:
                 _busy = operator_agent.runner.is_running()
             except Exception:  # noqa: BLE001
@@ -1538,7 +1589,7 @@ class _Streamer:
         connection itself is gone (caller then does a hard re-attach)."""
         try:
             ctx = self._browser.contexts[0]
-            live = [p for p in ctx.pages if not p.is_closed()]
+            live = self._live_pages(ctx)
             if live:
                 self._page = live[-1]
                 self._cdp = None   # session was bound to the dead page — never dispatch input into it
@@ -1558,6 +1609,7 @@ class _Streamer:
             except Exception:  # noqa: BLE001
                 pass
         self._page = self._browser = self._pw = None
+        self._crashed_pages.clear()
         self._metric_sessions.clear()
         self._target_ids.clear()   # ids are per-browser — never reuse across attach
         # an error status (wedge, attach failure) must SURVIVE teardown — it
@@ -1575,7 +1627,7 @@ class _Streamer:
         cleared, failed = 0, 0
         try:
             ctx = self._browser.contexts[0]
-            pages = [p for p in ctx.pages if not p.is_closed()]
+            pages = self._live_pages(ctx)
         except Exception as e:  # noqa: BLE001 — browser gone/never attached
             return {"ok": False, "error": str(e), "cleared": 0, "failed": 0}
         for pg in pages:
@@ -1620,9 +1672,7 @@ class _Streamer:
         try:
             ctx = self._browser.contexts[0]
             tabs = []
-            for i, pg in enumerate(ctx.pages):
-                if pg.is_closed():
-                    continue
+            for i, pg in enumerate(self._live_pages(ctx)):
                 try:
                     title = await asyncio.wait_for(pg.title(), timeout=2)
                 except Exception:
@@ -1653,7 +1703,7 @@ class _Streamer:
     async def _switch_tab_locked(self, idx: int) -> dict:
         try:
             ctx = self._browser.contexts[0]
-            pages = [p for p in ctx.pages if not p.is_closed()]
+            pages = self._live_pages(ctx)
             if 0 <= idx < len(pages):
                 self._page = pages[idx]
                 self._cdp = None
@@ -1686,7 +1736,7 @@ class _Streamer:
     async def _close_tab_locked(self, idx: int) -> dict:
         try:
             ctx = self._browser.contexts[0]
-            pages = [p for p in ctx.pages if not p.is_closed()]
+            pages = self._live_pages(ctx)
             if 0 <= idx < len(pages):
                 closing = pages[idx]
                 # never close the LAST tab — that kills the browser / leaves the
@@ -1708,7 +1758,7 @@ class _Streamer:
                 # the 8.19s hang measured 2026-08-07.
                 if not await self._cdp_close_tab(closing):
                     await closing.close()
-                live = [p for p in ctx.pages if not p.is_closed()]
+                live = self._live_pages(ctx)
                 if not live:
                     # safety net: never leave zero tabs (that closes the browser) —
                     # open a fresh one so the demo/cockpit always has a live page.
@@ -2146,6 +2196,62 @@ class _Streamer:
         except Exception:
             return False
 
+    _PRIVILEGED_ACTIVATE_JS = r"""
+    (function(px, py){
+      var hits = [];
+      function walk(root, depth){
+        var controls = [];
+        try {
+          controls = root.querySelectorAll(
+            'a[href],button,[role="button"],[role="link"]');
+        } catch (_) {}
+        for (var i = 0; i < controls.length; i++) {
+          var el = controls[i], r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && px >= r.left && px <= r.right &&
+              py >= r.top && py <= r.bottom) {
+            hits.push({el: el, depth: depth, area: r.width * r.height});
+          }
+        }
+        var all = [];
+        try { all = root.querySelectorAll('*'); } catch (_) {}
+        for (var j = 0; j < all.length; j++) {
+          if (all[j].shadowRoot) walk(all[j].shadowRoot, depth + 1);
+        }
+      }
+      walk(document, 0);
+      if (!hits.length) return false;
+      hits.sort(function(a, b){
+        return (b.depth - a.depth) || (a.area - b.area);
+      });
+      hits[0].el.click();
+      return true;
+    })
+    """
+
+    async def _maybe_activate_privileged_control(
+            self, p, x: float, y: float) -> bool:
+        """Activate controls in Chrome's privileged NTP shadow tree.
+
+        Chrome accepts CDP mouse events on this page but does not run shortcut
+        activation (the click merely selects its label). Ordinary web pages
+        stay on the trusted raw-input path.
+        """
+        url = self._safe_url(p)
+        if not (url.startswith("chrome://new-tab-page/")
+                or url.startswith("chrome://newtab/")):
+            return False
+        try:
+            sess = await self._cdp_session(p)
+            res = await asyncio.wait_for(sess.send("Runtime.evaluate", {
+                "expression": (
+                    f"({self._PRIVILEGED_ACTIVATE_JS})"
+                    f"({float(x)},{float(y)})"),
+                "returnByValue": True,
+            }), timeout=2.0)
+            return bool((res.get("result") or {}).get("value"))
+        except Exception:
+            return False
+
     async def _cdp_scroll(self, p, dx: float, dy: float) -> None:
         """Scroll via raw CDP Input.dispatchMouseEvent(type=mouseWheel), NOT
         Playwright's page.mouse.wheel(). Same reason clicks use raw CDP: on a
@@ -2323,6 +2429,11 @@ class _Streamer:
                     _u = self._safe_url(p); self.cur_url = _u or self.cur_url
                     return {"ok": True, "url": _u, "px": [round(x), round(y)],
                             "select": True}
+                if (kind == "click_at"
+                        and await self._maybe_activate_privileged_control(p, x, y)):
+                    _u = self._safe_url(p); self.cur_url = _u or self.cur_url
+                    return {"ok": True, "url": _u,
+                            "px": [round(x), round(y)], "activated": True}
                 cnt = action.get("count")
                 try:
                     cnt = max(1, min(4, int(cnt))) if cnt is not None else None
@@ -3151,14 +3262,18 @@ def operator_status():
         return jsonify(status=("live" if fresh else "connecting"),
                        detail=_desktop_feed.detail, has_frame=fresh,
                        vw=0, vh=0, url="", click=None, surface=surface)
-    fresh = (_streamer.frame is not None
+    attached = _streamer.has_attached_page()
+    fresh = (attached and _streamer.frame is not None
              and (time.monotonic() - _streamer.frame_ts) < 6.5)
+    status = _streamer.status
+    if status == "live" and not attached:
+        status = "connecting"
     cur_url = _streamer.cur_url
     lx, ly, lt = _streamer.last_click
     click = None
     if lt and (time.monotonic() - lt) < 1.2:
         click = {"x": round(lx, 4), "y": round(ly, 4), "age": round(time.monotonic() - lt, 3)}
-    return jsonify(status=_streamer.status, detail=_streamer.detail,
+    return jsonify(status=status, detail=_streamer.detail,
                    has_frame=fresh, vw=_streamer.vw, vh=_streamer.vh, url=cur_url,
                    click=click, surface=surface,
                    # Real Chrome reachability, NOT the feed's state — the two
