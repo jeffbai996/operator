@@ -16,16 +16,10 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-trip-planning-v1.0.40.png" alt="Operator planning a trip in a live browser">
+  <img src="docs/img/operator-run-v1.0.40.png" alt="A live agent run — interleaved thinking + action trace beside the real Chrome it is driving">
 </p>
 
-<p><sub><i>Trip planning in the live cockpit — the action trail stays beside the exact page the agent is reading, and a follow-up can steer the run without starting over.</i></sub></p>
-
-<p>
-  <img src="docs/img/operator-live-research-v1.0.40.png" alt="Operator comparing live sources and reporting its findings">
-</p>
-
-<p><sub><i>Live research in a second conversation — each chat keeps its own transcript, resumed agent session, working directory, and stop/steer channel while a shared admission cap protects the machine.</i></sub></p>
+<p><sub><i>A live run, mid-flight — left: the interleaved thinking + action trace, reasoning over what it sees; right: the actual Chrome it's driving, streamed frame-by-frame over CDP. One browser, no fakes: the URL brow, the trace, and the feed all describe the same page. A message typed during the run steers the agent without killing the turn.</i></sub></p>
 
 ---
 
@@ -74,6 +68,32 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 > close-set in Urbanist, SANDBOX and COMPUTER stay visibly labeled, and the
 > three-stop theme control moves smoothly. Human-handoff alerts now say exactly
 > what needs attention once.
+
+## What a session looks like
+
+<p>
+  <img src="docs/img/operator-launchpad-v1.0.40.png" alt="The Operator launchpad — wordmark, composer, and saved-task cards">
+</p>
+
+<p><sub><i>A fresh session owns the full viewport: the wordmark, the composer, and category pills that summon saved-task cards, each pinned to the sites it uses. <b>Go</b> dispatches straight to the agent; prompts with <code>{{variables}}</code> ask for their blanks first. The ring up top is the logo assembling itself into a health readout — green connected, amber connecting, red when the browser is down.</i></sub></p>
+
+<p>
+  <img src="docs/img/operator-report-v1.0.40.png" alt="A finished run — markdown table report beside the results page it came from">
+</p>
+
+<p><sub><i>The report-back — a finished run collapses its trace into a duration card and answers in real markdown, pipe tables included, right next to the results page the numbers came from. The live token meter runs while the run burns; every finished run also lands in the History ledger with its full trace, replayable and re-runnable.</i></sub></p>
+
+<p>
+  <img src="docs/img/operator-vision-v1.0.40.png" alt="Canvas-game control — perceive + game_macro playing moves on a lichess board">
+</p>
+
+<p><sub><i>Canvas boards have no DOM to click, so this run uses the perception stack: <code>perceive</code> reads labeled targets off the raw pixels (zero extra model calls), and one <code>game_macro</code> plays the whole move sequence at machine speed — eleven board clicks, no mid-macro round trips, the planner only hears back on completion or surprise.</i></sub></p>
+
+<p align="center">
+  <img src="docs/img/operator-mobile-v1.0.40.png" width="300" alt="The phone cockpit — full-viewport splash, category pills, saved-task cards">
+</p>
+
+<p><sub><i>The phone cockpit — the same launchpad as a full-viewport takeover, pills summoning task cards, installable to the home screen as an app (PWA). The chat rides a draggable bottom sheet over a full-screen feed once a run is going.</i></sub></p>
 
 ## Distribution
 
