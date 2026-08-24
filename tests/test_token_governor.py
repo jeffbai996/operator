@@ -17,7 +17,7 @@ def make_runner(monkeypatch=None):
     # mirror the per-run resets _run() does before any token event can arrive
     r._peak_in_tokens = 0
     r._tok_warned = False
-    r._cum_in_tokens = 0
+    r._cumulative_in_tokens = 0
     r._tok_stop_fired = False
     r.messages = []
     r.handoff = None
@@ -49,7 +49,7 @@ def test_cumulative_accumulates_across_turns():
     r = make_runner()
     for it in (10_000, 25_000, 40_000):
         r._note_token_usage(it)
-    assert r._cum_in_tokens == 75_000
+    assert r._cumulative_in_tokens == 75_000
 
 
 def test_peak_tracks_max_single_turn_input():
@@ -63,7 +63,7 @@ def test_garbage_usage_ignored():
     r = make_runner()
     for bad in (None, "abc", -5, 0, {}, 3.5):  # 3.5 is fine to int(); others no-op
         r._note_token_usage(bad)
-    assert r._cum_in_tokens == 3          # int(3.5)
+    assert r._cumulative_in_tokens == 3          # int(3.5)
     assert r.messages == []
 
 
@@ -89,6 +89,18 @@ def test_handoff_set_after_stop_clears_it(monkeypatch):
     r._note_token_usage(150_000)
     assert r.handoff is not None
     assert "token" in r.handoff["reason"].lower()
+
+
+def test_token_cap_handoff_pages_once(monkeypatch):
+    monkeypatch.setenv("OPERATOR_TOKEN_TURN_STOP", "100000")
+    pings = []
+    monkeypatch.setattr(OA.operator_ping, "notify_async",
+                        lambda runner, reason="": pings.append(reason))
+    r = make_runner()
+    stub_stop(r)
+    r._note_token_usage(150_000)
+    r._note_token_usage(200_000)
+    assert pings == ["token cap"]
 
 
 # ── hard cap: cumulative per-run ─────────────────────────────────────────────

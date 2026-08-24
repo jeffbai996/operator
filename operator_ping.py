@@ -1,14 +1,9 @@
-"""Run-completion pings — the cockpit's notification surface.
+"""Human-handoff pings — the cockpit's notification surface.
 
-A finished run is invisible unless you happen to be looking at the cockpit
-(the owner 2026-08-05: "Polished for 7m 13s" is a thing you found out by looking).
-One message per terminal run, posted to a dedicated Discord alerts channel,
-with the run's final frame attached when there is one.
-
-Discord completion pings were rejected on 2026-07-01 in favour of the
-nav-badge unseen counter. That call was reversed on 2026-08-05, once a
-dedicated alerts channel existed: the objection was never the ping, it was
-the ping landing in a channel somebody talks in.
+Operator's messages, actions, failures, and completions remain visible in the
+cockpit without being mirrored into Discord. The alerts channel gets exactly
+the event that requires attention: an explicit TAKE_CONTROL handoff, with the
+latest frame attached when one exists.
 
 Config (both required, absence = feature off):
     OPERATOR_PING_CHANNEL          Discord channel id to post into
@@ -47,32 +42,13 @@ _HELPER_FILE = "~/.config/host-app/env"
 
 DISCORD_LIMIT = 2000
 TASK_LIMIT = 300
-# Rows are budgeted, not counted: keep the NEWEST steps that fit inside
-# Discord's message ceiling and mark what was dropped, the way the agent view
-# does (the owner 2026-08-06: "maximize the allowed height"). A fixed row count
-# threw away room on a short trace and overflowed on a chatty one.
-LIVE_STEPS_MAX = 40      # hard ceiling so one runaway trace can't own the card
-LIVE_POLL_S = 3.0        # how often the watcher samples the runner
-LIVE_EDIT_S = 4.0        # floor between edits — Discord rate-limits PATCH
-# The spinner needs a heartbeat: a run that thinks for two minutes without a
-# tool call would otherwise freeze mid-frame and read as wedged, which is the
-# opposite of what a liveness cue is for. This deliberately costs edits on a
-# quiet run (~4/min) — cheap against Discord's 5-per-5s, and the point of the
-# glyph is that it moves.
-LIVE_SPIN_S = 15.0
-LIVE_MAX_S = 3 * 3600    # watcher self-terminates; never outlives a wedged run
 _MAX_UPLOAD = 8 * 1024 * 1024        # comfortably under Discord's cap
 _IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
 
-# The cockpit paints ✓ / ✕ / ⏹ on a finished run (1.0.30). The ping speaks the
-# same three marks so the phone and the screen agree at a glance.
-# The agent view's exact vocabulary (scripts/agent_view.py): a spinner while
-# live, a solid ● when it settles, ✗ when it didn't. One squad, one language
-# for "this is alive" and "this is finished" (the owner 2026-08-06).
-GLYPHS = {"done": "●", "error": "✗", "interrupted": "⏹", "running": "◉"}
-_SPINNER = ("◐", "◓", "◑", "◒")
-_STEP_DONE = "●"
-_STEP_LIVE = "◉"
+# Keep the old state glyphs available to the pure formatter vocabulary, but the
+# only outbound card now uses the explicit handoff warning.
+GLYPHS = {"done": "●", "error": "✗", "interrupted": "⏹", "running": "◉",
+          "handoff": "⚠"}
 # Surface reads faster as a picture than as the word "browser" three lines down.
 _SURFACE_EMOJI = {"browser": "🌐", "desktop-sandbox": "📦", "desktop-real": "🖥️",
                   "sandbox": "📦", "computer": "🖥️"}
@@ -83,7 +59,7 @@ _SURFACE_LABEL = {"browser": "operator"}
 # Card width. See _clamp — this is the claude bot's number, not a new one.
 LINE_MAX = 88
 _HEADS = {"done": "Finished", "error": "Failed", "interrupted": "Stopped",
-          "running": "Running"}
+          "running": "Running", "handoff": "Operator needs your input"}
 
 
 # ── formatting (pure) ───────────────────────────────────────────────────
@@ -142,10 +118,10 @@ def _block(lines: list[str]) -> str:
     return "```diff\n" + body + "\n```"
 
 
-_STATE_MARK = {"done": "+", "error": "-", "interrupted": "-"}
+_STATE_MARK = {"done": "+", "error": "-", "interrupted": "-", "handoff": "-"}
 
 
-def _headline(f: dict, state: str, frame: int | None = None) -> str:
+def _headline(f: dict, state: str) -> str:
     """The status row. It lives INSIDE the card now (the owner 2026-08-11) — a bold
     line floating above a code block reads as two separate messages, and on a
     narrow phone it wrapped away from the block it belongs to.
@@ -154,9 +130,7 @@ def _headline(f: dict, state: str, frame: int | None = None) -> str:
     marker instead: green when it finished, red when it did not, plain while it
     is still going.
     """
-    glyph = (_SPINNER[frame % len(_SPINNER)]
-             if state == "running" and frame is not None
-             else GLYPHS.get(state, "•"))
+    glyph = GLYPHS.get(state, "•")
     head = f"{_STATE_MARK.get(state, ' ')} {glyph} {_HEADS.get(state, state)}"
     # WHO is driving, in the headline rather than buried in the fact line: with
     # four bots on the same cockpit (claude-a, claude-b, gpt, gemma) the first
@@ -166,7 +140,7 @@ def _headline(f: dict, state: str, frame: int | None = None) -> str:
     head += f" · {_fmt_duration(f.get('duration_s'))}"
     # A clean exit's reason is "exit 0", which tells nobody anything. Every
     # other terminal reason is the most useful word in the message.
-    if state not in ("done", "running") and f.get("reason"):
+    if state not in ("done", "running", "handoff") and f.get("reason"):
         head += f" · {_clip(str(f['reason']), 120)}"
     return head
 
@@ -185,15 +159,17 @@ def _fact_line(f: dict) -> str:
 
 
 def format_ping(f: dict) -> str:
-    """The finished-run message — one card, nothing outside it.
+    """The human-handoff message — one card, nothing outside it.
 
-    2026-08-05 put the heading in markdown above the block; 2026-08-11 pulled it
-    in, so the whole ping is a single monospaced readout instead of a bold line
-    with a box under it.
+    The actual terminal state is intentionally secondary: the reason this card
+    exists is the work the human must do, not whether the agent process exited.
     """
-    state = f.get("state") or "done"
+    handoff = str(f.get("handoff") or "Human input required.")
+    alert = {**f, "state": "handoff", "reason": handoff}
     out = _block([
-        _headline(f, state),
+        _headline(alert, "handoff"),
+        "",
+        " " + _clip(handoff, TASK_LIMIT),
         "",
         " " + _clip(str(f.get("task") or ""), TASK_LIMIT),
         " " + _fact_line(f),
@@ -201,95 +177,9 @@ def format_ping(f: dict) -> str:
     return out[:DISCORD_LIMIT]
 
 
-def live_body(f: dict, steps: list[tuple[str, str]]) -> str:
-    """The card's content WITHOUT the headline — used as the change signal.
-
-    The headline carries elapsed time and the spinner frame, both of which move
-    on their own; comparing the whole message would make every poll look like a
-    change. Change is what the agent DID, not what the clock did.
-    """
-    return "\n".join(_live_rows(f, list(steps or [])))
-
-
-def _current_row(steps: list, f: dict) -> str:
-    """What Operator is doing RIGHT NOW — one line, not the whole history.
-
-    Until 2026-08-11 this printed every action as it completed, so a chatty run
-    grew a wall of Clicking/Took screenshot rows that pushed the card past the
-    fence width and buried the only thing you actually want off a glance: what
-    it is doing this second. The cockpit's own minimised status has always been
-    one line ("Reading", "Working") and the alert now reads the same way.
-
-    The trace is not lost — it is in the cockpit, which is where you go when you
-    want the history rather than the state.
-    """
-    if not steps:
-        return " (starting)"
-    label, detail, ts = steps[-1]
-    end = float(f.get("ended_ts") or 0) or time.time()
-    dur = _fmt_duration(max(0.0, end - float(ts or 0))) if ts else ""
-    if str(label) == "⚠":
-        # An error IS the row's glyph — printing "●  ⚠  Action failed" marks the
-        # same row twice and reads as two events. Red, because it is one.
-        return _clamp(f"- ⚠  {_clip(str(detail), 60)}")
-    glyph = _STEP_LIVE if (f.get("state") or "") == "running" else _STEP_DONE
-    row = f" {glyph}  {label}"
-    if detail:
-        row += f"  {_clip(str(detail), 52)}"
-    return _clamp(row + (f"  {dur}" if dur else ""))
-
-
-def _live_rows(f: dict, steps: list) -> list[str]:
-    """Everything under the headline. Split out so live_body can compare the
-    parts that represent work without the clock and spinner moving underneath
-    it every poll."""
-    runtime_note = ("(agy has no live trace — final text only)"
-                    if f.get("runtime") == "agy" and not steps else None)
-    return [
-        "",
-        " " + _clip(str(f.get("task") or ""), TASK_LIMIT),
-        "",
-        " " + runtime_note if runtime_note else _current_row(steps, f),
-        "",
-        " " + _fact_line(f),
-    ]
-
-
-def format_live(f: dict, steps: list | None = None, frame: int | None = None) -> str:
-    """The in-flight card, edited in place while the run works.
-
-    One current-activity line rather than a growing trace, so the card is a
-    fixed size no matter how chatty the run is. That also retires the old
-    budget-and-drop machinery: there is nothing left to overflow, and no
-    "+N earlier" to declare, because the card never claimed to be the history.
-    """
-    body = [_headline(f, f.get("state") or "running", frame)]
-    body += _live_rows(f, list(steps or []))
-    return _block(body)[:DISCORD_LIMIT]
-
-
-def live_steps(runner) -> list[tuple[str, str, float]]:
-    """(label, detail, ts) for every action the run has taken, plus any error
-    line — the same rows the cockpit's trace renders, with the timestamp so the
-    card can show how long each step took."""
-    try:
-        msgs = list(getattr(runner, "messages", None) or [])
-    except Exception:  # noqa: BLE001
-        return []
-    out = []
-    for m in msgs:
-        ts = float(m.get("ts") or 0)
-        if m.get("role") == "action" and m.get("text"):
-            out.append((str(m["text"]), str(m.get("detail") or ""), ts))
-        elif m.get("role") == "error" and m.get("text"):
-            out.append(("⚠", str(m["text"]), ts))
-    return out
-
-
 def should_ping(f: dict) -> bool:
-    """Demo runs never ping. Demo/prod isolation is a safety property (1.0.16)
-    and a public visitor's run must not reach a private phone."""
-    return not f.get("demo")
+    """Only a private run's explicit TAKE_CONTROL request may page #alerts."""
+    return not f.get("demo") and bool(f.get("handoff"))
 
 
 def facts(runner, reason: str = "") -> dict:
@@ -308,8 +198,9 @@ def facts(runner, reason: str = "") -> dict:
         "surface": str(getattr(runner, "surface", "") or ""),
         "runtime": str(getattr(runner, "_runtime", "") or ""),
         "demo": bool(getattr(runner, "demo", False)),
+        "handoff": str((getattr(runner, "handoff", None) or {}).get("reason") or ""),
         "n_messages": len(getattr(runner, "messages", None) or []),
-        "tokens": getattr(runner, "_cum_in_tokens", None),
+        "tokens": getattr(runner, "_cumulative_in_tokens", None),
         "started_ts": started,
         "ended_ts": ended,
         "duration_s": max(0.0, ended - started),
@@ -420,13 +311,6 @@ def _post(channel: str, text: str, image_path: str | None) -> tuple[bool, str, s
                  "POST", body, ctype)
 
 
-def _edit(channel: str, message_id: str, text: str) -> tuple[bool, str, str | None]:
-    body = json.dumps({"content": text, "allowed_mentions": {"parse": []}}).encode()
-    return _send(
-        f"https://discord.com/api/v10/channels/{channel}/messages/{message_id}",
-        "PATCH", body, "application/json")
-
-
 # ── entry points ────────────────────────────────────────────────────────
 
 def _target() -> str | None:
@@ -436,7 +320,7 @@ def _target() -> str | None:
 
 
 def notify(runner, reason: str = "") -> bool:
-    """Post one ping for a finished run. True only if Discord accepted it.
+    """Post one ping for a human handoff. True only if Discord accepted it.
     Never raises: a notification is not worth a run."""
     try:
         channel = _target()
@@ -449,72 +333,12 @@ def notify(runner, reason: str = "") -> bool:
         ok, err, _mid = _post(channel, format_ping(f), shot)
         if not ok:
             log.warning("operator ping failed (run unaffected): %s", err)
+            return False
+
         return ok
     except Exception as e:  # noqa: BLE001 — by contract: never break a run
         log.warning("operator ping failed (run unaffected): %s", e)
         return False
-
-
-def watch(runner, now=time.monotonic, sleep=time.sleep) -> str | None:
-    """Post an in-flight card and keep editing it while the run works.
-
-    Returns the message id it drove, or None if it never posted. The clock and
-    sleep are injectable so the loop is testable without real time passing.
-
-    Edits, not new messages, on purpose: an edit doesn't buzz a phone, so the
-    channel stays quiet until the run actually finishes and notify() posts the
-    completion ping as a NEW message. One card per run, one buzz per run.
-    """
-    channel = _target()
-    if not channel:
-        return None
-    f = facts(runner)
-    if not should_ping(f):
-        return None
-    frame = 0
-    ok, err, mid = _post(channel, format_live(f, live_steps(runner), frame), None)
-    if not ok or not mid:
-        log.warning("operator live card failed (run unaffected): %s", err)
-        return None
-
-    started = last_edit = now()
-    last_body = live_body(f, live_steps(runner))
-    while True:
-        sleep(LIVE_POLL_S)
-        f, steps = facts(runner), live_steps(runner)
-        running = str(getattr(runner, "state", "")) == "running"
-        if not running or (now() - started) > LIVE_MAX_S:
-            # Always retire the card, even for a run that did nothing: its
-            # headline still says Running and that would stay on screen. No
-            # frame — a finished run gets its ✓/✕/⏹ back, not a stopped wheel.
-            _edit(channel, mid, format_live(f, steps))
-            return mid
-        body = live_body(f, steps)
-        moved = body != last_body and (now() - last_edit) >= LIVE_EDIT_S
-        # Spin even when nothing happened: a frozen wheel reads as a dead run,
-        # which is exactly what the wheel is there to rule out.
-        spin = (now() - last_edit) >= LIVE_SPIN_S
-        if moved or spin:
-            frame += 1
-            _edit(channel, mid, format_live(f, steps, frame))
-            last_body, last_edit = body, now()
-
-
-def watch_async(runner) -> None:
-    """Start the in-flight card off the run thread. Same contract as the ping:
-    a watcher failure must never touch the run."""
-    try:
-        threading.Thread(target=_watch_guarded, args=(runner,),
-                         name="operator-live", daemon=True).start()
-    except Exception as e:  # noqa: BLE001
-        log.warning("operator live thread failed (run unaffected): %s", e)
-
-
-def _watch_guarded(runner) -> None:
-    try:
-        watch(runner)
-    except Exception as e:  # noqa: BLE001
-        log.warning("operator live card failed (run unaffected): %s", e)
 
 
 def notify_async(runner, reason: str = "") -> None:

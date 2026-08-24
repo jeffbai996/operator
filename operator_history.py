@@ -42,6 +42,9 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS runs (
     bot TEXT, task TEXT, state TEXT, reason TEXT,
     model TEXT, effort TEXT, runtime TEXT, surface TEXT,
     demo INTEGER DEFAULT 0,
+    -- Column name kept as-is on purpose. The Python attribute behind it was
+    -- renamed to _cumulative_in_tokens; renaming the COLUMN is a migration on a
+    -- live history database, not a rename, so it needs its own change.
     cum_in_tokens INTEGER, peak_in_tokens INTEGER,
     n_messages INTEGER, trace TEXT)"""
 
@@ -107,7 +110,7 @@ def record(runner, reason: str = "") -> int | None:
             str(getattr(runner, "_runtime", "") or ""),
             str(getattr(runner, "surface", "") or ""),
             1 if getattr(runner, "demo", False) else 0,
-            _to_int(getattr(runner, "_cum_in_tokens", None)),
+            _to_int(getattr(runner, "_cumulative_in_tokens", None)),
             _to_int(getattr(runner, "_peak_in_tokens", None)),
             len(msgs),
             _capped_trace(msgs),

@@ -477,7 +477,7 @@ class AgentRunner:
         # governor (#34) token accounting — also reset per-run in _run()
         self._peak_in_tokens: int = 0
         self._tok_warned: bool = False
-        self._cum_in_tokens: int = 0
+        self._cumulative_in_tokens: int = 0
         self._tok_stop_fired: bool = False
         # v1.1 §2.2: every state transition goes through _set_state(); this is
         # the progress heartbeat the stall watchdog (§2.1) reads. Bumped on
@@ -494,11 +494,6 @@ class AgentRunner:
         if old != new:
             _log.info("operator state %s -> %s%s", old, new,
                       f" ({reason})" if reason else "")
-        if old != "running" and new == "running":
-            # in-flight card: one Discord message per run, edited as the trace
-            # grows, so a run can be read at a glance from the phone while it
-            # works. Edits don't buzz — only the completion ping below does.
-            operator_ping.watch_async(self)
         if old == "running" and new in ("done", "error", "interrupted"):
             # flight recorder (1.0.11): exactly one ledger row per finished
             # run, hooked at the sole state writer so the gate gap's proc-less
@@ -507,11 +502,11 @@ class AgentRunner:
                 operator_history.record(self, reason=reason)
             except Exception:  # noqa: BLE001 — history must never break a run
                 pass
-            # Same hook, same exactly-once property: one Discord ping per
-            # finished run, so a long run isn't invisible until you look at
-            # the cockpit. Off unless OPERATOR_PING_CHANNEL is set, and it
-            # sends on its own thread — see operator_ping.
-            operator_ping.notify_async(self, reason=reason)
+            # #alerts is an attention surface, not a remote activity feed.
+            # Ordinary actions, replies, completions, and failures stay in the
+            # cockpit; only an explicit TAKE_CONTROL handoff pages the human.
+            if self.handoff:
+                operator_ping.notify_async(self, reason=reason)
             # A bot may need to deploy Python changes while driving Operator.
             # Its PreToolUse hook queues the cockpit restart instead of killing
             # this live turn; consume that request exactly at terminal state.
@@ -762,7 +757,7 @@ class AgentRunner:
         self._agy_live_traj = ""  # the run's locked trajectory (live-poll streaming)
         self._peak_in_tokens = 0   # highest single-turn input tokens (context size)
         self._tok_warned = False   # one-shot token-blowout warning per run
-        self._cum_in_tokens = 0    # sum of every reported turn-input this run (burn)
+        self._cumulative_in_tokens = 0    # sum of every reported turn-input this run (burn)
         self._tok_stop_fired = False  # one-shot governor cap-stop per run (#34)
         self._agy_traj_before = {}
         self._agy_offsets = {}
@@ -1191,7 +1186,7 @@ class AgentRunner:
             return
         if it > self._peak_in_tokens:
             self._peak_in_tokens = it
-        self._cum_in_tokens += it
+        self._cumulative_in_tokens += it
         if it >= self._TOKEN_WARN_THRESHOLD and not self._tok_warned:
             self._tok_warned = True
             self.messages.append({"ts": time.time(), "role": "error",
@@ -1209,9 +1204,9 @@ class AgentRunner:
         if turn_cap and it >= turn_cap:
             reason = ("this turn re-sent ~%s input tokens (per-turn cap %s)"
                       % (f"{it:,}", f"{turn_cap:,}"))
-        elif run_cap and self._cum_in_tokens >= run_cap:
+        elif run_cap and self._cumulative_in_tokens >= run_cap:
             reason = ("this run has consumed ~%s cumulative input tokens (per-run cap %s)"
-                      % (f"{self._cum_in_tokens:,}", f"{run_cap:,}"))
+                      % (f"{self._cumulative_in_tokens:,}", f"{run_cap:,}"))
         if not reason:
             return
         self._tok_stop_fired = True
@@ -1226,6 +1221,9 @@ class AgentRunner:
         # AFTER stop() — it clears handoff; the banner must survive the stop.
         self.handoff = {"reason": "Token cap auto-stop: " + reason,
                         "ts": time.time()}
+        # stop() reached the terminal transition before the handoff existed, so
+        # this exceptional path must page after restoring the banner.
+        operator_ping.notify_async(self, reason="token cap")
 
 
     def _agy_apply_loop_nudge(self, task: str) -> str:
@@ -1754,7 +1752,7 @@ class AgentRunner:
             # excluded, so these read small vs the raw API meter). NB both
             # reset per TURN (_run_inner), so on a gate/steer follow-up the
             # meter shows the current turn's burn, not the whole run's.
-            "cum_in_tokens": self._cum_in_tokens,
+            "cumulative_in_tokens": self._cumulative_in_tokens,
             "peak_in_tokens": self._peak_in_tokens,
         }
 

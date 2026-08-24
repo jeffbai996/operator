@@ -483,6 +483,7 @@
   (function(){
     const hint = document.querySelector('.op-kbhint');
     if (!hint) return;
+    const keyCapture = document.getElementById('op-key-capture');
     let _t = null;
     function show(ms){ hint.classList.add('op-hint-show');
       clearTimeout(_t); if (ms) _t = setTimeout(()=>hint.classList.remove('op-hint-show'), ms); }
@@ -491,6 +492,7 @@
     show(30000);
     // tapping/focusing the browser stage → fade after 1.5s (they're steering now)
     stage.addEventListener('focus', ()=>{ show(0); hide(1500); });
+    if (keyCapture) keyCapture.addEventListener('focus', ()=>{ show(0); hide(1500); });
     // clicking away from the stage → re-show + persist 10s
     stage.addEventListener('blur', ()=>{ show(10000); });
   })();
@@ -1826,9 +1828,10 @@
   let _maps = [];                        // shipped game maps (vision/maps/)
   let _activeMap = '';                   // '' = none; folded into dispatch text only
   const _isGameSurface = () => _surfaceActive !== 'browser';   // desktop = game-capable
-  // The sandbox is already unmistakable from the desktop taskbar/feed. Keep
-  // its brow chip empty so the Operator controls survive narrow/high-zoom rails.
-  const _SURF_CHIP = { 'desktop-real': 'computer' };
+  const _SURF_CHIP = {
+    'desktop-sandbox': 'sandbox',
+    'desktop-real': 'computer'
+  };
   const _SURF_ICON = {
     browser: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg>',
     'desktop-sandbox': '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M4 7.5l8 4.5 8-4.5M12 12v9"></path></svg>',
@@ -1838,7 +1841,13 @@
     op.dataset.surface = _surfaceActive;
     const chipTxt = _SURF_CHIP[_surfaceActive] || '';
     surfChip.hidden = !chipTxt;
-    surfChip.textContent = chipTxt;
+    surfChip.replaceChildren();
+    if (chipTxt) {
+      const label = document.createElement('span');
+      label.className = 'op-surface-chip-label';
+      label.textContent = chipTxt;
+      surfChip.appendChild(label);
+    }
     surfChip.classList.toggle('real', _surfaceActive === 'desktop-real');
     // taskbar title follows the surface
     const tbn = document.getElementById('op-tb-name');
@@ -3485,7 +3494,7 @@
     } catch {}
   }
 
-  // effort tiers per model (authoritative, claude docs): Opus and Sonnet 5 both
+  // effort tiers per model: Opus and Sonnet 5 both
   // get the full 5-tier scale (xhigh added 2026-06-30 — Sonnet 5 supports it,
   // this list was stale from when it was written for Sonnet 4.6). Haiku = no
   // effort support. Picker reacts to the chosen model.
@@ -3495,13 +3504,13 @@
     "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],   // claude-a-only roster entry
 
     haiku:  [],   // Haiku 4.5 has no effort support
-    // GPT-5.6 family: per-tier ladders (OpenAI, 2026-06). Sol flagship adds max+ultra
-    // above the base low/medium/high; Terra is the standard ladder; Luna (fast/cheap)
-    // caps at minimal/low. No xhigh on the 5.6 line — that ladder is Claude-side only.
-    "gpt-5.6-sol":   ["low", "medium", "high", "max", "ultra"],
-    "gpt-5.6-terra": ["low", "medium", "high"],
-    "gpt-5.6-luna":  ["minimal", "low"],
-    "gpt-5.5": ["low", "medium", "high", "xhigh"],
+    // GPT-5.6: Sol, Terra, and Luna all accept the same six reasoning
+    // settings. Keep this in sync with the actual Codex runtime: old picker
+    // values such as "minimal" and "ultra" are not valid effort settings.
+    "gpt-5.6-sol":   ["none", "low", "medium", "high", "xhigh", "max"],
+    "gpt-5.6-terra": ["none", "low", "medium", "high", "xhigh", "max"],
+    "gpt-5.6-luna":  ["none", "low", "medium", "high", "xhigh", "max"],
+    "gpt-5.5": ["none", "low", "medium", "high", "xhigh"],
     // gemma/agy: pick the Gemini family in the model picker, the tier in the effort
     // picker; start() passes the slug as --model and the tier as --effort (agy
     // stopped accepting the folded "Gemini X (Tier)" form, 2026-07-24).
@@ -3846,8 +3855,9 @@
         if (d.stalled) { setCardSub(d.bot||'', 'quiet ' + Math.round(d.stalled_for||0) + 's — stalled? ■ stops it', '⏱'); }
         else {
           // 1.0.15 live token meter: the ledger's burn number, while it burns
-          const _tk = (d.cum_in_tokens >= 1e6) ? (d.cum_in_tokens/1e6).toFixed(1) + 'M tok'
-                    : (d.cum_in_tokens >= 1000) ? Math.round(d.cum_in_tokens/1000) + 'k tok' : '';
+          const _cum = d.cumulative_in_tokens;
+          const _tk = (_cum >= 1e6) ? (_cum/1e6).toFixed(1) + 'M tok'
+                    : (_cum >= 1000) ? Math.round(_cum/1000) + 'k tok' : '';
           setCardSub(d.bot||'', _lastActionVerb.toLowerCase() + (_tk ? ' · ' + _tk : ''), _lastActionEmoji);
         }
         op.dataset.agent='running'; setInFlight(true);
@@ -4168,9 +4178,29 @@
       if (e.key === 'Escape' && !pop.hidden) pop.hidden = true; });
   })();
   const tabsToggle = document.getElementById('op-tabs-toggle');
+  // Every dismissal goes through here so the strip always leaves the same way.
+  // Setting hidden directly is what made a tab tap snap while opening glided.
+  function hideTabStrip() {
+    const t = document.getElementById('op-tabs');
+    if (!t || t.hidden || t.classList.contains('op-tabs-closing')) return;
+    const finish = () => {
+      t.classList.remove('op-tabs-closing');
+      t.hidden = true;
+      tabsToggle.classList.remove('active');
+    };
+    t.classList.add('op-tabs-closing');
+    // animationend is the accurate signal; the timer is the backstop for a
+    // reduced-motion user, where the animation never runs and never ends.
+    let done = false;
+    const once = () => { if (done) return; done = true; finish(); };
+    t.addEventListener('animationend', once, { once: true });
+    setTimeout(once, 220);
+  }
   tabsToggle.addEventListener('click', () => {
-    const t = document.getElementById('op-tabs'); t.hidden = !t.hidden;
-    tabsToggle.classList.toggle('active', !t.hidden); });
+    const t = document.getElementById('op-tabs');
+    if (t.hidden) { t.hidden = false; tabsToggle.classList.add('active'); }
+    else hideTabStrip();
+  });
 
   // ── browser tab strip (mirror the Chrome's open tabs) ──
   const TABS_URL = OP_URLS.tabs;
@@ -4271,8 +4301,7 @@
             if (dragging) { el.classList.remove('dragging'); _dragTab = null; return; }
             // plain tap → switch to this tab and collapse the strip
             try { await fetch(OP_URLS.tab_switch.replace('/0','/'+t.i), {method:'POST'}); pollTabs(); } catch {}
-            const tb=document.getElementById('op-tabs'); tb.hidden=true;
-            tabsToggle.classList.remove('active');
+            hideTabStrip();
           };
           const cancel = () => {
             el.removeEventListener('pointermove', move);
@@ -4304,8 +4333,14 @@
         x.innerHTML = '<svg viewBox="0 0 14 14" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7"></path></svg>';
         x.addEventListener('click', async (e) => { e.stopPropagation();
           el.classList.add('op-tab-closing');   // play the close-out animation first
+          // Was this the last one? Then the strip itself is about to go, and
+          // :empty would cut it dead. Send it out with the same fade the
+          // toggle uses (the owner 2026-08-22).
+          const last = el.parentNode.querySelectorAll('.op-tab:not(.op-tab-closing)').length === 0;
           setTimeout(async () => {
-            try { await fetch(OP_URLS.tab_close.replace('/0','/'+t.i), {method:'POST'}); pollTabs(); } catch {}
+            try { await fetch(OP_URLS.tab_close.replace('/0','/'+t.i), {method:'POST'}); } catch {}
+            if (last) hideTabStrip();
+            pollTabs();
           }, 190);
         });
         el.appendChild(l); el.appendChild(x);
@@ -4858,6 +4893,39 @@
     const sc=Math.min(r.width/nW, r.height/nH); const dW=nW*sc, dH=nH*sc;
     const ox=(r.width-dW)/2, oy=(r.height-dH)/2; const px=cx-r.left-ox, py=cy-r.top-oy;
     if(px<0||py<0||px>dW||py>dH) return null; return {x:px/dW, y:py/dH}; }
+  const keyCapture = document.getElementById('op-key-capture');
+  const _captureSeed = '\u200b';
+  function resetKeyCapture(){
+    if (!keyCapture) return;
+    keyCapture.value = _captureSeed;
+    try { keyCapture.setSelectionRange(1, 1); } catch(_){}
+  }
+  function focusTouchKeyboard(){
+    if (!keyCapture) { stage.focus(); return; }
+    resetKeyCapture();
+    try { keyCapture.focus({preventScroll:true}); } catch(_) { keyCapture.focus(); }
+  }
+  if (keyCapture) {
+    resetKeyCapture();
+    // Software keyboards do not consistently emit a useful keydown. Drain
+    // their edit operation instead; hardware keyboards are handled below and
+    // preventDefault(), so they never double-send through this fallback.
+    keyCapture.addEventListener('input', e => {
+      if (e.isComposing) return;
+      const typ = e.inputType || '';
+      if (typ === 'deleteContentBackward') {
+        act({kind:'key', value:'Backspace'}, null, true);
+      } else if (typ === 'deleteContentForward') {
+        act({kind:'key', value:'Delete'}, null, true);
+      } else if (typ === 'insertLineBreak' || typ === 'insertParagraph') {
+        act({kind:'key', value:'Enter'}, null, true);
+      } else {
+        const text = e.data != null ? e.data : keyCapture.value.replaceAll(_captureSeed, '');
+        if (text) act({kind:'type', value:text}, null, true);
+      }
+      resetKeyCapture();
+    });
+  }
   function ripple(cx,cy){ const r=stage.getBoundingClientRect(); const d=document.createElement('span');
     d.className='op-ripple'; d.style.left=(cx-r.left)+'px'; d.style.top=(cy-r.top)+'px';
     stage.appendChild(d); setTimeout(()=>d.remove(),500); }
@@ -4985,6 +5053,9 @@
     if (_overlayTarget(e)) return;   // overlay tap — don't preventDefault its click
     if (_tScroll) { _tScroll = false; e.preventDefault(); _endTouch(); return; }
     if (_tHoldTimer) { clearTimeout(_tHoldTimer); _tHoldTimer = null; }
+    // Focus an actual editable control while the quick tap is still a trusted
+    // iOS gesture. Focusing the stage div cannot summon the software keyboard.
+    if (!_tDragging && !_tHolding && _tN) focusTouchKeyboard();
     e.preventDefault();
     if (_tDragging && _tStart && _tN) {          // DRAG (one atomic action)
       act({kind:'drag', x0:_tStart.n.x, y0:_tStart.n.y, x1:_tN.x, y1:_tN.y}, null, true);
@@ -5065,17 +5136,20 @@
   // key_up on release) so holding an arrow gives smooth continuous movement in the bot
   // browser (native key-repeat) instead of laggy per-repeat HTTP round-trips.
   const _heldKeys = new Set();
-  stage.addEventListener('keydown', e => { if(e.target!==stage || e.metaKey||e.ctrlKey||e.altKey) return;
+  stage.addEventListener('keydown', e => { if((e.target!==stage && e.target!==keyCapture) || e.metaKey||e.ctrlKey||e.altKey) return;
     if(e.key.length===1){ e.preventDefault(); act({kind:'type',value:e.key}, null, true); }
     else if(PASS[e.key]){ e.preventDefault();
       if(e.repeat) return;                       // ignore OS auto-repeat — bot Chrome repeats the held key
       _heldKeys.add(PASS[e.key]);
       act({kind:'key_down',value:PASS[e.key]}, null, true); } });
   stage.addEventListener('keyup', e => {
-    if(e.target!==stage) return;
+    if(e.target!==stage && e.target!==keyCapture) return;
     if(PASS[e.key] && _heldKeys.has(PASS[e.key])){ e.preventDefault();
       _heldKeys.delete(PASS[e.key]);
       act({kind:'key_up',value:PASS[e.key]}, null, true); } });
   // release any stuck held keys if focus leaves the stage
   stage.addEventListener('blur', () => { _heldKeys.forEach(k => act({kind:'key_up',value:k}, null, true)); _heldKeys.clear(); });
+  if (keyCapture) keyCapture.addEventListener('blur', () => {
+    _heldKeys.forEach(k => act({kind:'key_up',value:k}, null, true)); _heldKeys.clear();
+  });
 })();
