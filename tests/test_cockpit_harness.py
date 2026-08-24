@@ -672,7 +672,8 @@ def test_launchpad_backdrop_collapses_results_and_theme_toggle_is_local(browser,
         hero_top = pg.locator(".op-lp-hero").bounding_box()["y"]
 
         pg.mouse.click(20, 450)
-        pg.wait_for_timeout(500)
+        pg.wait_for_function(
+            "document.querySelector('.op-lp-results-inner').getBoundingClientRect().height < 1")
         assert "op-lp-collapsed" in pg.locator("#op-lp").get_attribute("class")
         assert pg.locator(".op-lp-results-inner").bounding_box()["height"] < 1
         assert pg.locator(".op-lp-hero").bounding_box()["y"] > hero_top + 50
@@ -783,7 +784,12 @@ def test_theme_icons_crossfade_instead_of_hard_swapping(browser, harness):
         pg.evaluate("document.documentElement.setAttribute('data-theme', 'dark');"
                     "document.getElementById('op').classList.remove('op-flat')")
         pg.click("#op-lp-theme")  # default dark -> OLED flat: moon exits, sun enters
-        pg.wait_for_timeout(80)
+        pg.wait_for_function("""() => {
+          const el = document.getElementById('op-lp-theme');
+          const day = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity);
+          const oled = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity);
+          return day > 0 && day < 1 && oled > 0 && oled < 1;
+        }""")
         opacity = pg.locator("#op-lp-theme").evaluate("""el => ({
           day: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity),
           oled: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity),
@@ -800,6 +806,22 @@ def test_theme_icons_crossfade_instead_of_hard_swapping(browser, harness):
           oled: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity),
         })""")
         assert settled == {"day": 1, "oled": 0}
+
+        # The compact brow control uses the same stack and transition once the
+        # splash is out of the way; exercise it while it is actually painted.
+        pg.evaluate("""() => {
+          document.getElementById('op-lp').hidden = true;
+          document.documentElement.setAttribute('data-theme', 'dark');
+          document.getElementById('op').classList.remove('op-flat');
+        }""")
+        pg.wait_for_selector("#op-flat", state="visible")
+        pg.click("#op-flat")
+        pg.wait_for_function("""() => {
+          const el = document.getElementById('op-flat');
+          const day = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity);
+          const oled = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity);
+          return day > 0 && day < 1 && oled > 0 && oled < 1;
+        }""")
     finally:
         ctx.close()
 

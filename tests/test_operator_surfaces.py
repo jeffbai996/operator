@@ -101,6 +101,7 @@ def unsafe_demo():
     OA.runner = rec
     mod._streamer.ensure_running = lambda: None
     mod._streamer._ensure_chrome_alive = lambda: None
+    mod._streamer.require_ready = lambda: None
     yield app.test_client(), mod, rec
     OA.runner = orig
     os.environ.pop("OPERATOR_DEMO", None)

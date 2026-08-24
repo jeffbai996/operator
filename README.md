@@ -16,13 +16,13 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-trip-planning-v1.0.37.png" alt="Operator planning a trip in a live browser">
+  <img src="docs/img/operator-trip-planning-v1.0.40.png" alt="Operator planning a trip in a live browser">
 </p>
 
 <p><sub><i>Trip planning in the live cockpit — the action trail stays beside the exact page the agent is reading, and a follow-up can steer the run without starting over.</i></sub></p>
 
 <p>
-  <img src="docs/img/operator-live-research-v1.0.37.png" alt="Operator comparing live sources and reporting its findings">
+  <img src="docs/img/operator-live-research-v1.0.40.png" alt="Operator comparing live sources and reporting its findings">
 </p>
 
 <p><sub><i>Live research in a second conversation — each chat keeps its own transcript, resumed agent session, working directory, and stop/steer channel while a shared admission cap protects the machine.</i></sub></p>

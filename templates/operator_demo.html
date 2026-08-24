@@ -4510,6 +4510,23 @@ table.with-pin th.type-col { width: 7rem; }
   [data-theme="light"] .op svg.op-lp-theme-night {
     opacity: 1;
     transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(1) rotate(0deg); }
+  /* The brow control carries an ID selector for its optical nudge. Repeat the
+     active-state selectors with that ID so its three stacked glyphs cannot all
+     lose the specificity contest and fade out. */
+  .op #op-flat svg.op-lp-theme-oled {
+    opacity: 1;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(1) rotate(0deg); }
+  .op.op-flat #op-flat svg.op-lp-theme-oled {
+    opacity: 0;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(.72) rotate(24deg); }
+  .op.op-flat #op-flat svg.op-lp-theme-day {
+    opacity: 1;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(1) rotate(0deg); }
+  [data-theme="light"] .op #op-flat svg.op-lp-theme-day,
+  [data-theme="light"] .op #op-flat svg.op-lp-theme-oled { opacity: 0; }
+  [data-theme="light"] .op #op-flat svg.op-lp-theme-night {
+    opacity: 1;
+    transform: translate(calc(-50% - 0.25px), calc(-50% + 0.5px)) scale(1) rotate(0deg); }
   @media (prefers-reduced-motion: reduce) {
     .op-lp-theme svg, #op-flat svg { transition: none; } }
   .op-lp-cats { width: min(100%, var(--op-lp-w)); display: flex; align-items: center;

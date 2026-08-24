@@ -405,7 +405,7 @@ def test_snapshot_exposes_live_token_burn(store, monkeypatch):
     r._cumulative_in_tokens = 2_400_000
     r._peak_in_tokens = 900_000
     snap = r.snapshot()
-    assert snap["cum_in_tokens"] == 2_400_000
+    assert snap["cumulative_in_tokens"] == 2_400_000
     assert snap["peak_in_tokens"] == 900_000
 
 
