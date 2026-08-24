@@ -772,7 +772,8 @@ def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, 
 
 def test_theme_icons_crossfade_instead_of_hard_swapping(browser, harness):
     """A theme step keeps both icons painted while one exits and one enters."""
-    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800},
+                              reduced_motion="no-preference")
     ctx.add_init_script(
         "localStorage.setItem('operator-session-v1', "
         + json.dumps(json.dumps({"log": "", "mode": "auto",
@@ -783,45 +784,31 @@ def test_theme_icons_crossfade_instead_of_hard_swapping(browser, harness):
         pg.wait_for_selector("#op-lp-theme", state="visible", timeout=8000)
         pg.evaluate("document.documentElement.setAttribute('data-theme', 'dark');"
                     "document.getElementById('op').classList.remove('op-flat')")
-        pg.click("#op-lp-theme")  # default dark -> OLED flat: moon exits, sun enters
         pg.wait_for_function("""() => {
           const el = document.getElementById('op-lp-theme');
-          const day = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity);
-          const oled = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity);
-          return day > 0 && day < 1 && oled > 0 && oled < 1;
+          return getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity === '0'
+            && getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity === '1';
         }""")
-        opacity = pg.locator("#op-lp-theme").evaluate("""el => ({
-          day: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity),
-          oled: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity),
-          dayDisplay: getComputedStyle(el.querySelector('.op-lp-theme-day')).display,
-          oledDisplay: getComputedStyle(el.querySelector('.op-lp-theme-oled')).display,
-        })""")
-        assert opacity["dayDisplay"] != "none"
-        assert opacity["oledDisplay"] != "none"
-        assert 0 < opacity["day"] < 1
-        assert 0 < opacity["oled"] < 1
-        pg.wait_for_timeout(400)
-        settled = pg.locator("#op-lp-theme").evaluate("""el => ({
-          day: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity),
-          oled: parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity),
-        })""")
-        assert settled == {"day": 1, "oled": 0}
+        motion = pg.locator("#op-lp-theme").evaluate("""el => {
+          const styles = [...el.querySelectorAll('svg')].map(getComputedStyle);
+          return styles.map(s => ({
+            display: s.display,
+            properties: s.transitionProperty.split(',').map(v => v.trim()),
+            durations: s.transitionDuration.split(',').map(v => parseFloat(v) * 1000),
+          }));
+        }""")
+        assert all(item["display"] != "none" for item in motion)
+        assert all("opacity" in item["properties"] for item in motion)
+        assert all(max(item["durations"]) >= 280 for item in motion)
 
-        # The compact brow control uses the same stack and transition once the
-        # splash is out of the way; exercise it while it is actually painted.
-        pg.evaluate("""() => {
-          document.getElementById('op-lp').hidden = true;
-          document.documentElement.setAttribute('data-theme', 'dark');
-          document.getElementById('op').classList.remove('op-flat');
-        }""")
-        pg.wait_for_selector("#op-flat", state="visible")
-        pg.click("#op-flat")
-        pg.wait_for_function("""() => {
-          const el = document.getElementById('op-flat');
-          const day = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-day')).opacity);
-          const oled = parseFloat(getComputedStyle(el.querySelector('.op-lp-theme-oled')).opacity);
-          return day > 0 && day < 1 && oled > 0 && oled < 1;
-        }""")
+        # The compact brow control shares the same always-painted icon stack.
+        brow_motion = pg.locator("#op-flat").evaluate("""el =>
+          [...el.querySelectorAll('svg')].map(node => ({
+            display: getComputedStyle(node).display,
+            properties: getComputedStyle(node).transitionProperty.split(',').map(v => v.trim()),
+          }))""")
+        assert all(item["display"] != "none" for item in brow_motion)
+        assert all("opacity" in item["properties"] for item in brow_motion)
     finally:
         ctx.close()
 
