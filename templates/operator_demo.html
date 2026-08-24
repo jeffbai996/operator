@@ -5082,7 +5082,12 @@ table.with-pin th.type-col { width: 7rem; }
     border-radius: 4px; padding: 1.5px 3.5px;
     overflow: hidden;   /* width:0 at the narrow tier actually hides it */
     transition: font-size .18s ease, padding .18s ease, opacity .18s ease, width .18s ease; }
-  .op-surface-chip-label { display: block; transform: translateY(-0.5px); }
+  /* Author display rules can beat the browser's weak [hidden] default. Browser
+     mode has no badge at all, so make that contract explicit. */
+  .op-surface-chip[hidden] { display: none !important; }
+  /* Urbanist's cap ink sits slightly high inside its line box. Move the label
+     down half a pixel after flex centering so SANDBOX/COMPUTER read centered. */
+  .op-surface-chip-label { display: block; transform: translateY(0.5px); }
   .op-surface-chip.real { color: #f87171; background: rgba(248,113,113,.12);
     border-color: rgba(248,113,113,.4); }
 
