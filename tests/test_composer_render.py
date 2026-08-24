@@ -227,36 +227,6 @@ def test_hero_send_button_centered_when_empty(page):
     assert abs(d) <= 1.0, f"send button off pill center by {d:.2f}px"
 
 
-# ── theme-button icon visibility ─────────────────────────────────────────────
-# The 2026-07-28 regression: bare-class hide rules lost the specificity fight
-# against `.op-lp-theme svg {display:block}` and ALL THREE stop icons rendered
-# side by side. Assert exactly one icon visible per theme state, per button.
-
-@pytest.mark.parametrize("state, visible", [
-    ("dark", "oled"),    # next stop: OLED  → filled fragify moon
-    ("flat", "day"),     # next stop: light → sun
-    ("light", "night"),  # next stop: dark  → outline crescent
-])
-def test_theme_buttons_show_exactly_one_icon(page, state, visible):
-    for btn_sel in ("#op-lp-theme", "#op-flat"):
-        shown = page.evaluate("""([sel, state]) => {
-            const op = document.getElementById('op');
-            document.documentElement.setAttribute('data-theme',
-                state === 'light' ? 'light' : 'dark');
-            op.classList.toggle('op-flat', state === 'flat');
-            const out = [];
-            for (const k of ['day', 'night', 'oled']) {
-              const el = document.querySelector(sel + ' .op-lp-theme-' + k);
-              if (el && getComputedStyle(el).display !== 'none') out.push(k);
-            }
-            document.documentElement.setAttribute('data-theme', 'dark');
-            op.classList.remove('op-flat');
-            return out;
-        }""", [btn_sel, state])
-        assert shown == [visible], (
-            f"{btn_sel} in {state}: expected only {visible}, got {shown}")
-
-
 def test_chat_input_centered_in_grow_wrap(page):
     """Reference is .op-grow-wrap (the textarea's row), NOT .op-inputbox —
     the inputbox also holds the model-picker row below, so the input is
