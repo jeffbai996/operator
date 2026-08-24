@@ -766,6 +766,29 @@ def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, 
         assert metrics["wordmarkGap"] <= 1.5
         assert metrics["chip"] == "sandbox"
         assert metrics["chipCenterDelta"] <= 0.25
+
+        browser_display = pg.locator("#op-surface-chip").evaluate("""el => {
+          el.hidden = true;
+          return getComputedStyle(el).display;
+        }""")
+        assert browser_display == "none"
+
+        computer_geometry = pg.locator("#op-surface-chip").evaluate("""el => {
+          el.hidden = false;
+          el.classList.add('real');
+          el.innerHTML = '<span class="op-surface-chip-label">computer</span>';
+          const probe = el.cloneNode(true);
+          probe.removeAttribute('id');
+          probe.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden';
+          document.body.appendChild(probe);
+          const chip = probe.getBoundingClientRect();
+          const label = probe.querySelector('.op-surface-chip-label').getBoundingClientRect();
+          const result = Math.abs((label.top + label.bottom) / 2 -
+                                  (chip.top + chip.bottom) / 2);
+          probe.remove();
+          return result;
+        }""")
+        assert computer_geometry <= 0.75
     finally:
         ctx.close()
 
