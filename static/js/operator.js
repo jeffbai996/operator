@@ -1614,7 +1614,7 @@
     // search verbs; the query rides right after the label in muted quotes.
     const _isSearch = /search|searching|grep|finding|looking up/.test((label||'').toLowerCase());
     if (detail && _isSearch) {
-      // op-act-query rides on op-act-coord's look (Anthropic, muted, inline)
+      // op-act-query rides on op-act-coord's look (DM Sans, muted, inline)
       // but opts OUT of the label row's nowrap — a search query is arbitrarily
       // long and was clipping at the rail edge (the owner 2026-07-29).
       const c=document.createElement('span'); c.className='op-act-coord op-act-query';

@@ -9,7 +9,7 @@ What's guarded here and why:
   1. The weight LADDER of the action rows (the owner 2026-07-29: "drop them 25 in
      font weight" for the descriptions, "up 25" for the live action word). The
      absolute numbers matter less than the ORDER — verb > label-ish > detail >
-     coord — and that Anthropic Sans actually renders 25-step values. It is a
+     coord — and that DM Sans actually renders 25-step values. It is a
      variable font (100..900); Plus Jakarta Sans, loaded from Google Fonts as
      static 400/500/600/700 instances, does NOT, so a 475/575 pinned on the
      wrong family silently snaps and the re-tune becomes a no-op. That is a
@@ -179,10 +179,7 @@ def test_tuned_weights_land_on_a_variable_font(page):
 
     The ladder above pins 475/575. A static-instance family rounds those to the
     nearest shipped weight and the re-tune silently does nothing, so guard the
-    FAMILY or a future 'unify the fonts' pass quietly reverts the look. This was
-    Anthropic Sans (variable 100..900) until 2026-08-24; it is now DM Sans
-    (variable 100..1000), which the cockpit self-hosts so a standalone install
-    resolves it too."""
+    FAMILY or a future 'unify the fonts' pass quietly reverts the look."""
     m = _trace_metrics(page)
     assert "DM Sans" in m["detailFamily"], \
         f"description must resolve to DM Sans, got {m['detailFamily']}"
