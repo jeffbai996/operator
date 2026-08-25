@@ -6,7 +6,7 @@
      header. Dark squad tokens for cohesion. ── */
   /* Wordmark-only weight 750: a self-hosted static instance of the variable
      Jakarta (fontTools instancer, latin subset). Scoped to its own family so
-     the general UI keeps Google's static 400–700 files — loading the variable
+     the general UI keeps the self-hosted variable face below — loading the variable
      font for everything shifted PJS line metrics and skewed the splash
      composer's placeholder/caret centering on iPad (the owner 2026-07-26). */
   @font-face {
@@ -23,6 +23,52 @@
     font-display: swap;
     src: url('fonts/urbanist-latin.woff2') format('woff2');
   }
+  /* Self-hosted UI faces. The cockpit runs standalone (./start.sh) as often as
+     it runs mounted in a host app, so it cannot rely on the host to load these:
+     an install without them fell all the way back to the system sans, which is
+     not what any of the sizing here was tuned against. Latin + latin-ext are
+     split on unicode-range, so the ext file is only fetched when a page
+     actually needs it. Both faces are OFL (see fonts/*-OFL.txt). */
+  @font-face {
+    font-family: 'DM Sans';
+    font-style: normal;
+    font-weight: 100 1000;
+    font-display: swap;
+    src: url('fonts/DMSans-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+      U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+      U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'DM Sans';
+    font-style: normal;
+    font-weight: 100 1000;
+    font-display: swap;
+    src: url('fonts/DMSans-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+      U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+      U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: 'Plus Jakarta Sans';
+    font-style: normal;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('fonts/PlusJakartaSans-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+      U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+      U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'Plus Jakarta Sans';
+    font-style: normal;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('fonts/PlusJakartaSans-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+      U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+      U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
   /* color-scheme drives the UA's overlay-scrollbar thumb shade (and form
      control chrome): without it WebKit kept painting LIGHT thumbs over the
      light theme's bubbles — the out-of-place white scrollbar (the owner 2026-07-27). */
@@ -31,7 +77,13 @@
   .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
-    --chat-font: 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* chat content + input font — Anthropic Sans (the owner 2026-07-21) */
+    /* Chat content + input face. This was Anthropic Sans (the owner 2026-07-21)
+       until 2026-08-24: that face is proprietary, so it could never ship with
+       the public repo or the demo, and every install outside the host app was
+       silently falling through to the system sans. DM Sans (OFL) replaces it —
+       the owner's call. Comments further down that still name Anthropic Sans
+       are recording the ORIGINAL tuning decision, not the current family. */
+    --chat-font: 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     --live:#3fb950; --live-glow:rgba(63,185,80,.6);
     --rail-w: minmax(248px, 300px);   /* allow a very narrow chat so the browser can maximize */
     --op-gap: 0.7rem;   /* rail↔browser gutter — the resizer centers on it, keep in sync */
@@ -630,7 +682,7 @@
   .op:has(.op-log:not(:empty)) #op-demo-note { display: none; }   /* clear the demo card once the conversation starts */
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
-  .op-action-sub { font: 500 0.66rem/1.3 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
+  .op-action-sub { font: 500 0.66rem/1.3 'DM Sans', 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
     margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* FIXED size (not −/+ controlled); +1px baseline-align with "Working" */
 
   /* wrap is the flex slot; log scrolls inside it; jump-button floats over it */
@@ -655,12 +707,14 @@
     height: 24px; padding: 0 0.7rem 0 0.55rem; border-radius: 999px; cursor: pointer;
     background: var(--bad); color: #fff; border: 1px solid var(--bad);
     display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap;
-    font: 600 0.72rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans, semibold (the owner 2026-07-21) */
+    font: 600 0.72rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans, semibold (the owner 2026-07-21) */
     box-shadow: none; z-index: 6;
     opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
-  /* Anthropic Sans sits ~1px low in a line-height:1 flex box (ascender-heavy
-     metrics + the SVG glyph anchoring the row height), so "Jump" reads slightly
-     below center. Lift the label 1px into optical center; the ff glyph stays put. */
+  /* The label sits ~1px low in a line-height:1 flex box (ascender-heavy metrics
+     + the SVG glyph anchoring the row height), so "Jump" reads slightly below
+     center. Lift the label 1px into optical center; the ff glyph stays put.
+     Measured against Anthropic Sans; DM Sans inherits the same ascender-heavy
+     shape, so the nudge still holds. */
   .op-jump-lbl { margin-top: -1px; }
   .op-jump-ff { flex: 0 0 auto; width: 12px !important; height: 12px !important; }   /* ▶▶ filled fast-forward */
   .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
@@ -1637,7 +1691,7 @@
      the page ground the dark theme already uses, and the .06 border is what
      draws the box — the fill no longer has to. */
   [data-theme="midnight"] .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
-  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans (the owner 2026-07-21); fixed size — does NOT scale with the +/- control */
+  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans (the owner 2026-07-21); fixed size — does NOT scale with the +/- control */
     color: var(--muted); opacity: 0.82; text-align: center; cursor: default;
     /* iOS Safari's double-tap-select latches onto the nearest SELECTABLE text —
        a double-tap on the (non-selectable) stage bled through and highlighted
@@ -1970,7 +2024,7 @@
     padding: 0.34rem 0.55rem; border-radius: 9px; white-space: nowrap;
     background: color-mix(in srgb, var(--bg-4) 92%, transparent);
     border: 1px solid var(--border-2); backdrop-filter: blur(14px) saturate(140%);
-    color: var(--fg); font: 600 0.63rem/1.25 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    color: var(--fg); font: 600 0.63rem/1.25 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     box-shadow: 0 10px 26px -12px rgba(0,0,0,.85);
     opacity: 0; transform: translateY(-3px); pointer-events: none;
     transition: opacity .14s ease, transform .16s cubic-bezier(.2,1,.3,1); }
@@ -2273,7 +2327,7 @@
   .op-lp-input { display: block; width: 100%; height: 1.3em; min-height: 1.3em; max-height: none;
     resize: none; overflow-y: hidden;
     padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg);
-    font: 500 calc(0.84rem * var(--chat-scale))/1.3 'Anthropic Sans', var(--chat-font);   /* 0.68→0.76 (the owner 2026-07-28 "placeholder too small" + "always equal to composer font") */
+    font: 500 calc(0.84rem * var(--chat-scale))/1.3 'DM Sans', var(--chat-font);   /* 0.68→0.76 (the owner 2026-07-28 "placeholder too small" + "always equal to composer font") */
     letter-spacing: -.01em; caret-color: var(--fg);
     transform: translateY(0.5px);   /* optical: Jakarta's ascender-heavy metrics read ~1px high in the centered pill (the owner 2026-07-26) */
     transition: height .16s cubic-bezier(.22,.8,.28,1); }   /* smooth the JS grow-to-fit as the draft wraps rows (the owner 2026-07-21) */
@@ -2428,7 +2482,7 @@
     flex: 0 0 auto;
     padding: 0.42rem 0.58rem; border: 1px solid transparent; border-radius: 999px;
     background: transparent; color: var(--fg-2); cursor: pointer; white-space: nowrap;
-    font: 600 0.65rem/1 'Anthropic Sans', var(--chat-font);
+    font: 600 0.65rem/1 'DM Sans', var(--chat-font);
     transition: color .18s cubic-bezier(.22,.8,.28,1), background .18s cubic-bezier(.22,.8,.28,1),
                 border-color .18s cubic-bezier(.22,.8,.28,1), transform .13s cubic-bezier(.34,1.56,.64,1); }
   .op-lp-cat[hidden] { display: none; }
@@ -2738,7 +2792,7 @@
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
   .op-anim-ready .op-mini { transition: opacity .2s ease; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
-    border: none; cursor: pointer; font: 550 0.56rem/1.5 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans (the owner 2026-07-25), one step lighter. The face is VARIABLE (wght 300..800) so any integer renders — 599 would be "the smallest increment" literally but is ~0.03% lighter, i.e. invisible. 550 is the smallest step that actually reads as lighter. */
+    border: none; cursor: pointer; font: 550 0.56rem/1.5 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans (the owner 2026-07-25), one step lighter. The face is VARIABLE (wght 300..800) so any integer renders — 599 would be "the smallest increment" literally but is ~0.03% lighter, i.e. invisible. 550 is the smallest step that actually reads as lighter. */
     padding: 0.1rem 1.35em 0.1rem 0.34em; flex: 0 0 auto; width: auto; line-height: 1.5;
     /* Caret gutter is em, not rem, so it tracks the −/+ zoom: at a fixed 1.05rem
        the text outgrew its reserve and slid under the caret. And because
@@ -2780,7 +2834,7 @@
      resolves to a green checkmark + "Worked for Ns" when done. */
   .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
   .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
-    color: var(--fg-2); font: 600 calc(0.78rem * var(--chat-scale))/1.3 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans for the live verb (the owner 2026-07-27); 0.82rem two notches up, em-sized spinner scales with it */
+    color: var(--fg-2); font: 600 calc(0.78rem * var(--chat-scale))/1.3 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans for the live verb (the owner 2026-07-27); 0.82rem two notches up, em-sized spinner scales with it */
     padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }
   .op-task:hover .op-task-head .verb,
   .op-task[data-busy="0"] .op-task-head:hover .verb { color: var(--fg); }   /* brighten text on hover, beats the dimmed finished-state color */
@@ -2988,7 +3042,7 @@
      parent flex-row centers the pill against the label). */
   .op-act-x { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     margin-left: 0.4rem; width: 1.5em; height: 1.5em; padding: 0;   /* perfect circle */
-    font: 500 0.56rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);   /* smaller + Anthropic (the owner 2026-07-21): 0.66→0.56, mono→Anthropic */
+    font: 500 0.56rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);   /* smaller + Anthropic (the owner 2026-07-21): 0.66→0.56, mono→Anthropic */
     background: transparent; border: 1px solid var(--border-2);
     border-radius: 50%; box-sizing: border-box; }
   .op-act-x.op-x-pop { animation: op-xpop .22s cubic-bezier(.34,1.56,.64,1); }
@@ -3011,7 +3065,7 @@
      ("Reading  3 pax trip review details") instead of wrapping underneath. Both
      drop together or the two description forms stop matching. */
   .op-act-coord { margin-left: 0.4rem; color: var(--muted);
-    font: 375 calc(0.6rem * var(--chat-scale))/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    font: 375 calc(0.6rem * var(--chat-scale))/1 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     letter-spacing: -.01em; position: relative; top: 1px; }   /* inline detail (coord OR duration) — Anthropic, muted (the owner 2026-07-21) */
   /* A search query is unbounded, unlike a coord or a duration, so it must be
      allowed to wrap — the label row is nowrap and long queries were running
@@ -3337,12 +3391,12 @@
   .op-about-mark { width: 60px; height: 60px; color: var(--fg); flex: 0 0 auto; }   /* half notch up (the owner 2026-07-26) */
   .op-about-word { font: var(--op-wordmark-wght, 700) 2.75rem/1 'PJS Wordmark', 'Plus Jakarta Sans', sans-serif;
     letter-spacing: -.03em; color: var(--fg); }
-  .op-about-ver { font: 550 0.85rem/1 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+  .op-about-ver { font: 550 0.85rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     color: var(--muted); margin-left: 0.3rem; align-self: center;
     transform: translateY(0.7rem); }   /* rides the 2.75rem word's lower baseline */
   .op-about-ver-v { margin-right: 0.13em; }
   .op-about-rights { margin-top: 0.75rem;
-    font: 500 0.6rem/1.4 'Anthropic Sans', 'Plus Jakarta Sans', sans-serif;
+    font: 500 0.6rem/1.4 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     color: var(--fg-2); }
   /* brand foot — the Fragify settings pattern: muted brands joined by a dot */
   .op-about-foot { display: flex; align-items: center; justify-content: center; gap: 0.4rem;
