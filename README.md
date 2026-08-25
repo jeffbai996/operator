@@ -16,10 +16,10 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-run-v1.0.40.png" alt="A live agent run — interleaved thinking + action trace beside the real Chrome it is driving">
+  <img src="docs/img/operator-run-v1.0.40.png" alt="A live agent run — the thinking and action trace beside the real Chrome it is driving, comparing two routes into Yosemite">
 </p>
 
-<p><sub><i>A live run, mid-flight — left: the interleaved thinking + action trace, reasoning over what it sees; right: the actual Chrome it's driving, streamed frame-by-frame over CDP. One browser, no fakes: the URL brow, the trace, and the feed all describe the same page. A message typed during the run steers the agent without killing the turn.</i></sub></p>
+<p><sub><i>A live run, mid-flight. Left: the interleaved thinking and action trace — it has both ways into Yosemite on screen and is arguing itself out of the faster one, because the faster road feeds the entrance that queues. Right: the actual Chrome it is driving, streamed frame-by-frame over CDP. One browser, no fakes — the URL bar, the trace, and the feed all describe the same page, and a message typed mid-run steers it without killing the turn.</i></sub></p>
 
 ---
 
