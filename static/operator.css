@@ -77,12 +77,9 @@
   .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
-    /* Chat content + input face. This was Anthropic Sans (the owner 2026-07-21)
-       until 2026-08-24: that face is proprietary, so it could never ship with
-       the public repo or the demo, and every install outside the host app was
-       silently falling through to the system sans. DM Sans (OFL) replaces it —
-       the owner's call. Comments further down that still name Anthropic Sans
-       are recording the ORIGINAL tuning decision, not the current family. */
+    /* Chat content + input face (the owner 2026-07-21). Self-hosted
+       below, so a standalone install renders on the weights the trace was
+       tuned for instead of falling through to the system sans. */
     --chat-font: 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     --live:#3fb950; --live-glow:rgba(63,185,80,.6);
     --rail-w: minmax(248px, 300px);   /* allow a very narrow chat so the browser can maximize */
@@ -647,7 +644,7 @@
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
   .op-action-body { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans', sans-serif; color: var(--fg); }   /* status card label (Ready/Working/…) → back to Jakarta; rest of the chrome stays Anthropic (the owner 2026-07-21) */
+    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans', sans-serif; color: var(--fg); }   /* status card label (Ready/Working/…) → back to Jakarta; rest of the chrome stays DM Sans (the owner 2026-07-21) */
   .op-action-sub { transition: color .25s ease; }
   /* tool-call / status text changes animate in like the chat bubbles do */
   .op-action-txt.op-card-swap { animation: op-card-in .4s cubic-bezier(.22,1,.36,1); }
@@ -707,13 +704,13 @@
     height: 24px; padding: 0 0.7rem 0 0.55rem; border-radius: 999px; cursor: pointer;
     background: var(--bad); color: #fff; border: 1px solid var(--bad);
     display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap;
-    font: 600 0.72rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans, semibold (the owner 2026-07-21) */
+    font: 600 0.72rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* DM Sans, semibold (the owner 2026-07-21) */
     box-shadow: none; z-index: 6;
     opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
   /* The label sits ~1px low in a line-height:1 flex box (ascender-heavy metrics
      + the SVG glyph anchoring the row height), so "Jump" reads slightly below
      center. Lift the label 1px into optical center; the ff glyph stays put.
-     Measured against Anthropic Sans; DM Sans inherits the same ascender-heavy
+     Measured against DM Sans; DM Sans inherits the same ascender-heavy
      shape, so the nudge still holds. */
   .op-jump-lbl { margin-top: -1px; }
   .op-jump-ff { flex: 0 0 auto; width: 12px !important; height: 12px !important; }   /* ▶▶ filled fast-forward */
@@ -874,7 +871,7 @@
     display: flex; flex-direction: column; gap: 0.5rem;
     box-shadow: 0 1px 10px -6px rgba(0,0,0,.55); }
   .op-handoff-head { display: flex; align-items: center; gap: 0.45rem;
-    font: 700 calc(0.88rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;   /* +1 notch 0.82->0.88 (the owner 2026-07-23); Jakarta -> Anthropic Sans (the owner 2026-07-31); back to Jakarta (the owner 2026-08-02) */
+    font: 700 calc(0.88rem * var(--chat-scale))/1.2 'Plus Jakarta Sans', sans-serif;   /* +1 notch 0.82->0.88 (the owner 2026-07-23); Jakarta -> DM Sans (the owner 2026-07-31); back to Jakarta (the owner 2026-08-02) */
     color: var(--fg); letter-spacing: -.01em; }
   /* head icon: a traffic-light-YELLOW dot that BLINKS (hard on/off) at 0.80Hz
      (1.25s period — 1Hz read as frantic; the owner 2026-07-11). steps() snaps
@@ -972,7 +969,7 @@
   .op-prefix { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
     color: var(--accent); font: 700 0.85rem/1 'JetBrains Mono', monospace; pointer-events: none; }
   .op-input { flex: 1 1 auto; width: 100%; background: var(--bg); border: 1px solid var(--border-2);
-    border-radius: 10px; color: var(--fg); font: 500 calc(0.77rem * var(--chat-scale))/1 var(--chat-font);   /* Anthropic Sans via --chat-font (the owner 2026-07-21); text + placeholder together */
+    border-radius: 10px; color: var(--fg); font: 500 calc(0.77rem * var(--chat-scale))/1 var(--chat-font);   /* DM Sans via --chat-font (the owner 2026-07-21); text + placeholder together */
     padding: 0.7rem 0.8rem 0.7rem 1.85rem; transition: border-color .2s, box-shadow .2s; }
   .op-input::placeholder { color: var(--muted); }   /* inherits the input's size — keep them in lockstep */
   .op-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.20); }
@@ -1518,7 +1515,7 @@
      widened box sticks. Inert on desktop (textarea fills it at 100% as before). */
   .op-grow-wrap { flex: 1 1 auto; min-width: 0; }
   .op-input { flex: 1 1 auto; width: 100%; background: transparent; border: none; outline: none;
-    color: var(--fg); font: 500 0.58rem/1.35 var(--chat-font); padding: 0.2rem 0.25rem;   /* Anthropic Sans via --chat-font (the owner 2026-07-21) */
+    color: var(--fg); font: 500 0.58rem/1.35 var(--chat-font); padding: 0.2rem 0.25rem;   /* DM Sans via --chat-font (the owner 2026-07-21) */
     text-align: left; resize: none; overflow-y: hidden; max-height: 140px;
     white-space: pre-wrap; word-break: break-word; }
   /* iOS forcibly zooms a page when an editable control computes below 16px.
@@ -1691,7 +1688,7 @@
      the page ground the dark theme already uses, and the .06 border is what
      draws the box — the fill no longer has to. */
   [data-theme="midnight"] .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.06); --op-code-fg: #c2cadb; }
-  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans (the owner 2026-07-21); fixed size — does NOT scale with the +/- control */
+  .op-disclaimer { margin: 0.15rem 0.1rem 0; font: 500 0.57rem/1.4 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* DM Sans (the owner 2026-07-21); fixed size — does NOT scale with the +/- control */
     color: var(--muted); opacity: 0.82; text-align: center; cursor: default;
     /* iOS Safari's double-tap-select latches onto the nearest SELECTABLE text —
        a double-tap on the (non-selectable) stage bled through and highlighted
@@ -1763,7 +1760,7 @@
     padding-top: 0.5rem; margin-bottom: -0.2rem; }
   @keyframes op-nt-in { from{opacity:0;transform:translateY(8px) scale(.97)} to{opacity:1;transform:none} }
   .op-nt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem; }
-  .op-nt-title { font: 700 calc(1.20rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); letter-spacing: -.01em; }   /* "Save task" heading +1 notch 1.15->1.20; modal stays Anthropic (the owner 2026-07-21) */
+  .op-nt-title { font: 700 calc(1.20rem * var(--chat-scale))/1.2 var(--chat-font); color: var(--fg); letter-spacing: -.01em; }   /* "Save task" heading +1 notch 1.15->1.20; modal stays DM Sans (the owner 2026-07-21) */
   .op-nt-x { background: transparent; border: none; color: var(--muted); cursor: pointer;
     width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; }
   .op-nt-x:hover { background: var(--bg-4); color: var(--fg); }
@@ -2583,7 +2580,7 @@
      as the menu's title, not a micro-label. */
   .op-lp-title { font: 700 calc(1.35rem * var(--chat-scale))/1.1 'Plus Jakarta Sans', sans-serif;
     white-space: nowrap;   /* "Things to do with Operator" stays ONE line (the owner 2026-07-26) */
-    color: var(--fg-2); letter-spacing: -0.01em; margin-left: 2px;   /* "Saved tasks" / section heading stays Jakarta — only the category pill went Anthropic (the owner 2026-07-21) */ }
+    color: var(--fg-2); letter-spacing: -0.01em; margin-left: 2px;   /* "Saved tasks" / section heading stays Jakarta — only the category pill went DM Sans (the owner 2026-07-21) */ }
   .op-lp-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; }
   .op-lp-actions > button { flex: 0 0 auto; align-self: center; padding: 0; gap: 0; }
   .op-lp-actions > button svg { display: block; flex: 0 0 auto; }
@@ -2792,7 +2789,7 @@
   /* transition only after init, so a refresh doesn't flash light->gray; smooth on user model change */
   .op-anim-ready .op-mini { transition: opacity .2s ease; }
   .op-mini { background: transparent; color: var(--fg-2); -webkit-appearance: none; appearance: none;
-    border: none; cursor: pointer; font: 550 0.56rem/1.5 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans (the owner 2026-07-25), one step lighter. The face is VARIABLE (wght 300..800) so any integer renders — 599 would be "the smallest increment" literally but is ~0.03% lighter, i.e. invisible. 550 is the smallest step that actually reads as lighter. */
+    border: none; cursor: pointer; font: 550 0.56rem/1.5 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* DM Sans (the owner 2026-07-25), one step lighter. The face is VARIABLE (wght 300..800) so any integer renders — 599 would be "the smallest increment" literally but is ~0.03% lighter, i.e. invisible. 550 is the smallest step that actually reads as lighter. */
     padding: 0.1rem 1.35em 0.1rem 0.34em; flex: 0 0 auto; width: auto; line-height: 1.5;
     /* Caret gutter is em, not rem, so it tracks the −/+ zoom: at a fixed 1.05rem
        the text outgrew its reserve and slid under the caret. And because
@@ -2834,7 +2831,7 @@
      resolves to a green checkmark + "Worked for Ns" when done. */
   .op-task[data-busy="1"] .op-task-steps { margin-top: 0.1rem; }
   .op-task-head { display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
-    color: var(--fg-2); font: 600 calc(0.78rem * var(--chat-scale))/1.3 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* Anthropic Sans for the live verb (the owner 2026-07-27); 0.82rem two notches up, em-sized spinner scales with it */
+    color: var(--fg-2); font: 600 calc(0.78rem * var(--chat-scale))/1.3 'DM Sans', 'Plus Jakarta Sans', sans-serif;   /* DM Sans for the live verb (the owner 2026-07-27); 0.82rem two notches up, em-sized spinner scales with it */
     padding: 0.25rem 0.1rem 0.25rem 0.62rem; user-select: none; }
   .op-task:hover .op-task-head .verb,
   .op-task[data-busy="0"] .op-task-head:hover .verb { color: var(--fg); }   /* brighten text on hover, beats the dimmed finished-state color */
@@ -2951,9 +2948,9 @@
   /* the live word sits in .op-verb-word; on a status change the old word is
      removed and the new one pops up (op-msg-in) — a clean replace, no overlap. */
   /* 600 -> 550 (the owner 2026-07-29, "drop by 25 or 50"). .verb sets no
-     font-family, so it INHERITS Anthropic Sans (--chat-font) — I first read
+     font-family, so it INHERITS DM Sans (--chat-font) — I first read
      this as Plus Jakarta, which is system-loaded and static, and wrongly
-     concluded 550 would snap back to 600. Anthropic Sans carries a real 550.
+     concluded 550 would snap back to 600. DM Sans carries a real 550.
      Covers the spinner label AND the done verbs — Working…/Browsing…/
      Cogitated/Steered all route through taskVerb() into .verb. */
   /* 550 -> 575 (the owner 2026-07-29, "up 25"): the live action word next to the
@@ -2998,9 +2995,9 @@
     transition: max-height .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .3s, padding .3s; }
   .op-task.collapsed .op-task-steps { max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
   /* trace step lines (Reading / Browsing / Clicking …) stay Jakarta — the
-     --chat-font switch to Anthropic Sans pulled them in too, but the owner wants
+     --chat-font switch to DM Sans pulled them in too, but the owner wants
      these thinking headings in Jakarta (2026-07-21). NOT --chat-font. */
-  /* Trace BODY is Anthropic Sans (the owner 2026-07-29). op-act-step shares this
+  /* Trace BODY is DM Sans (the owner 2026-07-29). op-act-step shares this
      class, so the action labels pin Plus Jakarta back on themselves below. */
   .op-task-step { color: var(--muted); font: 500 calc(0.69rem * var(--chat-scale))/1.5 var(--chat-font);
     letter-spacing: -.002em; animation: op-msg-in .2s ease;
@@ -3032,7 +3029,7 @@
   .op-act-lab { font-weight: 700; color: var(--fg);
     display: inline-flex; align-items: center; flex-wrap: wrap;
     /* The task verbs ("Searching", "Running command") stay on Plus Jakarta —
-       op-task-step moved to Anthropic Sans for the trace BODY, and the labels
+       op-task-step moved to DM Sans for the trace BODY, and the labels
        were explicitly carved out of that (the owner 2026-07-29). Pinned here rather
        than left to inherit, so the two can't drift apart again. */
     font-family: 'Plus Jakarta Sans', sans-serif; }
@@ -3042,7 +3039,7 @@
      parent flex-row centers the pill against the label). */
   .op-act-x { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     margin-left: 0.4rem; width: 1.5em; height: 1.5em; padding: 0;   /* perfect circle */
-    font: 500 0.56rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);   /* smaller + Anthropic (the owner 2026-07-21): 0.66→0.56, mono→Anthropic */
+    font: 500 0.56rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif; color: var(--muted);   /* smaller + DM Sans (the owner 2026-07-21): 0.66→0.56, mono→DM Sans */
     background: transparent; border: 1px solid var(--border-2);
     border-radius: 50%; box-sizing: border-box; }
   .op-act-x.op-x-pop { animation: op-xpop .22s cubic-bezier(.34,1.56,.64,1); }
@@ -3066,7 +3063,7 @@
      drop together or the two description forms stop matching. */
   .op-act-coord { margin-left: 0.4rem; color: var(--muted);
     font: 375 calc(0.6rem * var(--chat-scale))/1 'DM Sans', 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: -.01em; position: relative; top: 1px; }   /* inline detail (coord OR duration) — Anthropic, muted (the owner 2026-07-21) */
+    letter-spacing: -.01em; position: relative; top: 1px; }   /* inline detail (coord OR duration) — DM Sans, muted (the owner 2026-07-21) */
   /* A search query is unbounded, unlike a coord or a duration, so it must be
      allowed to wrap — the label row is nowrap and long queries were running
      off the rail edge (the owner 2026-07-29). min-width:0 lets the flex item shrink
@@ -3077,7 +3074,7 @@
     min-width: 0; line-height: 1.4; top: 0; }
   /* plain detail (element names under Clicking/Typing/etc.) — NOT a code block */
   /* 500 -> 475 (the owner 2026-07-29, "drop them 25"): the description line under
-     Clicking/Reading/Browsing. --chat-font is Anthropic Sans (variable
+     Clicking/Reading/Browsing. --chat-font is DM Sans (variable
      100..900), so a 25-step is a real render change, not a snap-back. The
      font-weight above is dead — the `font:` shorthand that follows resets it. */
   .op-act-detail-plain { color: var(--muted); max-width: 100%;
@@ -3095,7 +3092,7 @@
   a.op-act-detail { color: var(--fg-2); text-decoration: none; display: block; cursor: pointer; }
   a.op-act-detail:hover { border-color: var(--accent); background: rgba(184,192,204,.08); color: var(--fg); }
   /* step-count header at the top of the live trace — white, same size as action labels */
-  /* "1 step" / "N steps" -> Anthropic Sans, matching the trace body (the owner 2026-07-29). */
+  /* "1 step" / "N steps" -> DM Sans, matching the trace body (the owner 2026-07-29). */
   /* Left edge must match the VERB above it — "Typing…" — not the action rows
      below it (the owner 2026-07-31: "i thought the instruction was to align left
      edge of '4 steps' with Typing, went the wrong direction"). The 2026-07-29
