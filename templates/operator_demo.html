@@ -2508,6 +2508,7 @@ table.with-pin th.type-col { width: 7rem; }
   .op { --op-code-bg: #000; --op-code-bd: rgba(255,255,255,.07); --op-code-fg: #c7cdd6;
     --accent: #b8c0cc; --glow: rgba(184,192,204,0.45);   /* medium-light gray, not purple */
     --chat-scale: 1.05;   /* chat content font multiplier (settings-adjustable); bumped 0.96->1.05 to unify with the header bar scale */
+
     --chat-font: 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     --live:#3fb950; --live-glow:rgba(63,185,80,.6);
     --rail-w: minmax(248px, 300px);   /* allow a very narrow chat so the browser can maximize */
@@ -3082,9 +3083,11 @@ table.with-pin th.type-col { width: 7rem; }
     font: 600 0.72rem/1 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     box-shadow: none; z-index: 6;
     opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .2s cubic-bezier(.2,1,.3,1); }
-  /* DM Sans sits ~1px low in a line-height:1 flex box (ascender-heavy
-     metrics + the SVG glyph anchoring the row height), so "Jump" reads slightly
-     below center. Lift the label 1px into optical center; the ff glyph stays put. */
+  /* The label sits ~1px low in a line-height:1 flex box (ascender-heavy metrics
+     + the SVG glyph anchoring the row height), so "Jump" reads slightly below
+     center. Lift the label 1px into optical center; the ff glyph stays put.
+     Measured against DM Sans; DM Sans inherits the same ascender-heavy
+     shape, so the nudge still holds. */
   .op-jump-lbl { margin-top: -1px; }
   .op-jump-ff { flex: 0 0 auto; width: 12px !important; height: 12px !important; }   /* ▶▶ filled fast-forward */
   .op-jump.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
