@@ -175,16 +175,19 @@ def test_description_weights_sit_below_the_action_label(page):
 
 
 def test_tuned_weights_land_on_a_variable_font(page):
-    """A 25-step is only real on Anthropic Sans (variable 100..900).
+    """A 25-step is only real on the variable face the trace was tuned on.
 
-    Plus Jakarta Sans arrives as static 400/500/600/700 instances, so pinning
-    475/575 on it silently rounds and the re-tune does nothing. Guard the
-    FAMILY, or a future 'unify the fonts' pass quietly reverts the look."""
+    The ladder above pins 475/575. A static-instance family rounds those to the
+    nearest shipped weight and the re-tune silently does nothing, so guard the
+    FAMILY or a future 'unify the fonts' pass quietly reverts the look. This was
+    Anthropic Sans (variable 100..900) until 2026-08-24; it is now DM Sans
+    (variable 100..1000), which the cockpit self-hosts so a standalone install
+    resolves it too."""
     m = _trace_metrics(page)
-    assert "Anthropic Sans" in m["detailFamily"], \
-        f"description must resolve to Anthropic Sans, got {m['detailFamily']}"
-    assert "Anthropic Sans" in m["verbFamily"], \
-        f"live action word must resolve to Anthropic Sans, got {m['verbFamily']}"
+    assert "DM Sans" in m["detailFamily"], \
+        f"description must resolve to DM Sans, got {m['detailFamily']}"
+    assert "DM Sans" in m["verbFamily"], \
+        f"live action word must resolve to DM Sans, got {m['verbFamily']}"
 
 
 def test_step_count_left_edge_matches_the_verb_above_it(page):
