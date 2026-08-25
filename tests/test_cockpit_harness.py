@@ -714,16 +714,18 @@ def test_launchpad_backdrop_collapses_results_and_theme_toggle_is_local(browser,
 
 def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, harness):
     """The version hugs the wordmark and both desktop modes stay explicit."""
-    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    ctx = browser.new_context(viewport={"width": 1800, "height": 1000})
     ctx.add_init_script(
         "localStorage.setItem('operator-session-v1', "
         + json.dumps(json.dumps({"log": "<div>restored</div>", "mode": "auto",
                                  "bot": "", "model": "", "effort": ""})) + ");")
     pg = ctx.new_page()
 
-    def sandbox_surfaces(route):
+    active = {"key": "desktop-sandbox"}
+
+    def selected_surfaces(route):
         route.fulfill(status=200, content_type="application/json", body=json.dumps({
-            "active": "desktop-sandbox",
+            "active": active["key"],
             "surfaces": [
                 {"key": "browser", "label": "Browser", "hint": "", "available": True},
                 {"key": "desktop-sandbox", "label": "Sandbox", "hint": "", "available": True},
@@ -732,15 +734,15 @@ def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, 
             ],
         }))
 
-    pg.route("**/operator/surfaces*", sandbox_surfaces)
+    pg.route("**/operator/surfaces*", selected_surfaces)
     pg.route("**/operator/agent*", lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps({
-            "state": "idle", "surface": "desktop-sandbox", "messages": [],
+            "state": "idle", "surface": active["key"], "messages": [],
             "bot": "gpt", "alive": False, "stalled": False,
         })))
     pg.route("**/operator/status", lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps({
-            **_STATUS_DEAD, "surface": "desktop-sandbox",
+            **_STATUS_DEAD, "surface": active["key"],
         })))
     try:
         pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
@@ -759,6 +761,11 @@ def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, 
             chip: document.getElementById('op-surface-chip').textContent,
             chipCenterDelta: Math.abs((chip.top + chip.bottom) / 2 -
                                       (line.top + line.bottom) / 2),
+            labelCenterDelta: (() => {
+              const label = document.querySelector('.op-surface-chip-label').getBoundingClientRect();
+              return Math.abs((label.top + label.bottom) / 2 -
+                              (chip.top + chip.bottom) / 2);
+            })(),
           };
         }""")
         assert metrics["version"] == "1.0.40"
@@ -766,29 +773,41 @@ def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, 
         assert metrics["wordmarkGap"] <= 1.5
         assert metrics["chip"] == "sandbox"
         assert metrics["chipCenterDelta"] <= 0.25
+        assert metrics["labelCenterDelta"] <= 0.75
 
-        browser_display = pg.locator("#op-surface-chip").evaluate("""el => {
-          el.hidden = true;
-          return getComputedStyle(el).display;
-        }""")
-        assert browser_display == "none"
-
-        computer_geometry = pg.locator("#op-surface-chip").evaluate("""el => {
-          el.hidden = false;
-          el.classList.add('real');
-          el.innerHTML = '<span class="op-surface-chip-label">computer</span>';
+        active["key"] = "desktop-real"
+        pg.reload(wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "!document.getElementById('op-surface-chip').hidden"
+            " && document.getElementById('op-surface-chip').textContent === 'computer'")
+        computer = pg.locator("#op-surface-chip")
+        computer_geometry = computer.evaluate("""el => {
           const probe = el.cloneNode(true);
           probe.removeAttribute('id');
           probe.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden';
           document.body.appendChild(probe);
           const chip = probe.getBoundingClientRect();
           const label = probe.querySelector('.op-surface-chip-label').getBoundingClientRect();
-          const result = Math.abs((label.top + label.bottom) / 2 -
-                                  (chip.top + chip.bottom) / 2);
+          const result = {
+            display: getComputedStyle(probe).display,
+            labelCenterDelta: Math.abs((label.top + label.bottom) / 2 -
+                                       (chip.top + chip.bottom) / 2),
+          };
           probe.remove();
           return result;
         }""")
-        assert computer_geometry <= 0.75
+        assert computer_geometry["display"] == "flex"
+        assert computer_geometry["labelCenterDelta"] <= 0.75
+        assert computer.locator(".op-surface-chip-label").text_content() == "computer"
+
+        active["key"] = "browser"
+        pg.reload(wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op-surface-chip').hidden"
+            " && document.getElementById('op-surface-chip').textContent === ''")
+        browser_chip = pg.locator("#op-surface-chip")
+        assert not browser_chip.is_visible()
+        assert browser_chip.evaluate("el => getComputedStyle(el).display") == "none"
     finally:
         ctx.close()
 
