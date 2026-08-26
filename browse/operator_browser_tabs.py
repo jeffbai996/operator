@@ -57,6 +57,19 @@ def _json(endpoint: str, suffix: str, *, method: str = "GET"):
         return json.load(response)
 
 
+def _command(endpoint: str, suffix: str) -> None:
+    """Run a status-only Chrome debug command.
+
+    Unlike ``/json/list`` and ``/json/new``, Chrome's activate/close endpoints
+    answer with plain text. Treat a successful HTTP status as the contract;
+    attempting ``json.load`` here made live tab activation fail after a
+    perfectly successful reservation.
+    """
+    url = endpoint.rstrip("/") + suffix
+    with urllib.request.urlopen(url, timeout=5):
+        pass
+
+
 def _page_targets(endpoint: str) -> set[str]:
     rows = _json(endpoint, "/json/list")
     return {str(row.get("id") or row.get("targetId")) for row in rows
@@ -76,14 +89,14 @@ def _new_target(endpoint: str) -> str:
 
 def _close_target(endpoint: str, target: str) -> None:
     try:
-        _json(endpoint, "/json/close/" + urllib.parse.quote(target, safe=""))
+        _command(endpoint, "/json/close/" + urllib.parse.quote(target, safe=""))
     except Exception:
         # Releasing ownership must still succeed if the user already closed it.
         pass
 
 
 def _activate_target(endpoint: str, target: str) -> None:
-    _json(endpoint, "/json/activate/" + urllib.parse.quote(target, safe=""))
+    _command(endpoint, "/json/activate/" + urllib.parse.quote(target, safe=""))
 
 
 def _locked(path: Path):
