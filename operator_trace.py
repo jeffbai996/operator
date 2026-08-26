@@ -155,6 +155,64 @@ _GERUND_VERBS = {
 }
 
 
+# Connector tools carry their provider and operation in one dotted identifier,
+# e.g. ``booking_com.accommodations_search_v2``.  They are not implementation
+# detail a person should have to parse in the cockpit: preserve the provider and
+# turn the operation into the same compact present-tense wording as every other
+# trace action.  The JS renderer recognizes ``Using <provider>`` as a connector
+# row and supplies the favicon/brand treatment.
+_CONNECTOR_NAMES = {
+    "airtable": "Airtable", "asana": "Asana", "booking": "Booking.com",
+    "booking_com": "Booking.com", "canva": "Canva", "dropbox": "Dropbox",
+    "figma": "Figma", "github": "GitHub", "github_com": "GitHub",
+    "google_drive": "Google Drive", "linear": "Linear", "notion": "Notion",
+    "slack": "Slack", "todoist": "Todoist", "trello": "Trello",
+}
+
+_CONNECTOR_VERBS = {
+    "search": "Searching", "find": "Finding", "list": "Listing",
+    "get": "Getting", "fetch": "Fetching", "read": "Reading",
+    "create": "Creating", "update": "Updating", "delete": "Deleting",
+    "remove": "Removing", "send": "Sending", "open": "Opening",
+    "book": "Checking", "reserve": "Checking",
+}
+
+
+def _connector_provider_name(raw: str) -> str:
+    key = raw.lower().strip()
+    known = _CONNECTOR_NAMES.get(key)
+    if known:
+        return known
+    if key.endswith("_com"):
+        return key[:-4].replace("_", " ").replace("-", " ").title() + ".com"
+    return key.replace("_", " ").replace("-", " ").title()
+
+
+def connector_label(bare: str) -> tuple[str, str]:
+    """Humanize a dotted connector call, or return empty strings if it is not one.
+
+    ``booking_com.accommodations_search_v2`` becomes ``Using Booking.com`` /
+    ``Searching accommodations``.  Unknown providers retain their readable
+    namespace instead of falling back to a raw implementation identifier.
+    """
+    if not isinstance(bare, str) or "." not in bare:
+        return "", ""
+    provider, operation = bare.split(".", 1)
+    if not provider or not operation or not _re.fullmatch(r"[a-zA-Z0-9_-]+", provider):
+        return "", ""
+    parts = [p for p in _re.split(r"[_-]+", operation.lower())
+             if p and not _re.fullmatch(r"v(?:ersion)?\d+", p)]
+    verb_at = next((i for i, part in enumerate(parts) if part in _CONNECTOR_VERBS), None)
+    if verb_at is None:
+        detail = ""
+    else:
+        nouns = [part for i, part in enumerate(parts)
+                 if i != verb_at and part not in _CONNECTOR_VERBS]
+        detail = (_CONNECTOR_VERBS[parts[verb_at]]
+                  + (" " + " ".join(nouns) if nouns else ""))
+    return "Using " + _connector_provider_name(provider), detail
+
+
 def gerund_label(bare: str) -> str:
     """Best-effort present-continuous label for an unknown tool name.
     'fetch_messages' -> 'Fetching messages'; falls back to '' if the first token
@@ -218,6 +276,9 @@ def action_label(tool: str, args: dict) -> tuple[str, str]:
     if not bare.startswith("browser_"):
         if low in _SKIP_TOOLS:
             return "", ""
+        connector = connector_label(bare)
+        if connector[0]:
+            return connector
         # desktop control MCP (computer / perceive / game_macro): action-aware
         # labels so a desktop trace reads as cleanly as a browser one.
         if low == "computer":

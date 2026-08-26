@@ -1,14 +1,14 @@
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.0.40.svg">
-    <img src="docs/img/operator-lockup-light-v1.0.40.svg" height="72" alt="Operator v1.0.40">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.1.0.svg">
+    <img src="docs/img/operator-lockup-light-v1.1.0.svg" height="72" alt="Operator v1.1.0">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
 
 <p>
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
-  <img src="https://img.shields.io/badge/version-1.0.40-5965d8" alt="version 1.0.40">
+  <img src="https://img.shields.io/badge/version-1.1.0-5965d8" alt="version 1.1.0">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
   <img src="https://img.shields.io/badge/agents-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini-8a63d2" alt="agent runtimes">
   <img src="https://img.shields.io/badge/auth-subscription%2C%20no%20API%20keys-2ea44f" alt="subscription auth">
@@ -16,17 +16,20 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-run-v1.0.40.png" alt="A live agent run — the thinking and action trace beside the real Chrome it is driving, comparing two routes into Yosemite">
+  <img src="docs/img/operator-multisession-v1.1.0.png" alt="Operator 1.1 running a live browser task with its cross-device conversation switcher open">
 </p>
 
-<p><sub><i>A live run, mid-flight. Left: the interleaved thinking and action trace — it has both ways into Yosemite on screen and is arguing itself out of the faster one, because the faster road feeds the entrance that queues. Right: the actual Chrome it is driving, streamed frame-by-frame over CDP. One browser, no fakes — the URL bar, the trace, and the feed all describe the same page, and a message typed mid-run steers it without killing the turn.</i></sub></p>
+<p><sub><i>Three conversations, one logged-in Chrome. Each thread owns its runner, transcript, resumed model session, work directory, state, and browser tab; the switcher shows which thread is active on another device. Concurrent agents share cookies and extensions without being able to see, select, navigate, or close each other's tabs.</i></sub></p>
 
 ---
 
 A live **browser / computer-use agent cockpit**. Give it a task, watch the exact
 Chrome it is driving, take the wheel whenever you want, and keep separate jobs
-alive in separate conversations. Claude, GPT, and Gemini runtimes use their
-normal subscription sign-ins rather than metered screenshot-heavy API calls.
+alive in separate conversations. Threads synchronize across devices with an
+explicit watch/take-over lease, while per-conversation tab ownership lets
+multiple agents safely use the same signed-in browser. Claude, GPT, and Gemini
+runtimes use their normal subscription sign-ins rather than metered
+screenshot-heavy API calls.
 
 > **Inspired by OpenAI's Operator.** This project borrows the name and the spirit of a watch-the-agent-drive interface. It is an independent implementation, not affiliated with, endorsed by OpenAI, or derived from any OpenAI products.
 
@@ -64,36 +67,22 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `environment.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.0.40** — a cleaner, truthful cockpit header: the version is
-> close-set in Urbanist, SANDBOX and COMPUTER stay visibly labeled, and the
-> three-stop theme control moves smoothly. Human-handoff alerts now say exactly
-> what needs attention once.
+> **Status:** **v1.1.0** — conversations now follow you across devices and safely
+> share one logged-in browser through isolated tab leases. Another device can
+> watch a thread live and deliberately take over; stale local state cannot
+> overwrite newer server state. Recovery nudges are amber notices, not false
+> “Turn failed” errors.
 
 ## What a session looks like
 
 <p>
-  <img src="docs/img/operator-launchpad-v1.0.40.png" alt="The Operator launchpad — wordmark, composer, and saved-task cards">
+  <img src="docs/img/operator-takeover-v1.1.0.png" alt="A second device observing an Operator thread with an explicit Take over control">
 </p>
 
-<p><sub><i>A fresh session owns the full viewport: the wordmark, the composer, and category pills that summon saved-task cards, each pinned to the sites it uses. <b>Go</b> dispatches straight to the agent; prompts with <code>{{variables}}</code> ask for their blanks first. The ring up top is the logo assembling itself into a health readout — green connected, amber connecting, red when the browser is down.</i></sub></p>
-
-<p>
-  <img src="docs/img/operator-report-v1.0.40.png" alt="A finished run — markdown table report beside the results page it came from">
-</p>
-
-<p><sub><i>The report-back — a finished run collapses its trace into a duration card and answers in real markdown, pipe tables included, right next to the results page the numbers came from. The live token meter runs while the run burns; every finished run also lands in the History ledger with its full trace, replayable and re-runnable.</i></sub></p>
-
-<p>
-  <img src="docs/img/operator-vision-v1.0.40.png" alt="Canvas-game control — perceive + game_macro playing moves on a lichess board">
-</p>
-
-<p><sub><i>Canvas boards have no DOM to click, so this run uses the perception stack: <code>perceive</code> reads labeled targets off the raw pixels (zero extra model calls), and one <code>game_macro</code> plays the whole move sequence at machine speed — eleven board clicks, no mid-macro round trips, the planner only hears back on completion or surprise.</i></sub></p>
-
-<p align="center">
-  <img src="docs/img/operator-mobile-v1.0.40.png" width="300" alt="The phone cockpit — full-viewport splash, category pills, saved-task cards">
-</p>
-
-<p><sub><i>The phone cockpit — the same launchpad as a full-viewport takeover, pills summoning task cards, installable to the home screen as an app (PWA). The chat rides a draggable bottom sheet over a full-screen feed once a run is going.</i></sub></p>
+<p><sub><i>The same live thread opened on a second device. It adopts the current
+server revision and enters observer mode instead of racing the controller's
+writes. <b>Take over</b> moves the short editing lease deliberately; if the first
+device disappears, the lease expires on its own.</i></sub></p>
 
 ## Distribution
 
@@ -121,10 +110,10 @@ must stay together, without making installation meaningfully easier.
 |---|---|
 | **Live view** | Self-clocking frame pump of an attached Chrome via CDP `Page.captureScreenshot` — latency bounded at ~1 frame in flight on any device, with an adaptive `lo` tier (downscale + harder JPEG) for small screens and Save-Data connections. |
 | **Manual steer** | Click / type / scroll / press-hold / drag flow straight through to the page. |
-| **Agent drive** | Claude, Codex, and Gemini CLI runtimes on subscription auth — no metered API keys. Each conversation owns its transcript, resumed runtime sessions, work directory, and stop/steer channel. |
+| **Agent drive** | Claude, Codex, and Gemini CLI runtimes on subscription auth — no metered API keys. Each conversation owns its transcript, resumed runtime sessions, work directory, state file, stop/steer channel, and browser-tab lease. |
 | **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. Agent answers render as real markdown — pipe tables included — and ASCII/box-drawing fences scroll sideways instead of wrapping to soup. |
-| **UX** | MAN/AUTO modes, switchable/renamable conversations, drag-to-resize chat, live font controls, mobile/PWA layout, saved-task launchpad, `/` palette, history replay, and a real scheduler (repeat/time/day → cron). |
-| **Reliability** | Conversation-scoped state machines behind a shared global cap and one-slot-per-runtime guard; deterministic Stop/timeout/token-cap outcomes; browser preflight that refuses invisible work; hardened stream parsing; first-paint/re-entry viewport repair; deployment admission draining; and persisted scheduler dedupe. |
+| **UX** | MAN/AUTO modes, cross-device switchable/renamable conversations, observer/take-over state, drag-to-resize chat, live font controls, mobile/PWA layout, saved-task launchpad, `/` palette, history replay, and a real scheduler (repeat/time/day → cron). |
+| **Reliability** | Revisioned server-authoritative threads with optimistic writes; conversation-scoped state machines behind a shared global cap and one-slot-per-runtime guard; tab-filtered Playwright contexts on one shared Chrome; deterministic Stop/timeout/token-cap outcomes; browser preflight that refuses invisible work; hardened stream parsing; first-paint/re-entry viewport repair; deployment admission draining; and persisted scheduler dedupe. |
 | **Surfaces** | Browser (default), an isolated sandbox desktop (Xvfb), or the real desktop (gated — explicit per-session confirm, panic-STOP always on screen). Switch from a popover on the brand mark; the live feed follows. |
 | **Perception** | Zero-token local vision (`vision/`): template/colour-blob target finding + OCR, per-game region maps, and grid/crop grounding overlays — the agent reads labeled targets instead of squinting at raw pixels. |
 | **game_macro** | A planner/controller split (`control/`): the model emits a multi-step macro once, a local controller executes + verifies it at machine speed with zero mid-macro model calls, and only reports back on completion or surprise. |
@@ -154,6 +143,8 @@ align_audit.py            dev tool: measures header / urlbar alignment
 vision/                   local perception: template/colour targets, OCR, per-game maps
 control/                  surface interface + game_macro controller + control MCP
 computer-use/             sandbox (Xvfb) + real-desktop (PowerShell/WSL) backends
+browse/operator_browser_tabs.py  locked conversation → Chrome target registry
+browse/operator_playwright_mcp.js Playwright context filtered to owned tabs/popups
 ```
 
 ---
@@ -182,10 +173,12 @@ flowchart LR
 
 One Chrome, two drivers: the streamer screenshots and steers it over CDP for the
 human, while the selected agent runtime attaches to the *same* browser through a
-Playwright MCP. Dispatch is refused if that browser is unavailable, so an agent
-cannot quietly work in an invisible fallback. A registry gives every conversation
-its own state machine while shared admission keeps total load and per-runtime
-collisions bounded. The trace is the same event stream the runner consumed.
+Playwright MCP. A locked registry reserves one target per conversation, and an
+owned-context facade exposes only that target plus tabs or popups descended from
+it. Cookies and extensions remain shared; tab control does not. Dispatch is
+refused if the browser is unavailable, so an agent cannot quietly work in an
+invisible fallback. Shared admission keeps total load and per-runtime collisions
+bounded. The trace is the same event stream the runner consumed.
 
 ---
 
@@ -197,14 +190,20 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 
 ## Roadmap
 
-**v1.1 — perception depth + the canvas-game showcase**
+**v1.1 — shipped: cross-device threads + shared-browser tab isolation**
+- Server-authoritative conversation revisions, observer mode, and explicit takeover.
+- One stable tab lease per conversation inside the same logged-in browser profile.
+- Concurrent agents cannot enumerate, select, navigate, or close one another's tabs.
+- Calm nonfatal recovery notices; real runtime failures remain red.
+
+**v1.2 — perception depth + the canvas-game showcase**
 - Self-hosted OpenRSC demo (zero ToS risk) — the flagship RuneScape-class canvas run.
 - Sprite-capture workflow: lift template sprites from live frames into `vision/maps/`.
 - Map auto-calibration: derive region geometry from perception (blob grids) instead of static seed coordinates, so maps survive layout/viewport changes.
 - Desktop + macro combined: `game_macro` on the sandbox desktop — grind a native app the way a canvas game is ground.
 - OCR in anger: system tesseract, text conditions and chat/tooltip reading in real macros.
 
-**v1.2 — continuity**
+**v1.3 — continuity**
 - Long-lived controller sessions: controller state and watchers persist across `game_macro` calls; events push to the planner instead of being polled.
 - Auto-replan loop: on a macro yield the planner re-decides and continues under a hard step/token budget — sustained autonomous play sessions.
 - ~~Driver parity~~ — shipped early, in v1.0.1.
@@ -212,6 +211,16 @@ Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
 ## Changelog
+
+**v1.1.0** — **threads that travel, one browser that does not become a knife
+fight**. Conversations are revisioned and server-authoritative across devices;
+one device controls while others observe and can deliberately take over. Every
+conversation keeps separate runner/runtime state and a stable Chrome tab lease.
+Agents still share the logged-in profile, cookies, 1Password, and content
+blocking, but their Playwright contexts expose only their owned tabs and popups.
+Loop-breaker and completion-recheck nudges render as amber recovery notices
+instead of false red failures. The first 1.1 start uses a fresh conversation
+store; the run-history ledger is retained.
 
 **v1.0.40** — **one clear handoff + a finished header**. Human-handoff alerts
 use one clear headline and keep the specific takeover instruction in the body,

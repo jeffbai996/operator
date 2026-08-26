@@ -78,6 +78,18 @@ def test_unknown_tool_falls_back_to_code_chip():
         ("Using `frobnicate_widget`", "")
 
 
+def test_booking_connector_is_a_friendly_provider_action():
+    assert OT.action_label("booking_com.accommodations_search_v2", {}) == \
+        ("Using Booking.com", "Searching accommodations")
+
+
+def test_known_and_unknown_connectors_keep_the_provider_and_action():
+    assert OT.action_label("linear.issues_list_v1", {}) == \
+        ("Using Linear", "Listing issues")
+    assert OT.action_label("acme_data.records_find", {}) == \
+        ("Using Acme Data", "Finding records")
+
+
 def test_plumbing_tools_are_skipped():
     assert OT.action_label("toolsearch", {}) == ("", "")
 

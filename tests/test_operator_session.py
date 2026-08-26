@@ -30,9 +30,9 @@ def _app(demo: bool, tmp_path, monkeypatch):
     monkeypatch.setenv("OPERATOR_SESSION_PATH", str(tmp_path / "session.json"))
     importlib.reload(OS_MOD)
     if demo:
-        os.environ["OPERATOR_DEMO"] = "1"
+        monkeypatch.setenv("OPERATOR_DEMO", "1")
     else:
-        os.environ.pop("OPERATOR_DEMO", None)
+        monkeypatch.delenv("OPERATOR_DEMO", raising=False)
     mod = importlib.reload(OV)
     app = Flask(__name__)
     app.config["TESTING"] = True
@@ -45,7 +45,7 @@ def _app(demo: bool, tmp_path, monkeypatch):
 # ------------------------------------------------------------- store unit --
 
 def test_store_round_trip(store):
-    assert store.load() == {"rev": 0, "data": None}
+    assert store.load() == {"rev": 0, "conversation_rev": 0, "data": None}
     r1 = store.save({"log": "<div>hi</div>", "mode": "auto"})
     assert r1 == 1
     got = store.load()
@@ -61,7 +61,7 @@ def test_first_explicit_legacy_save_seeds_an_empty_store(store):
 
 def test_store_survives_corrupt_file(store, tmp_path):
     (tmp_path / "session.json").write_text("{not json")
-    assert store.load() == {"rev": 0, "data": None}
+    assert store.load() == {"rev": 0, "conversation_rev": 0, "data": None}
     assert store.save({"log": "fresh"}) == 1     # corrupt file is overwritten
 
 
@@ -77,7 +77,8 @@ def test_session_routes_round_trip(tmp_path, monkeypatch):
     c = app.test_client()
     r = c.get("/operator/session")
     assert r.status_code == 200 and r.get_json() == {
-        "ok": True, "rev": 0, "data": None, "conversation_id": "legacy"}
+        "ok": True, "rev": 0, "conversation_rev": 0,
+        "data": None, "conversation_id": "legacy"}
     r = c.post("/operator/session",
                json={"data": {"log": "<div>from ipad</div>", "mode": "man"}})
     assert r.status_code == 200 and r.get_json()["rev"] == 1
@@ -161,6 +162,54 @@ def test_explicit_conversation_save_does_not_follow_global_active(store):
     store.save({"log": "B updated from another browser"}, conversation_id=b)
     assert store.load(conversation_id=a)["data"]["log"] == "A"
     assert store.load(conversation_id=b)["data"]["log"] == "B updated from another browser"
+
+
+def test_stale_device_cannot_overwrite_a_newer_conversation_revision(store):
+    """Two devices can read the same thread, but only a save based on the
+    current per-thread revision may replace it."""
+    store.save({"log": "A"}, conversation_id="legacy")
+    first = store.load(conversation_id="legacy")
+    assert first["conversation_rev"] == 1
+
+    store.save({"log": "desktop wins"}, conversation_id="legacy",
+               expected_rev=first["conversation_rev"])
+    with pytest.raises(store.SessionConflict) as caught:
+        store.save({"log": "stale phone"}, conversation_id="legacy",
+                   expected_rev=first["conversation_rev"])
+
+    assert caught.value.current["conversation_rev"] == 2
+    assert caught.value.current["data"]["log"] == "desktop wins"
+    assert store.load(conversation_id="legacy")["data"]["log"] == "desktop wins"
+
+
+def test_device_control_is_observer_first_and_takeover_is_explicit(store):
+    store.save({"log": "thread"}, conversation_id="legacy")
+
+    desktop = store.touch_presence("legacy", "desktop-a", "Windows")
+    phone = store.touch_presence("legacy", "phone-b", "iPhone")
+    assert desktop["can_control"] is True
+    assert phone["can_control"] is False
+    assert phone["controller_label"] == "Windows"
+
+    taken = store.touch_presence(
+        "legacy", "phone-b", "iPhone", take_over=True)
+    old = store.touch_presence("legacy", "desktop-a", "Windows")
+    assert taken["can_control"] is True
+    assert taken["controller_label"] == "iPhone"
+    assert old["can_control"] is False
+    assert old["controller_label"] == "iPhone"
+
+
+def test_abandoned_device_control_expires(store, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(store, "_clock", lambda: now[0])
+    store.save({"log": "thread"}, conversation_id="legacy")
+    assert store.touch_presence("legacy", "phone", "iPhone")["can_control"]
+
+    now[0] += store.PRESENCE_TTL + 0.1
+    claimed = store.touch_presence("legacy", "desktop", "Windows")
+    assert claimed["can_control"] is True
+    assert claimed["controller_label"] == "Windows"
 
 
 def test_rename_sticks_and_is_clipped(store):
@@ -268,6 +317,54 @@ def test_session_route_reads_and_writes_an_explicit_conversation(tmp_path, monke
     got_b = c.get(f"/operator/session?conversation_id={b}").get_json()
     assert got_a["conversation_id"] == a and got_a["data"]["log"] == "A"
     assert got_b["conversation_id"] == b and got_b["data"]["log"] == "B"
+
+
+def test_session_route_returns_conflict_payload_for_a_stale_device(
+        tmp_path, monkeypatch):
+    app = _app(False, tmp_path, monkeypatch)
+    c = app.test_client()
+    c.post("/operator/session", json={"conversation_id": "legacy",
+                                      "data": {"log": "first"}})
+    first = c.get("/operator/session?conversation_id=legacy").get_json()
+    assert first["conversation_rev"] == 1
+
+    won = c.post("/operator/session", json={
+        "conversation_id": "legacy", "expected_rev": 1,
+        "data": {"log": "desktop"}})
+    assert won.status_code == 200
+    stale = c.post("/operator/session", json={
+        "conversation_id": "legacy", "expected_rev": 1,
+        "data": {"log": "phone"}})
+    body = stale.get_json()
+    assert stale.status_code == 409
+    assert body["conversation_rev"] == 2
+    assert body["data"]["log"] == "desktop"
+
+
+def test_presence_route_gates_writes_until_takeover(tmp_path, monkeypatch):
+    app = _app(False, tmp_path, monkeypatch)
+    c = app.test_client()
+    c.post("/operator/session", json={"conversation_id": "legacy",
+                                      "data": {"log": "first"}})
+    url = "/operator/sessions/legacy/presence"
+    assert c.post(url, json={"client_id": "desktop", "label": "Windows"}).get_json()[
+        "can_control"] is True
+    observing = c.post(url, json={"client_id": "phone", "label": "iPhone"})
+    assert observing.get_json()["can_control"] is False
+
+    refused = c.post("/operator/session", json={
+        "conversation_id": "legacy", "client_id": "phone",
+        "expected_rev": 1, "data": {"log": "stale phone"}})
+    assert refused.status_code == 409
+    assert "Windows" in refused.get_json()["error"]
+
+    taken = c.post(url, json={"client_id": "phone", "label": "iPhone",
+                              "take_over": True})
+    assert taken.get_json()["can_control"] is True
+    saved = c.post("/operator/session", json={
+        "conversation_id": "legacy", "client_id": "phone",
+        "expected_rev": 1, "data": {"log": "phone took over"}})
+    assert saved.status_code == 200
 
 
 def test_conversation_routes_reject_a_bad_id_and_action(tmp_path, monkeypatch):

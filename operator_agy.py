@@ -370,7 +370,7 @@ def parse_trajectory(path: str, r) -> bool:
                         and not r._agy_loop_warned):
                     r._agy_loop_warned = True
                     r._agy_loop_nudge_pending = True  # #40b: nudge next turn
-                    r.messages.append({"ts": time.time(), "role": "error",
+                    r.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
                         "text": ("⚠️ This looks stuck in a loop — %d steps of reasoning "
                                   "in a row with no tool call or answer. Consider "
                                   "stopping if it doesn't recover."

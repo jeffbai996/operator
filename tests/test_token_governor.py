@@ -43,6 +43,10 @@ def error_texts(r):
     return [m["text"] for m in r.messages if m.get("role") == "error"]
 
 
+def notice_texts(r):
+    return [m["text"] for m in r.messages if m.get("role") == "notice"]
+
+
 # ── accumulation ─────────────────────────────────────────────────────────────
 
 def test_cumulative_accumulates_across_turns():
@@ -143,7 +147,7 @@ def test_env_zero_disables_auto_stop_warn_only(monkeypatch):
     calls = stub_stop(r)
     r._note_token_usage(5_000_000)   # over the old warn threshold AND default caps
     assert calls == []
-    warns = [t for t in error_texts(r) if "High token use" in t]
+    warns = [t for t in notice_texts(r) if "High token use" in t]
     assert len(warns) == 1           # legacy warn preserved
     assert not any("Token cap" in t for t in error_texts(r))
 
@@ -161,5 +165,5 @@ def test_warn_still_fires_once_at_threshold(monkeypatch):
     r = make_runner()
     r._note_token_usage(1_600_000)
     r._note_token_usage(1_700_000)
-    warns = [t for t in error_texts(r) if "High token use" in t]
+    warns = [t for t in notice_texts(r) if "High token use" in t]
     assert len(warns) == 1

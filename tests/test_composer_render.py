@@ -163,7 +163,13 @@ def test_hero_empty_box_grows_with_the_placeholder(page):
             op.classList.remove('op-booting'); op.classList.add('op-ready');
             const lp = document.getElementById('op-lp');
             lp.classList.remove('op-lp-collapsed'); lp.removeAttribute('hidden');
-            document.querySelector('.op-lp-input').value = v;
+            const input = document.querySelector('.op-lp-input');
+            // This assertion compares the two settled CSS states. Chromium
+            // can retain the previous used height when the declaration stays
+            // `1.3em` and only its font-relative basis changes mid-transition.
+            input.style.transition = 'none';
+            input.value = v;
+            void input.offsetHeight;
         }""", value)
         # `transition: height .16s` on .op-lp-input — a synchronous read after
         # setting .value returns the PRE-transition height, which made empty

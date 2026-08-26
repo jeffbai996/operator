@@ -352,6 +352,20 @@
   select.op-action-caret:hover { border-color: var(--accent); background: var(--bg-2);
     box-shadow: 0 0 0 2px rgba(120,160,255,.16); }
   .op-rail { position: relative; }   /* anchor for the settings popover */
+  .op-chats-btn { position: relative; }
+  .op-chats-live { position: absolute; right: 1px; top: 1px; width: 5px; height: 5px;
+    border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg); }
+  .op-chats-live[hidden] { display: none; }
+  .op-thread-observer { margin: 0 0.72rem 0.45rem; padding: 0.38rem 0.5rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 0.55rem;
+    color: var(--muted); background: var(--bg-3); border: 1px solid var(--border-2);
+    border-radius: 8px; font: 600 0.64rem/1.35 'Plus Jakarta Sans', sans-serif; }
+  .op-thread-observer[hidden] { display: none; }
+  .op-thread-observer button { flex: 0 0 auto; border: 1px solid var(--accent);
+    border-radius: 6px; padding: 0.18rem 0.42rem; color: var(--accent);
+    background: transparent; cursor: pointer; font: 700 0.61rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-thread-observer button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .op[data-thread-control="observer"] .op-inputbox { opacity: 0.62; }
   .op-settings { position: fixed; z-index: 200;
     background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
     padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.5rem;
@@ -399,6 +413,8 @@
     text-overflow: ellipsis; white-space: nowrap; }
   .op-chat-open .w { flex: 0 0 auto; font: 500 0.62rem 'JetBrains Mono', monospace;
     color: var(--muted); }
+  .op-chat-open .s { flex: 0 0 auto; color: var(--muted); font-size: 0.62rem; }
+  .op-chat-open .s.running { color: var(--accent); }
   .op-chat-act { flex: 0 0 auto; width: 1.6rem; background: transparent; border: 0;
     color: var(--muted); cursor: pointer; font-size: 0.72rem; border-radius: 0 8px 8px 0; }
   .op-chat-act:hover { color: var(--fg); background: var(--bg-3); }
@@ -3018,11 +3034,32 @@
     background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.28);
     border-radius: 5px; padding: 0.3rem 0.44rem; white-space: pre-wrap;
     overflow-wrap: anywhere; word-break: break-word; }
+  /* Nonterminal guardrails are not failed turns. Keep them calm and amber so
+     a recovery nudge can appear while the run continues without reading fatal. */
+  .op-notice-step { display: flex; flex-direction: column; gap: 0.2rem; }
+  .op-notice-head { display: flex; align-items: center; gap: 0.34rem;
+    color: #d8a92f; font: 700 calc(0.7rem * var(--chat-scale))/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-notice-mark { width: 14px; height: 14px; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid #d8a92f; border-radius: 50%;
+    font: 800 0.61rem/1 'Plus Jakarta Sans', sans-serif; }
+  .op-notice-reason { color: var(--muted); font: 500 calc(0.66rem * var(--chat-scale))/1.5 var(--chat-font); }
+  [data-theme="light"] .op-notice-head { color: #9a6a00; }
   .op-act-step { display: flex; flex-direction: column; gap: 0.05rem; color: var(--fg-2); position: relative; }
   .op-act-step .op-act-lab { white-space: nowrap; }
   .op-act-ico2 { position: absolute; left: calc(-0.85rem - 0.75px); top: calc(0.72rem + 1.4px);   /* +1.4px: measured icon-center vs label-glyph-center drift (the owner 2026-07-27 "Clicking a pixel or two low" — it was the ICON riding high) */
     transform: translate(-50%, -50%); font-size: 0.72rem; line-height: 1;
     background: var(--bg-2); padding: 1px; border-radius: 50%; }
+  /* Connector calls are an integration event, not a generic tool call. A real
+     site favicon makes "Using Booking.com" legible at a glance; unknown
+     providers retain a tiny initial-mark fallback instead of a gear. */
+  .op-connector-ico { width: 15px; height: 15px; box-sizing: border-box; padding: 1px;
+    display: grid; place-items: center; overflow: hidden; border: 1px solid var(--border-2);
+    border-radius: 4px; background: var(--bg-3); }
+  .op-connector-favicon { display: block; width: 11px; height: 11px; border-radius: 2px;
+    object-fit: cover; }
+  .op-connector-fallback { color: var(--fg-2); font: 700 0.5rem/1 'Plus Jakarta Sans', sans-serif; }
+  .op-connector-detail { color: var(--muted); }
   .op-act-step .op-act-lab { margin-left: 0; }
   /* label is a flex ROW so the text + the ×N pill sit on one line, vertically
      centered together. */

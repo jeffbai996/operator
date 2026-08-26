@@ -22,14 +22,14 @@ def test_identical_actions_trip_the_guard(runner):
     for _ in range(OA.AgentRunner._REPEAT_ACTION_STREAK):
         runner._note_action("browser_click", {"x": 100, "y": 200})
     assert runner._repeat_nudge_pending is True
-    warns = [m for m in runner.messages if m["role"] == "error"]
+    warns = [m for m in runner.messages if m["role"] == "notice"]
     assert len(warns) == 1 and "repeated" in warns[0]["text"]
 
 
 def test_guard_warns_only_once_per_run(runner):
     for _ in range(OA.AgentRunner._REPEAT_ACTION_STREAK + 5):
         runner._note_action("browser_click", {"x": 100, "y": 200})
-    assert len([m for m in runner.messages if m["role"] == "error"]) == 1
+    assert len([m for m in runner.messages if m["role"] == "notice"]) == 1
 
 
 def test_different_args_reset_the_exact_streak(runner):
@@ -52,7 +52,7 @@ def test_varied_coordinates_still_read_as_flailing(runner):
     for x in (100, 300, 640, 20):
         runner._note_action("browser_click", {"x": x, "y": 200})
     assert runner._repeat_nudge_pending is True
-    warns = [m for m in runner.messages if m["role"] == "error"]
+    warns = [m for m in runner.messages if m["role"] == "notice"]
     assert len(warns) == 1 and "no page snapshot" in warns[0]["text"]
 
 

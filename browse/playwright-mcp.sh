@@ -34,6 +34,28 @@ _gov() {
 }
 
 if [ -n "$EP" ]; then
+  # v1.1: reserve one stable target for this conversation and expose only that
+  # target plus tabs/popups it creates. Cookies and extensions remain shared;
+  # another Operator conversation's pages do not.
+  if [ "${OPERATOR_REQUIRE_CDP:-}" = "1" ] \
+     && [ -n "${OPERATOR_CONVERSATION_ID:-}" ] \
+     && [ -f "$HERE/operator_browser_tabs.py" ] \
+     && [ -f "$HERE/operator_playwright_mcp.js" ]; then
+    target="$(python3 "$HERE/operator_browser_tabs.py" reserve \
+      "$OPERATOR_CONVERSATION_ID" "$EP" </dev/null 2>/dev/null || true)"
+    if [ -z "$target" ]; then
+      echo "playwright-mcp: FATAL — could not reserve a browser tab for conversation ${OPERATOR_CONVERSATION_ID}" >&2
+      exit 1
+    fi
+    export OPERATOR_BROWSER_TARGET_ID="$target" OPERATOR_CDP_ENDPOINT="$EP"
+    export OPERATOR_PLAYWRIGHT_NODE_MODULES="$HERE/node_modules"
+    if command -v node >/dev/null 2>&1 \
+       && [ -d "$HERE/node_modules/@playwright/mcp" ]; then
+      exec node "$HERE/operator_playwright_mcp.js" | _gov
+    fi
+    echo "playwright-mcp: FATAL — run ./start.sh once to install the pinned browser bridge" >&2
+    exit 1
+  fi
   exec npx -y @playwright/mcp@latest --caps vision,pdf --output-dir "$OUT" --cdp-endpoint "$EP" | _gov
 fi
 # Cockpit runs (OPERATOR_REQUIRE_CDP=1, set by the launch adapters) must NEVER

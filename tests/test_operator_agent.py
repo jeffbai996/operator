@@ -141,7 +141,7 @@ def test_long_noprogress_streak_emits_one_warning():
     finally:
         os.unlink(path)
     assert r._agy_loop_warned is True
-    warnings = [m for m in r.messages if m["role"] == "error" and "stuck in a loop" in m["text"]]
+    warnings = [m for m in r.messages if m["role"] == "notice" and "stuck in a loop" in m["text"]]
     assert len(warnings) == 1  # one-shot, even though the streak kept growing past threshold
 
 
