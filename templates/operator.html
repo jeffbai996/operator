@@ -16,7 +16,7 @@
       href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
 {% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1173">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1175">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -67,6 +67,8 @@
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
+      <button class="op-full-btn op-iconbtn op-chats-btn" id="op-chats-open"
+              title="threads" aria-label="open Operator threads"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5h14v8H8.5L5 16.5v-3H3z"></path></svg><span class="op-chats-live" id="op-chats-live" hidden></span></button>
       {# Home is the Operator MARK, not a house glyph (the owner 2026-07-25) — going
          home means going to Operator's own launchpad, and this also puts the
          logo in the persistent cockpit chrome rather than only on the splash. #}
@@ -106,6 +108,10 @@
       <span class="op-pick-wrap" id="op-pick-wrap" hidden><span class="op-pick-face" id="op-pick-face" aria-hidden="true">🤖</span><select class="op-action-caret" id="op-action-caret" title="who drives"></select></span>
       <span class="op-status-min" id="op-status-min" title="minimize" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg></span>
     </button>
+    <div class="op-thread-observer" id="op-thread-observer" hidden>
+      <span id="op-thread-observer-text">Viewing from another device</span>
+      <button type="button" id="op-thread-takeover">Take over</button>
+    </div>
     <div class="op-demo-note" id="op-demo-note">
       <div class="op-man-head"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="var(--fg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><circle cx="12" cy="7.8" r="0.6" fill="var(--fg)" stroke="none"/></svg><strong>Demo mode</strong></div>
       <div class="op-man-line">This Operator instance does not store any conversation history, personal context, or browser cookies. Sessions are sandboxed, browser-only, and reset upon restart.</div>
@@ -480,6 +486,7 @@
     session: "{{ url_for('operator.operator_session') }}",
     sessions: "{{ url_for('operator.operator_sessions') }}",
     session_one: "{{ url_for('operator.operator_session_one', sid='__S__') }}",
+    session_presence: "{{ url_for('operator.operator_session_presence', sid='__S__') }}",
     status: "{{ url_for('operator.operator_status') }}",
     steer: "{{ url_for('operator.operator_steer') }}",
     stream: "{{ url_for('operator.operator_stream') }}",
@@ -494,5 +501,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1164"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1169"></script>
 {% endblock %}

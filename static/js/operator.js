@@ -135,21 +135,45 @@
   });
 
   // ── session persistence: chat + selections survive a refresh (localStorage) ──
-  const LS_KEY = 'operator-session-v1';
-  const CONVERSATION_KEY = 'operator-conversation-v1';
+  // 1.1 is an intentional clean thread cutover. New cache keys prevent an
+  // archived 1.0 chat from repainting over the fresh server store on first load.
+  const LS_KEY = 'operator-session-v2';
+  const CONVERSATION_KEY = 'operator-conversation-v2';
+  const DEVICE_KEY = 'operator-device-v1';
   // ── one shared server-side session (2026-07-11): localStorage stays the
   // fast-path cache, but the source of truth lives on the server so the chat
   // survives across devices. _srev = the server revision this device last
   // saw; a differing server rev at boot means another device wrote — adopt.
   let _srev = 0;
+  let _crev = 0;
   let _conversationId = '';
+  let _canControl = !!demoReadOnly;
+  let _presenceBusy = false;
+  let _presenceTakeoverQueued = false;
+  let _deviceId = '';
+  try {
+    _deviceId = localStorage.getItem(DEVICE_KEY) || '';
+    if (!_deviceId) {
+      _deviceId = (globalThis.crypto && crypto.randomUUID)
+        ? crypto.randomUUID() : ('dev-' + Math.random().toString(36).slice(2));
+      localStorage.setItem(DEVICE_KEY, _deviceId);
+    }
+  } catch { _deviceId = 'tab-' + Math.random().toString(36).slice(2); }
+  const _ua = (navigator.userAgent || '').toLowerCase();
+  const _deviceLabel = /ipad/.test(_ua) ? 'iPad'
+    : /iphone|ipod/.test(_ua) ? 'iPhone'
+    : /android/.test(_ua) ? 'Android'
+    : /windows/.test(_ua) ? 'Windows'
+    : /macintosh|mac os/.test(_ua) ? 'Mac'
+    : 'Browser';
   try { _conversationId = sessionStorage.getItem(CONVERSATION_KEY) || ''; } catch {}
   function _setConversationId(id){
     _conversationId = String(id || '').trim();
     try { if (_conversationId) sessionStorage.setItem(CONVERSATION_KEY, _conversationId); } catch {}
   }
   function _conversationPayload(extra){
-    return Object.assign({conversation_id: _conversationId || undefined}, extra || {});
+    return Object.assign({conversation_id: _conversationId || undefined,
+      client_id: _deviceId, device_label: _deviceLabel}, extra || {});
   }
   function _conversationPost(extra){
     return {method:'POST', headers:{'Content-Type':'application/json'},
@@ -163,6 +187,7 @@
       bot: (document.getElementById('op-action-caret')||{}).value || '',
       model: (document.getElementById('op-model')||{}).value || '',
       effort: (document.getElementById('op-effort')||{}).value || '',
+      agent_since: (typeof _agentSince === 'number' ? _agentSince : 0),
     };
   }
   // saveSession used to serialize the ENTIRE chat log's innerHTML + write
@@ -172,30 +197,49 @@
   // lag, 2026-07-12). Now the whole serialize+store is debounced; pagehide /
   // tab-hide flush immediately so nothing is lost on close or app-switch.
   let _sessDirty = false;
-  function _sessionFlush() {
-    if (!_sessDirty) return;
+  let _sessSending = false;
+  async function _sessionFlush() {
+    if (_sessSending || !_sessDirty || (!_canControl && !demoReadOnly)) return;
     _sessDirty = false;
     if (_sessPushT) { clearTimeout(_sessPushT); _sessPushT = null; }
+    _sessSending = true;
     try {
       const d = _sessionPayload();
+      const cid = _conversationId || 'legacy';
       localStorage.setItem(LS_KEY, JSON.stringify(Object.assign(
-        {_srev: _srev, _conversation_id: _conversationId}, d)));
-      // push to the server; fire-and-forget (a failed push just means this
-      // device's copy wins on its NEXT successful save)
-      (async () => { try {
-        const r = await fetch(SESSION, {method: 'POST',
+        {_srev: _srev, _crev: _crev, _conversation_id: cid}, d)));
+      try {
+        const r = await fetch(SESSION, {method: 'POST', keepalive: true,
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(_conversationPayload({data: d}))});
+          body: JSON.stringify(_conversationPayload({conversation_id: cid,
+            expected_rev: _crev, data: d}))});
         const j = await r.json();
         if (j && j.ok) {
-          _srev = j.rev;
+          _srev = j.rev; _crev = j.conversation_rev;
           try { const c = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
-            if (c) { c._srev = _srev; localStorage.setItem(LS_KEY, JSON.stringify(c)); } } catch {}
+            if (c) { c._srev = _srev; c._crev = _crev;
+              localStorage.setItem(LS_KEY, JSON.stringify(c)); } } catch {}
+        } else if (r.status === 409 && j) {
+          if (j.controller_label) _setThreadControl({can_control:false,
+            controller_label:j.controller_label});
+          if (j.data && !_sessDirty) {
+            try { _seenMsg.clear(); } catch(_){}
+            await applySessionData(j.data, j.rev, true, j.conversation_id,
+                                   j.conversation_rev);
+          }
         }
-      } catch(_){} })();
-    } catch {}
+      } catch(_) { _sessDirty = true; }
+    } catch { _sessDirty = true; }
+    finally {
+      _sessSending = false;
+      if (_sessDirty && _canControl) {
+        if (_sessPushT) clearTimeout(_sessPushT);
+        _sessPushT = setTimeout(_sessionFlush, 250);
+      }
+    }
   }
   function saveSession() {
+    if (!_canControl && !demoReadOnly) return;
     _sessDirty = true;
     if (_sessPushT) clearTimeout(_sessPushT);
     _sessPushT = setTimeout(_sessionFlush, 600);
@@ -207,6 +251,7 @@
   function restoreSession() {
     try { const d = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (d && typeof d._srev === 'number') _srev = d._srev;
+      if (d && typeof d._crev === 'number') _crev = d._crev;
       if (!_conversationId && d && d._conversation_id) _setConversationId(d._conversation_id);
       if (d && d.log) { log.innerHTML = d.log;
         // a LIVE restored handoff card has dead listeners (innerHTML loses them)
@@ -225,6 +270,9 @@
   }
   const input = document.getElementById('op-input');
   const send = document.getElementById('op-send');
+  const threadObserver = document.getElementById('op-thread-observer');
+  const threadObserverText = document.getElementById('op-thread-observer-text');
+  const threadTakeover = document.getElementById('op-thread-takeover');
   const actTxt = document.getElementById('op-action-txt');
   const actSub = document.getElementById('op-action-sub');
   const overlayText = document.getElementById('op-overlay-text');
@@ -239,12 +287,14 @@
   // page load is right: a reloaded tab is a new claimant, not a resumed one.
   const CID = Math.random().toString(36).slice(2, 10);
   const SESSION = OP_URLS.session;
+  const PRESENCE = OP_URLS.session_presence;
   const STATUS = OP_URLS.status;
   const STEER  = OP_URLS.steer;
   // hoisted: these are referenced by early init (applyMode→setFollowUp etc.) before
   // their original later declaration — a let/const there caused a TDZ crash that halted
   // ALL page JS (poll/agent/steer dead, feed stuck 'Connecting'). Declare them up top.
   let _inFlight = false;
+  let _agentSince = Date.now()/1000;
   var _queue = [];
   // launchpad controller singleton — built once by wireLaunchpadControls().
   // Declared in this early-hoist zone so any early caller sees a defined
@@ -253,6 +303,68 @@
   // viewport-follow beacon trigger — assigned by the stage-size IIFE below,
   // called from the rail-drag IIFE after it. Hoisted here (TDZ rule).
   let _stageFollow = null;
+
+  function _setThreadControl(state) {
+    if (demoReadOnly) { _canControl = true; op.dataset.threadControl='controller'; return; }
+    _canControl = !!(state && state.can_control);
+    op.dataset.threadControl = _canControl ? 'controller' : 'observer';
+    if (!_canControl) {
+      // An observer can arrive in a background tab where animation frames and
+      // even short timers are suspended. Presence is authoritative enough to
+      // finish the splash immediately; otherwise the takeover control can be
+      // trapped forever inside a rail hidden by .op-booting.
+      op.classList.remove('op-booting'); op.classList.add('op-ready');
+      try { if (_lpCtl) _lpCtl.syncVisibility(); } catch(_){}
+    }
+    if (threadObserver) threadObserver.hidden = _canControl;
+    if (threadObserverText && !_canControl) {
+      threadObserverText.textContent = 'Open on '
+        + ((state && state.controller_label) || 'another device');
+    }
+    if (MODE === 'auto') {
+      input.disabled = !_canControl;
+      input.placeholder = _canControl ? (_inFlight ? 'Follow up' : 'Message Operator')
+        : 'Viewing this thread';
+      const box = input.closest('.op-inputbox');
+      if (box) box.classList.toggle('disabled', !_canControl);
+    }
+    send.disabled = !_canControl;
+  }
+
+  function _presenceUrl(id) {
+    return PRESENCE.replace('__S__', encodeURIComponent(id || 'legacy'));
+  }
+  async function _threadHeartbeat(takeOver) {
+    if (demoReadOnly) return;
+    // A fast observer can tap Take over while the boot heartbeat is still in
+    // flight. Never discard that explicit intent behind routine presence I/O.
+    if (_presenceBusy) {
+      if (takeOver) _presenceTakeoverQueued = true;
+      return;
+    }
+    _presenceBusy = true;
+    try {
+      const r = await fetch(_presenceUrl(_conversationId), {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({client_id:_deviceId, label:_deviceLabel,
+          take_over:!!takeOver})});
+      const j = await r.json();
+      if (j && j.ok) _setThreadControl(j);
+    } catch(_){}
+    finally {
+      _presenceBusy = false;
+      if (_presenceTakeoverQueued) {
+        _presenceTakeoverQueued = false;
+        _threadHeartbeat(true);
+      }
+    }
+  }
+  window._opThreadHeartbeat = _threadHeartbeat;
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) _threadHeartbeat(false);
+  });
+  window.addEventListener('focus', () => _threadHeartbeat(false));
+  if (threadTakeover) threadTakeover.addEventListener('click', () => _threadHeartbeat(true));
 
   // ── smart viewport follow: report the stage's CSS size so the server can
   // match the remote viewport to it (frame fills the stage, no letterbox).
@@ -522,12 +634,16 @@
   document.body.classList.add('op-locked');
   // enable disclaimer-info (and similar) reveal transitions only after first paint,
   // so a refresh doesn't flash the hover message open→closed.
-  requestAnimationFrame(() => requestAnimationFrame(() => {
+  const finishBootPaint = () => {
     const opBoot = document.getElementById('op');
     if (!opBoot) return;
     opBoot.classList.remove('op-booting');
     opBoot.classList.add('op-ready');
-  }));
+  };
+  requestAnimationFrame(() => requestAnimationFrame(finishBootPaint));
+  // Background tabs can have rAF fully suspended. A second device opening the
+  // same thread must not remain trapped behind the boot splash until focused.
+  setTimeout(finishBootPaint, 180);
   // keep the fixed mobile browser pane below the host-app header so its URL bar is
   // visible (not tucked under the header). Track header height live.
   (function(){
@@ -1454,6 +1570,46 @@
     const first = label.split(' ')[0];
     return ACT_EMOJI[first] || '⚙️';
   }
+  // Connector calls arrive from runtimes as "Using <provider>" (the Python
+  // trace layer has already stripped the raw tool identifier). Give known
+  // providers a real favicon; unknown connectors still get a compact initial
+  // rather than an anonymous gear. This is deliberately separate from normal
+  // "Using computer/tool" rows, which remain operator actions rather than a
+  // third-party connector.
+  const CONNECTOR_FAVICON_DOMAINS = {
+    'airtable':'airtable.com', 'asana':'asana.com', 'booking.com':'booking.com',
+    'canva':'canva.com', 'dropbox':'dropbox.com', 'figma':'figma.com',
+    'github':'github.com', 'google drive':'drive.google.com', 'linear':'linear.app',
+    'notion':'notion.so', 'slack':'slack.com', 'todoist':'todoist.com', 'trello':'trello.com'
+  };
+  function connectorMeta(label) {
+    const m = /^Using\s+([^`]+?)\s*$/.exec(String(label || ''));
+    if (!m) return null;
+    const provider = m[1].trim();
+    const low = provider.toLowerCase();
+    if (!provider || low === 'computer' || low === 'tool' || low === 'mcp tool') return null;
+    const domain = CONNECTOR_FAVICON_DOMAINS[low]
+      || (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(provider) ? low : '');
+    return {provider, domain};
+  }
+  function setConnectorIcon(icon, connector) {
+    icon.classList.add('op-connector-ico');
+    icon.title = 'Using ' + connector.provider;
+    const fallback = () => {
+      icon.replaceChildren();
+      const letter = document.createElement('span');
+      letter.className = 'op-connector-fallback';
+      letter.textContent = connector.provider.slice(0, 1).toUpperCase();
+      icon.appendChild(letter);
+    };
+    if (!connector.domain) { fallback(); return; }
+    const img = document.createElement('img');
+    img.className = 'op-connector-favicon'; img.alt = '';
+    img.src = 'https://www.google.com/s2/favicons?domain='
+      + encodeURIComponent(connector.domain) + '&sz=32';
+    img.addEventListener('error', fallback, {once:true});
+    icon.replaceChildren(img);
+  }
   // The Operator mark, drawn as the live task spinner (1.0.29). Static string —
   // no interpolation, so the innerHTML below carries no injection surface. The
   // two hooks are one group so CSS can rotate them as a unit; viewBox matches
@@ -1573,6 +1729,22 @@
     _task.querySelector('.op-task-steps').appendChild(e);
     scrollToBottom(); saveSession();
   }
+  function taskNotice(title, reason) {
+    if (!_task) startTask();
+    const e=document.createElement('div'); e.className='op-task-step op-notice-step';
+    const head=document.createElement('div'); head.className='op-notice-head';
+    const mk=document.createElement('span'); mk.className='op-notice-mark'; mk.textContent='!';
+    const tl=document.createElement('span'); tl.textContent = title || 'Re-grounding';
+    head.appendChild(mk); head.appendChild(tl); e.appendChild(head);
+    if (reason && String(reason).trim()) {
+      const r=document.createElement('div'); r.className='op-notice-reason';
+      r.textContent=String(reason).replace(/^\s*[⚠️🔁🔎]+\s*/u, '').trim();
+      e.appendChild(r);
+    }
+    markScroll();
+    _task.querySelector('.op-task-steps').appendChild(e);
+    scrollToBottom(); saveSession();
+  }
   function taskActionStep(label, detail) {
     if (!_task) startTask();
     const steps = _task.querySelector('.op-task-steps');
@@ -1603,7 +1775,10 @@
       if (n) n.textContent = _stepCount + (_stepCount===1 ? ' step' : ' steps'); }
     const e=document.createElement('div'); e.className='op-task-step op-act-step';
     e.dataset.sig = _sig; e.dataset.n = '1';
-    const ico=document.createElement('span'); ico.className='op-act-ico2'; ico.textContent=actEmoji(label);
+    const connector = connectorMeta(label);
+    const ico=document.createElement('span'); ico.className='op-act-ico2';
+    if (connector) { e.classList.add('op-connector-step'); setConnectorIcon(ico, connector); }
+    else ico.textContent=actEmoji(label);
     const lab=document.createElement('span'); lab.className='op-act-lab';
     // labels are plain text, EXCEPT the code-block fallback ("Using `tool`") which
     // carries backticks → render markdown so it shows as a code chip. _mdToHtml escapes first.
@@ -1634,7 +1809,9 @@
         && !/^(\/|~\/|\.\/)/.test(_dt) && !/\s-{1,2}\w/.test(detail)
         && !/command|^ran|run js|running js|reading file|writing file|editing file/.test((label||'').toLowerCase());
     if (detail && (_isCoord || _isDur || _isShortLabel)) {
-      const c=document.createElement('span'); c.className='op-act-coord'; c.textContent=detail;
+      const c=document.createElement('span'); c.className='op-act-coord';
+      if (connector) { c.classList.add('op-connector-detail'); c.textContent=' · ' + detail; }
+      else c.textContent=detail;
       lab.appendChild(c);
     } else if (detail) {
       const lab2 = (label||'').toLowerCase();
@@ -1880,7 +2057,16 @@
     const lp = document.getElementById('op-lp');
     if (lp) {
       if (_isGameSurface()) lp.hidden = true;
-      else if (!log.children.length) { try { initLaunchpad(); } catch(e){ console.error('operator: launchpad init failed', e); } }
+      else if (!log.children.length) { try {
+        // Surface discovery completes asynchronously. Re-running the full
+        // initializer here reset a category/Saved selection made while that
+        // request was in flight. Build + default only on the true first pass;
+        // routine browser health/surface sync owns visibility, not user state.
+        const existed = !!_lpCtl;
+        const ctl = wireLaunchpadControls();
+        if (!existed) ctl.showDefault();
+        ctl.syncVisibility();
+      } catch(e){ console.error('operator: launchpad surface sync failed', e); } }
     }
     refreshPanic();
   }
@@ -2199,7 +2385,7 @@
   // run as 'man' and flash the Manual-mode card on refresh (the later _sess restore
   // would only fix it a beat later). Read localStorage directly — _sess is declared
   // later (TDZ). Default 'man' only if nothing saved.
-  let MODE = (function(){ try { const d = JSON.parse(localStorage.getItem('operator-session-v1')||'null');
+  let MODE = (function(){ try { const d = JSON.parse(localStorage.getItem(LS_KEY)||'null');
     const _demoDefault = document.body.classList.contains('op-demo') ? 'auto' : 'man';
     return (d && (d.mode === 'auto' || d.mode === 'man')) ? d.mode : _demoDefault; } catch { return document.body.classList.contains('op-demo') ? 'auto' : 'man'; } })();
   // true ONLY in the live moment after Operator hands control to the user (Take control).
@@ -2211,6 +2397,10 @@
   // never put its event wiring behind a backend request — and never swallow an
   // init failure silently (an inert painted splash is a total lockout in AUTO).
   setTimeout(() => { try { initLaunchpad(); } catch(e){ console.error('operator: launchpad init failed', e); } }, 0);
+  // Wire selection before discovery starts. Driver options paint as soon as
+  // /drivers returns, while the initial model fetch can still be pending; an
+  // immediately selected driver must not fire into an unwired control.
+  caretSel.addEventListener('change', () => { applyMode(); loadModels(selectedBot()); });
   (async () => {
     try { const d = await (await fetch(DRIVERS_URL)).json();
       (d.drivers||[]).forEach(b => { const o=document.createElement('option');
@@ -2831,10 +3021,16 @@
         // the composer's block flow (it fought flex centering, 2026-07-18).
         // Everywhere else paintScale is 1 and this is the rail's plain grow.
         let heroGrowFrame = 0;
+        let heroGrowTimer = 0;
         const HERO_VISUAL_CAP = 140;   // ~9 painted lines, rail parity — then scroll
         const autoGrowHero = () => {
           cancelAnimationFrame(heroGrowFrame);
-          heroGrowFrame = requestAnimationFrame(() => {
+          clearTimeout(heroGrowTimer);
+          let measured = false;
+          const measure = () => {
+            if (measured) return;
+            measured = true;
+            clearTimeout(heroGrowTimer);
             if (!heroInput.offsetWidth) return;   // splash display:none — nothing to measure
             if (!heroInput.value) {
               // EMPTY: same reset as the rail autoGrow — a stale inline height
@@ -2854,7 +3050,12 @@
             heroInput.style.height = layoutHeight + 'px';
             heroInput.style.marginBottom = -(layoutHeight * (1 - paintScale)) + 'px';
             heroInput.style.overflowY = fullHeight > layoutCap + 1 ? 'auto' : 'hidden';
-          });
+          };
+          heroGrowFrame = requestAnimationFrame(measure);
+          // Background/headless Chromium can suspend rAF even when the page
+          // reports itself visible. Keep restored and cross-device drafts
+          // correctly sized without waiting for a manual window resize.
+          heroGrowTimer = setTimeout(measure, 32);
         };
         heroInput.addEventListener('input', autoGrowHero);
         autoGrowHero();
@@ -3494,9 +3695,15 @@
   }
   // (re)load the model list for a driver — Claude models for claude-a/claude-b, GPT
   // models for gpt. Defaults: Sonnet for Claude bots, GPT-5.6 Sol (low) for gpt.
+  let _modelLoadGeneration = 0;
   async function loadModels(driver){
+    const generation = ++_modelLoadGeneration;
     try {
       const m = await (await fetch(OP_URLS.models + "?driver=" + encodeURIComponent(driver||''))).json();
+      // Boot loads the default driver while a fast user/restore can request a
+      // different one. Network completion order is not selection order: an
+      // older response must never repaint over the latest driver.
+      if (generation !== _modelLoadGeneration) return;
       const sel = document.getElementById('op-model');
       sel.textContent = '';
       (m.models||[]).forEach(x => { const o=document.createElement('option');
@@ -3514,6 +3721,9 @@
       requestAnimationFrame(() => { if(_r) _r.classList.add('op-anim-ready'); });
     } catch {}
   }
+  // Kept as a narrow diagnostics hook for the cockpit harness: it lets the
+  // regression test force two real roster requests to complete out of order.
+  window._opLoadModels = loadModels;
 
   // effort tiers per model: Opus and Sonnet 5 both
   // get the full 5-tier scale (xhigh added 2026-06-30 — Sonnet 5 supports it,
@@ -3631,6 +3841,7 @@
   function selectedBot() { return caretSel.value || (caretSel.options[0] && caretSel.options[0].value) || 'claude-a'; }
   function setFollowUp(){
     if (MODE !== 'auto') { input.placeholder = 'You have control'; return; }
+    if (!_canControl && !demoReadOnly) { input.placeholder = 'Viewing this thread'; return; }
     // While an AUTO turn is live, the composer STEERS it (1.0.12) — the
     // message reaches the running agent without killing the run.
     input.placeholder = _inFlight ? 'Follow up' : 'Message Operator';
@@ -3651,7 +3862,8 @@
     const manNote = document.getElementById('op-man-note');
     if (MODE === 'auto') { if(pickWrap) pickWrap.hidden = false;
       if(caretSel) caretSel.style.pointerEvents = '';
-      input.disabled = false; if(inputbox) inputbox.classList.remove('disabled');
+      input.disabled = !_canControl;
+      if(inputbox) inputbox.classList.toggle('disabled', !_canControl);
       if(manNote) manNote.hidden = true;
       setFollowUp();
       { const f=document.getElementById('op-pick-face'); setPickFace(f, selectedBot()); }
@@ -3731,7 +3943,6 @@
     if (finInput) finInput.addEventListener('keydown', e=>{
       if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); handBack(); } });
   })();
-  caretSel.addEventListener('change', () => { applyMode(); loadModels(selectedBot()); });
   applyMode();
   // hard-reset the Finish-up UI at load: hidden + collapsed, regardless of any cached/
   // restored state. It only appears after a live Take control (sets _handedToUser).
@@ -3740,7 +3951,6 @@
     if (fin) fin.hidden = true; if (exp) exp.hidden = true; if (fbtn) fbtn.hidden = false; }
 
   // poll the running agent → stream its reasoning into the chat
-  let _agentSince = Date.now()/1000;
   const _seenMsg = new Set();
   let _agentPolling = false;
   let _lastAssistant = '';
@@ -3810,6 +4020,9 @@
           // (the owner 2026-06-30, #37/#40).
           taskStep(m.text);
           if (!batchVerb) batchVerb = 'Thinking';
+        } else if (m.role === 'notice') {
+          const nt = (m.text||'').trim();
+          taskNotice(m.kind === 'usage' ? 'Usage warning' : 'Re-grounding', nt);
         } else if (m.role === 'error') {
           const et = (m.text||'').trim();
           turnError('Turn failed', et || 'The agent ended the turn with an error.');   // one card/turn, specific msg preferred
@@ -4501,11 +4714,13 @@
   // boot adoption and switching conversations (2026-08-06) — so it lives in one
   // function. `clear` empties the log first: a switch must not leave the
   // previous chat's bubbles above the new one.
-  async function applySessionData(d, rev, clear, conversationId) {
+  async function applySessionData(d, rev, clear, conversationId, conversationRev) {
     if (conversationId) _setConversationId(conversationId);
     if (typeof rev === 'number') _srev = rev;
+    if (typeof conversationRev === 'number') _crev = conversationRev;
     if (clear) log.innerHTML = '';
     d = d || {};
+    if (typeof d.agent_since === 'number') _agentSince = d.agent_since;
     if (d.log) {
       log.innerHTML = d.log;
       // same dead-listener hygiene as restoreSession — but keep .done handoff
@@ -4531,7 +4746,8 @@
       if (c && [].some.call(c.options, o => o.value === d.effort)) c.value = d.effort; }
     // cache the adopted copy locally WITH its rev — and no re-push (nothing new)
     try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign(
-      {_srev: _srev, _conversation_id: _conversationId}, _sessionPayload()))); } catch {}
+      {_srev: _srev, _crev: _crev, _conversation_id: _conversationId},
+      _sessionPayload()))); } catch {}
   }
   window._opApplySession = applySessionData;
   (async () => { try {
@@ -4540,8 +4756,10 @@
       {cache: 'no-store'});
     const j = await r.json();
     if (j && j.ok && j.conversation_id) _setConversationId(j.conversation_id);
-    if (!j || !j.ok || !j.data || j.rev === _srev) return;
-    await applySessionData(j.data, j.rev, false, j.conversation_id);
+    if (!j || !j.ok) return;
+    if (typeof j.conversation_rev === 'number') _crev = j.conversation_rev;
+    if (j.data) await applySessionData(
+      j.data, j.rev, false, j.conversation_id, j.conversation_rev);
   } catch(_){} })();
   setTimeout(async () => { try {
     // Restore the bot FIRST, then reload the model list for THAT bot — otherwise the
@@ -4568,7 +4786,8 @@
     const LIST = OP_URLS.sessions, ONE = OP_URLS.session_one;
     const pop = document.getElementById('op-chats');
     const item = document.getElementById('op-ham-chats');
-    if (!pop || !item || !LIST) return;
+    const headItem = document.getElementById('op-chats-open');
+    if (!pop || (!item && !headItem) || !LIST) return;
     const listEl = document.getElementById('op-chat-list');
     const newBtn = document.getElementById('op-chat-new');
     const one = id => ONE.replace('__S__', encodeURIComponent(id));
@@ -4591,9 +4810,15 @@
       el.className = 'op-chat-row' + (s.id === active ? ' is-active' : '');
       const open = document.createElement('button');
       open.className = 'op-chat-open';
-      open.innerHTML = '<span class="t"></span><span class="w"></span>';
+      open.innerHTML = '<span class="t"></span><span class="s"></span><span class="w"></span>';
       // textContent, not innerHTML: a title is user text and lands in the DOM.
       open.querySelector('.t').textContent = s.title || (s.empty ? 'New chat' : 'Untitled');
+      const presence = s.presence || {};
+      const status = open.querySelector('.s');
+      if (s.state === 'running') { status.textContent = 'Running'; status.classList.add('running'); }
+      else if (presence.controller_label && !presence.can_control)
+        status.textContent = 'On ' + presence.controller_label;
+      else status.textContent = '';
       open.querySelector('.w').textContent = when(s.updated_ts);
       open.onclick = () => switchTo(s.id);
       const ren = document.createElement('button');
@@ -4622,22 +4847,29 @@
     }
     async function load(){
       listEl.textContent = 'loading…';
-      const j = await api(LIST);
+      const j = await api(LIST + '?client_id=' + encodeURIComponent(_deviceId));
       if (!j || !j.ok) { listEl.textContent = 'unavailable'; return; }
       listEl.textContent = '';
       const rows = j.sessions || [];
       if (!rows.length) { listEl.textContent = 'no chats yet'; return; }
       rows.forEach(s => listEl.appendChild(row(s, _conversationId || j.active)));
+      const live = document.getElementById('op-chats-live');
+      if (live) live.hidden = !rows.some(s => s.state === 'running');
     }
     async function switchTo(id, keepOpen){
+      await _sessionFlush();             // old thread is durable before identity changes
       const j = await api(one(id), {method:'POST', headers:{'Content-Type':'application/json'},
                                     body: JSON.stringify({action:'activate'})});
       if (!j || !j.ok) return;
-      _sessionFlush();                 // persist the chat we are leaving under its id
       _setConversationId(id);
+      _crev = typeof j.conversation_rev === 'number' ? j.conversation_rev : 0;
       _agentSince = Date.now()/1000; _seenMsg.clear(); _sawRunning = false;
       _handledState = ''; _lastAssistant = ''; _queue = []; _inFlight = false;
-      await window._opApplySession(j.data, j.rev, true, id);
+      await window._opApplySession(j.data, j.rev, true, id, j.conversation_rev);
+      await _threadHeartbeat(false);
+      // Each conversation owns its browser tabs. Switching chats also brings
+      // that conversation's current tab to the shared cockpit feed.
+      api(one(id) + '/browser', {method:'POST'});
       refreshSendButton(); setFollowUp();
       try { const ctl = wireLaunchpadControls();
         if (!j.data || !j.data.log) ctl.showDefault();
@@ -4645,37 +4877,60 @@
       if (keepOpen) load(); else pop.hidden = true;
     }
     if (newBtn) newBtn.onclick = async () => {
+      await _sessionFlush();
       const j = await api(LIST, {method:'POST', headers:{'Content-Type':'application/json'}, body: '{}'});
       if (!j || !j.ok) return;
       // New chat lands on the welcome view — the wordmark-and-composer splash,
       // which is what a fresh cockpit looks like.
-      _sessionFlush();                 // persist the chat we are leaving under its id
       _setConversationId(j.id);
+      _crev = 0;
       _agentSince = Date.now()/1000; _seenMsg.clear(); _sawRunning = false;
       _handledState = ''; _lastAssistant = ''; _queue = []; _inFlight = false;
-      await window._opApplySession(null, j.rev, true, j.id);
+      await window._opApplySession(null, j.rev, true, j.id, 0);
+      await _threadHeartbeat(true);
       refreshSendButton(); setFollowUp();
       try { const ctl = wireLaunchpadControls(); ctl.showDefault(); ctl.syncVisibility(); } catch(_){}
       pop.hidden = true;
     };
-    item.addEventListener('click', (e) => {
+    const toggle = (e) => {
       e.stopPropagation();
       const menu = document.getElementById('op-ham-menu');
       if (menu) menu.hidden = true;
       pop.hidden = !pop.hidden;
       if (!pop.hidden) { positionPop(); load(); }
-    });
+    };
+    [item, headItem].filter(Boolean).forEach(el => el.addEventListener('click', toggle));
     function positionPop(){
       // anchor under the rail head like the history popover does
-      const anchor = document.getElementById('op-ham-btn') || item;
+      const anchor = headItem || document.getElementById('op-ham-btn') || item;
       const r = anchor.getBoundingClientRect();
       pop.style.top = Math.round(r.bottom + 6) + 'px';
       pop.style.left = Math.round(Math.min(r.left, window.innerWidth - 320)) + 'px';
     }
     document.addEventListener('click', (e) => {
-      if (!pop.hidden && !pop.contains(e.target) && e.target !== item) pop.hidden = true;
+      if (!pop.hidden && !pop.contains(e.target)
+          && e.target !== item && e.target !== headItem) pop.hidden = true;
     });
   })();
+
+  async function _syncRemoteSession(){
+    if (demoReadOnly || !_conversationId || _sessDirty || _sessSending) return;
+    try {
+      const u = SESSION + '?conversation_id=' + encodeURIComponent(_conversationId)
+        + '&after_rev=' + encodeURIComponent(_crev);
+      const r = await fetch(u, {cache:'no-store'});
+      if (r.status === 204) return;
+      const j = await r.json();
+      if (!j || !j.ok || j.conversation_rev === _crev) return;
+      try { _seenMsg.clear(); } catch(_){}
+      await applySessionData(j.data, j.rev, true, j.conversation_id,
+                             j.conversation_rev);
+      refreshSendButton(); setFollowUp();
+    } catch(_){}
+  }
+  setTimeout(() => _threadHeartbeat(false), 0);
+  setInterval(() => _threadHeartbeat(false), 5000);
+  setInterval(_syncRemoteSession, 1500);
 
   poll(); setInterval(poll, 1500);
 
@@ -4860,9 +5115,15 @@
   // cap made ordinary multiline drafts scroll while they still had ample rail
   // room, and its clean-layout shortcut could miss wrapped-line growth.
   let _growFrame = 0;
+  let _growTimer = 0;
   function autoGrow(){
     cancelAnimationFrame(_growFrame);
-    _growFrame = requestAnimationFrame(() => {
+    clearTimeout(_growTimer);
+    let measured = false;
+    const measure = () => {
+      if (measured) return;
+      measured = true;
+      clearTimeout(_growTimer);
       const _gw = input.parentElement && input.parentElement.classList.contains('op-grow-wrap')
         ? input.parentElement : null;
       if (!input.value) {
@@ -4897,7 +5158,9 @@
       // engine-independent; on desktop (paintScale 1) it equals the input
       // height, i.e. a no-op.
       if (_gw) _gw.style.height = (layoutHeight * paintScale) + 'px';
-    });
+    };
+    _growFrame = requestAnimationFrame(measure);
+    _growTimer = setTimeout(measure, 32);
   }
   input.addEventListener('input', () => { autoGrow(); refreshSendButton(); });
   input.addEventListener('keydown', e => {

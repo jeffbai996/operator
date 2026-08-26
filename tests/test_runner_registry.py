@@ -95,6 +95,18 @@ def test_stop_and_telemetry_are_per_conversation() -> None:
     assert runners.snapshot(12.5, conversation_id="conv-b")["conversation_id"] == "conv-b"
 
 
+def test_conversation_summaries_feed_the_thread_switcher() -> None:
+    runners = _registry()
+    runners.start("claude-a", "one", conversation_id="conv-a")
+    runners.start("gemma", "two", conversation_id="conv-b")
+
+    statuses = runners.conversation_summaries()
+    assert statuses["conv-a"] == {"state": "running", "bot": "claude-a",
+                                  "alive": True}
+    assert statuses["conv-b"] == {"state": "running", "bot": "gemma",
+                                  "alive": True}
+
+
 def test_finished_runner_releases_room_for_another_conversation() -> None:
     runners = _registry()
     runners.start("claude-a", "one", conversation_id="conv-a")

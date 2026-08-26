@@ -1119,7 +1119,7 @@ class AgentRunner:
                 and not self._repeat_warned):
             self._repeat_warned = True
             self._repeat_nudge_pending = True   # consume-once, next turn
-            self.messages.append({"ts": time.time(), "role": "error",
+            self.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
                 "text": ("⚠️ Same action repeated %d× (%s) — this looks stuck "
                          "in a loop. Consider stopping if it doesn't recover."
                          % (self._action_repeat_streak, name or "action"))})
@@ -1173,7 +1173,7 @@ class AgentRunner:
         self._repeat_warned = True
         self._repeat_nudge_pending = True
         self._recent_calls = []
-        self.messages.append({"ts": time.time(), "role": "error",
+        self.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
             "text": ("⚠️ Going in circles — %s. Take a fresh browser_snapshot "
                      "and click by element ref instead of coordinates." % reason)})
 
@@ -1189,7 +1189,7 @@ class AgentRunner:
         self._cumulative_in_tokens += it
         if it >= self._TOKEN_WARN_THRESHOLD and not self._tok_warned:
             self._tok_warned = True
-            self.messages.append({"ts": time.time(), "role": "error",
+            self.messages.append({"ts": time.time(), "role": "notice", "kind": "usage",
                 "text": ("⚠️ High token use — this turn is sending ~%d input tokens "
                          "(accumulated screenshots/context). Vision-heavy/long tasks burn "
                          "your subscription rate limit fast; consider stopping if it's "
@@ -1317,13 +1317,13 @@ class AgentRunner:
         if (os.environ.get("OPERATOR_BAIL_REPLAN", "0") == "1"
                 and self._BAIL_RE.search(final.lower())):
             self._gate_fired = True
-            self.messages.append({"ts": time.time(), "role": "error",
+            self.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
                 "text": ("🔁 Auto-replan — the run ended sounding blocked; "
                          "asking the agent to try one more approach.")})
             return self._GATE_REPLAN_PROMPT
         if self._acts_since_visual > self._GATE_EVIDENCE_WINDOW:
             self._gate_fired = True
-            self.messages.append({"ts": time.time(), "role": "error",
+            self.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
                 "text": ("🔎 Completion check — the run ended without a final "
                          "look at the screen; asking the agent to verify "
                          "before accepting done.")})
@@ -1936,6 +1936,22 @@ class RunnerRegistry:
         """Stable copy for observers that must track every conversation."""
         with self._lock:
             return list(self._runners.values())
+
+    def conversation_summaries(self) -> dict[str, dict]:
+        """Lean runner state for the conversation switcher.
+
+        Do not call get(): listing an archived thread must not instantiate a
+        runner or hydrate its model state just to paint one row.
+        """
+        with self._lock:
+            items = list(self._runners.items())
+        out = {}
+        for cid, runner in items:
+            alive = runner.is_running()
+            out[cid] = {
+                "state": getattr(runner, "state", "running" if alive else "idle"),
+                "bot": runner.bot, "alive": alive}
+        return out
 
     def _latest(self) -> AgentRunner | None:
         with self._lock:

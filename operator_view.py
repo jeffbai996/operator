@@ -40,7 +40,7 @@ import os as _os_cfg
 # the generated public demo, whose label appends " demo" to whatever it finds.
 # The README's version ladder must carry a row for this version; a test asserts
 # it, so the changelog cannot silently fall behind the number on screen.
-OP_VERSION = "1.0.40"
+OP_VERSION = "1.1.0"
 # DEMO isolation (the public demo): a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
 # unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
@@ -692,7 +692,7 @@ class _Streamer:
             return os.path.expanduser(override)
         if DEMO:
             return os.path.expanduser("~/local-projects/operator-demo/op-demo-chrome.sh")
-        return os.path.expanduser("~/agents/browse/chrome-attach.sh")
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse", "chrome-attach.sh")
 
     def _cdp_alive(self) -> bool:
         """True when Chrome can serve its target list, not merely the cheap
@@ -3340,9 +3340,7 @@ def operator_history_get(run_id: int):
 
 @bp.route("/operator/session", methods=["GET", "POST"])
 def operator_session():
-    """The ONE shared cockpit session (chat log / mode / picker state), synced
-    across devices. GET → {ok, rev, data}; POST {data} → {ok, rev}. The public
-    demo is per-visitor by design (localStorage) — hard-gated here."""
+    """One conversation's shared cockpit state, revisioned across devices."""
     if DEMO:
         return jsonify(ok=False, error="demo sessions are per-visitor"), 403
     import operator_session as _sess_store
@@ -3353,7 +3351,14 @@ def operator_session():
         except KeyError:
             return jsonify(ok=False, error="no such conversation"), 404
         cid = cid or _sess_store.active_id() or "legacy"
+        try:
+            after = int(request.args.get("after_rev", "") or -1)
+        except (TypeError, ValueError):
+            after = -1
+        if after >= 0 and after == got["conversation_rev"]:
+            return "", 204
         return jsonify(ok=True, rev=got["rev"], data=got["data"],
+                       conversation_rev=got["conversation_rev"],
                        conversation_id=cid)
     body = request.get_json(silent=True) or {}
     data = body.get("data")
@@ -3361,13 +3366,31 @@ def operator_session():
         return jsonify(ok=False, error="body must be {data: {...}}"), 400
     try:
         cid = str(body.get("conversation_id") or "").strip()
-        rev = _sess_store.save(data, conversation_id=cid or None)
+        cid = cid or _sess_store.active_id() or "legacy"
+        client_id = str(body.get("client_id") or "").strip()
+        if client_id:
+            control = _sess_store.touch_presence(
+                cid, client_id, str(body.get("device_label") or ""))
+            if not control["can_control"]:
+                current = _sess_store.load(conversation_id=cid)
+                return jsonify(
+                    ok=False,
+                    error=f"thread is open on {control['controller_label']}; take over to continue",
+                    conversation_id=cid, **current), 409
+        rev = _sess_store.save(
+            data, conversation_id=cid,
+            expected_rev=body.get("expected_rev"))
+        current = _sess_store.load(conversation_id=cid)
+    except _sess_store.SessionConflict as e:
+        return jsonify(ok=False, error=str(e), conversation_id=cid,
+                       **e.current), 409
     except ValueError as e:
         return jsonify(ok=False, error=str(e)), 413
     except KeyError:
         return jsonify(ok=False, error="no such conversation"), 404
-    cid = cid or _sess_store.active_id() or "legacy"
-    return jsonify(ok=True, rev=rev, conversation_id=cid)
+    return jsonify(ok=True, rev=rev,
+                   conversation_rev=current["conversation_rev"],
+                   conversation_id=cid)
 
 
 @bp.route("/operator/sessions", methods=["GET", "POST"])
@@ -3380,6 +3403,12 @@ def operator_sessions():
     import operator_session as _sess_store
     if request.method == "GET":
         got = _sess_store.listing()
+        client_id = str(request.args.get("client_id") or "").strip()
+        statuses = operator_agent.runner.conversation_summaries()
+        for row in got["sessions"]:
+            row["presence"] = _sess_store.presence(row["id"], client_id)
+            row.update(statuses.get(row["id"], {
+                "state": "idle", "bot": None, "alive": False}))
         return jsonify(ok=True, **got)
     body = request.get_json(silent=True) or {}
     made = _sess_store.create(str(body.get("title") or ""))
@@ -3396,7 +3425,12 @@ def operator_session_one(sid: str):
     import operator_session as _sess_store
     try:
         if request.method == "DELETE":
-            return jsonify(ok=True, **_sess_store.delete(sid))
+            status = operator_agent.runner.conversation_summaries().get(sid, {})
+            if status.get("alive"):
+                return jsonify(ok=False, error="stop this conversation before deleting it"), 409
+            out = _sess_store.delete(sid)
+            _browser_tab_command("release", sid, close=True)
+            return jsonify(ok=True, **out)
         body = request.get_json(silent=True) or {}
         action = body.get("action") or "activate"
         if action == "rename":
@@ -3407,6 +3441,62 @@ def operator_session_one(sid: str):
         if action != "activate":
             return jsonify(ok=False, error=f"unknown action {action!r}"), 400
         return jsonify(ok=True, **_sess_store.activate(sid))
+    except KeyError:
+        return jsonify(ok=False, error="no such conversation"), 404
+
+
+def _browser_tab_command(action: str, sid: str, *, close: bool = False) -> bool:
+    """Best-effort bridge to the shared-Chrome tab registry.
+
+    Kept lazy so the standalone public demo (which intentionally has no sibling
+    browse module) never imports private browser plumbing.
+    """
+    import subprocess
+    import sys
+    here = Path(__file__).resolve()
+    candidates = (
+        here.parents[1] / "browse" / "operator_browser_tabs.py",  # monorepo
+        here.parent / "browse" / "operator_browser_tabs.py",      # standalone
+    )
+    helper = next((path for path in candidates if path.exists()), None)
+    if DEMO or helper is None:
+        return False
+    cmd = [sys.executable, str(helper), action, sid, CDP_URL]
+    if close:
+        cmd.append("--close")
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=6,
+                              check=False)
+        if done.returncode:
+            return False
+        return (done.stdout.strip() != "0") if action == "activate" else True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+@bp.route("/operator/sessions/<sid>/browser", methods=["POST"])
+def operator_session_browser(sid: str):
+    """Bring the selected conversation's owned Chrome tab to the cockpit feed."""
+    if DEMO:
+        return jsonify(ok=False, error="demo sessions are per-visitor"), 403
+    return jsonify(ok=True, activated=_browser_tab_command("activate", sid))
+
+
+@bp.route("/operator/sessions/<sid>/presence", methods=["POST"])
+def operator_session_presence(sid: str):
+    """Renew, observe or explicitly take over one conversation's edit lease."""
+    if DEMO:
+        return jsonify(ok=False, error="demo sessions are per-visitor"), 403
+    import operator_session as _sess_store
+    body = request.get_json(silent=True) or {}
+    try:
+        out = _sess_store.touch_presence(
+            sid, str(body.get("client_id") or ""),
+            str(body.get("label") or body.get("device_label") or ""),
+            take_over=bool(body.get("take_over")))
+        return jsonify(ok=True, conversation_id=sid, **out)
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
     except KeyError:
         return jsonify(ok=False, error="no such conversation"), 404
 
@@ -3831,6 +3921,33 @@ def _conversation_for(data=None, *, scheduled: str = "") -> str:
     return cid or "legacy"
 
 
+def _thread_control_guard(data, conversation_id: str):
+    """Browser clients carry a device id; only the live controller may mutate.
+
+    Schedulers, MCP and old clients send no id and retain their existing API
+    contract. The lease protects competing cockpit tabs, not trusted server
+    integrations.
+    """
+    if DEMO:
+        return None
+    client_id = str((data or {}).get("client_id") or "").strip()
+    if not client_id:
+        return None
+    import operator_session as _sess_store
+    try:
+        control = _sess_store.touch_presence(
+            conversation_id, client_id,
+            str((data or {}).get("device_label") or ""))
+    except (KeyError, ValueError) as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+    if control["can_control"]:
+        return None
+    return jsonify(
+        ok=False,
+        error=f"thread is open on {control['controller_label']}; take over to continue",
+        controller_label=control["controller_label"]), 409
+
+
 @bp.route("/operator/dispatch", methods=["POST"])
 def operator_dispatch():
     """Start a headless Claude Code agent (as the chosen persona) to do the task
@@ -3843,6 +3960,9 @@ def operator_dispatch():
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
     conversation_id = _conversation_for(data)
+    control_error = _thread_control_guard(data, conversation_id)
+    if control_error:
+        return control_error
     # surface: explicit in the request, else the cockpit's active pick. The
     # runner re-validates (gating is server-side, not a UI courtesy).
     surface = (data.get("surface") or _active_surface["name"] or "browser").strip()
@@ -4083,8 +4203,12 @@ def operator_agent_state():
 @bp.route("/operator/agent/stop", methods=["POST"])
 def operator_agent_stop():
     data = request.get_json(silent=True) or request.form or {}
+    conversation_id = _conversation_for(data)
+    control_error = _thread_control_guard(data, conversation_id)
+    if control_error:
+        return control_error
     return jsonify(operator_agent.runner.stop(
-        conversation_id=_conversation_for(data)))
+        conversation_id=conversation_id))
 
 
 @bp.route("/operator/agent/say", methods=["POST"])
@@ -4103,8 +4227,12 @@ def operator_agent_say():
         return jsonify(ok=False, error="empty message"), 400
     if len(text) > 4000:
         return jsonify(ok=False, error="message too long (max 4000 chars)"), 413
+    conversation_id = _conversation_for(data)
+    control_error = _thread_control_guard(data, conversation_id)
+    if control_error:
+        return control_error
     r = operator_agent.runner.steer(
-        text, conversation_id=_conversation_for(data))
+        text, conversation_id=conversation_id)
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
@@ -4113,8 +4241,12 @@ def operator_agent_reset():
     """Clear the agent's conversation memory (wired to the operator trash button)."""
     data = request.get_json(silent=True) or {}
     bot = data.get("bot", "")
+    conversation_id = _conversation_for(data)
+    control_error = _thread_control_guard(data, conversation_id)
+    if control_error:
+        return control_error
     return jsonify(operator_agent.runner.reset_session(
-        bot, conversation_id=_conversation_for(data)))
+        bot, conversation_id=conversation_id))
 
 
 @bp.route("/operator/driver-status")

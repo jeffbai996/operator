@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from operator_prompts import AGY_STEPWISE_DIRECTIVE
 
-_BROWSE = os.path.expanduser("~/agents/browse")
+_BROWSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse")
 _CONTROL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "control")
 
 

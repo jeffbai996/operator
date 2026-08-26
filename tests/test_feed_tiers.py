@@ -192,9 +192,6 @@ def test_grab_lo_narrow_device_viewport_not_upscaled():
 
 # ── F1: the load-bearing byte-ratio proof (real headless Chromium) ───────────
 
-_CHROME = os.path.expanduser(
-    "~/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome")
-
 _BUSY_HTML = """<!doctype html><body style="margin:0">
 <div style="width:1400px;height:900px;background:
  repeating-linear-gradient(45deg,#c33,#38c 40px,#3c8 80px,#fc0 120px)">
@@ -210,10 +207,9 @@ except ImportError:
     _HAS_PLAYWRIGHT = False
 
 
-@pytest.mark.skipif(not (_HAS_PLAYWRIGHT and os.path.exists(_CHROME)),
-                    reason="needs the playwright package (host-app venv) + "
-                           "chromium binary; run: ../host-app/venv/bin/python "
-                           "-m pytest tests/test_feed_tiers.py -k materially")
+@pytest.mark.skipif(not _HAS_PLAYWRIGHT,
+                    reason="needs Playwright + its managed Chromium; run under "
+                           "the host-app venv")
 def test_lo_tier_frame_is_materially_smaller_than_hi():
     """THE bandwidth proof: on a Retina-scale page a lo-tier frame must be a
     fraction of the hi frame's bytes (downscale + quality together)."""
@@ -221,8 +217,15 @@ def test_lo_tier_frame_is_materially_smaller_than_hi():
 
     async def run():
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(executable_path=_CHROME,
-                                               headless=True)
+            # Let this Playwright installation select its matching browser.
+            # A hard-coded cache revision can silently pair a newer Chromium
+            # with an older driver and turn screenshot calls into timeouts.
+            # The host's WSL GPU bridge can stay wedged after another graphics
+            # process exits; force deterministic CPU compositing for this byte
+            # ratio probe. It tests our JPEG tiering, not Chromium's GPU path.
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=["--disable-gpu", "--disable-software-rasterizer"])
             page = await browser.new_page(
                 viewport={"width": 1400, "height": 900}, device_scale_factor=2)
             await page.set_content(_BUSY_HTML)

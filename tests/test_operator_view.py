@@ -499,6 +499,7 @@ def test_release_version_surfaces_stay_in_sync() -> None:
     readme = (root / "README.md").read_text(encoding="utf-8")
 
     assert re.fullmatch(r"\d+\.\d+\.\d+", OV.OP_VERSION)
+    assert OV.OP_VERSION == "1.1.0"
     assert f"v{OV.OP_VERSION}" in readme
     assert '<span class="op-ver">{{ OP_VERSION }}</span>' in live
     assert '<span class="op-lp-mark-ver">v{{ OP_VERSION }}</span>' in live

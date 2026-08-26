@@ -9,6 +9,18 @@ command -v "$PY" >/dev/null 2>&1 || PY=python
 [ -d venv ] || { echo "── creating venv ──"; "$PY" -m venv venv; }
 ./venv/bin/pip install -q -r requirements.txt
 
+# The shared-browser bridge is a Node MCP server. Keep its pinned dependencies
+# beside the launcher so agent startup never waits on `npx @latest` and the
+# conversation-scoped wrapper can import the exact Playwright build it serves.
+if command -v npm >/dev/null 2>&1; then
+  if [ ! -d browse/node_modules/@playwright/mcp ]; then
+    echo "── installing browser bridge ──"
+    npm ci --silent --prefix browse
+  fi
+else
+  echo "  · npm not found — manual browser steering works; agent drive needs Node/npm"
+fi
+
 # Agent runtimes (all optional — the cockpit runs without any; you can still
 # watch + steer the browser manually). Install one and log in to hand it the wheel.
 echo "── agent runtimes ──"

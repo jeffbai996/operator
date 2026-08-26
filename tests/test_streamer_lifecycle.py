@@ -212,7 +212,7 @@ def test_chrome_attach_script_falls_back_without_override(monkeypatch):
     import os
     expected = (
         "~/local-projects/operator-demo/op-demo-chrome.sh" if OV.DEMO
-        else "~/agents/browse/chrome-attach.sh"
+        else str(Path(OV.__file__).resolve().parent / "browse" / "chrome-attach.sh")
     )
     assert OV._Streamer._chrome_attach_script() == os.path.expanduser(expected)
 

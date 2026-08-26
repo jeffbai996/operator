@@ -60,7 +60,7 @@ def test_unverified_desktop_run_gets_the_verify_turn(runner):
     assert gate == OA.AgentRunner._GATE_VERIFY_PROMPT
     assert runner._gate_fired is True
     assert any("Completion check" in m["text"] for m in runner.messages
-               if m["role"] == "error")
+               if m["role"] == "notice")
 
 
 def test_run_ending_with_a_look_passes_clean(runner):
@@ -89,7 +89,7 @@ def test_bail_message_gets_the_replan_turn_even_with_evidence(runner, monkeypatc
     gate = runner._completion_gate_check()
     assert gate == OA.AgentRunner._GATE_REPLAN_PROMPT
     assert any("Auto-replan" in m["text"] for m in runner.messages
-               if m["role"] == "error")
+               if m["role"] == "notice")
 
 
 @pytest.mark.parametrize("final", [
