@@ -69,3 +69,26 @@ def test_activate_foregrounds_only_the_conversations_owned_tab(monkeypatch, tmp_
 
     assert BT.activate("alpha", "http://chrome:9222", registry) is True
     assert activated == ["T-a"]
+
+
+def test_target_commands_accept_chromes_plain_text_response(monkeypatch):
+    opened = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        BT.urllib.request, "urlopen",
+        lambda url, timeout: opened.append((url, timeout)) or Response())
+
+    BT._activate_target("http://chrome:9222", "target/a")
+    BT._close_target("http://chrome:9222", "target/b")
+
+    assert opened == [
+        ("http://chrome:9222/json/activate/target%2Fa", 5),
+        ("http://chrome:9222/json/close/target%2Fb", 5),
+    ]
