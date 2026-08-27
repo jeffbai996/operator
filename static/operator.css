@@ -321,6 +321,17 @@
   .op-mode-thumb { position: absolute; top: 0; bottom: 0; left: 0; width: 50%; z-index: 0;
     border-radius: 7px; background: #f0883e;
     transition: transform .32s cubic-bezier(.5,1.25,.4,1), background-color .28s ease; }
+  /* Queued MAN intent sits in the destination half while the real thumb stays
+     on truthful AUTO. A restrained sweep reads as progress without blinking
+     the label or pretending control has already moved. */
+  .op-mode::after { content: ''; position: absolute; z-index: 0; pointer-events: none;
+    top: 1px; bottom: 1px; left: 1px; width: calc(50% - 2px); border-radius: 6px;
+    border: 1px solid rgba(245,160,74,.72);
+    background: linear-gradient(105deg, rgba(245,160,74,.03) 22%,
+      rgba(245,160,74,.26) 50%, rgba(245,160,74,.03) 78%);
+    background-size: 240% 100%; background-position: 180% 0;
+    opacity: 0; transform: scale(.92);
+    transition: opacity .16s ease, transform .24s cubic-bezier(.22,1,.36,1); }
   .op-mode.op-mode-noanim .op-mode-thumb { transition: none; }   /* no slide on restore */
   .op-mode.op-mode-noanim .op-mode-btn { transition: none; }
   .op-mode[data-mode="auto"] .op-mode-thumb { transform: translateX(100%); background: #3fb950; }
@@ -332,10 +343,18 @@
   .op-mode[data-mode="man"] .op-mode-btn[data-mode="man"] { color: #2a1402; }
   .op-mode[data-mode="auto"] .op-mode-btn[data-mode="auto"] { color: #062611; }
   /* MAN requested mid-run: the thumb remains on truthful AUTO while the
-     backend finishes the current action; the destination label queues softly. */
+     backend finishes the current action; the destination gets a quiet sweep. */
   .op-mode[data-pending="man"] .op-mode-btn[data-mode="man"] {
-    color: #f5a04a; animation: op-mode-pending 1s ease-in-out infinite alternate; }
-  @keyframes op-mode-pending { to { opacity: .58; } }
+    color: #f5a04a; }
+  .op-mode[data-pending="man"]::after { opacity: 1; transform: scale(1);
+    animation: op-mode-takeover-sweep 1.15s linear infinite; }
+  @keyframes op-mode-takeover-sweep {
+    from { opacity: 1; background-position: 180% 0; }
+    to { opacity: 1; background-position: -80% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .op-mode[data-pending="man"]::after { animation: none; background-position: 50% 0; }
+  }
   .op-mode-btn { text-indent: 2.5px; }   /* nudge MAN/AUTO labels right (text only) */   /* labels centered, no rightward shove */
   .op-mode-btn:hover { background: transparent; }   /* kill the global button:hover gray pill */
   .op-mode-btn:not(.active):hover { color: var(--fg-2); background: transparent; }

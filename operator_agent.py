@@ -1763,6 +1763,12 @@ class AgentRunner:
             timeout_s = max(2.0, min(30.0, float(timeout_s)))
         except (TypeError, ValueError):
             timeout_s = 12.0
+        # Agy/Gemini emits a plain-text trajectory, not structured tool start /
+        # result events. Waiting the structured-runtime window therefore buys
+        # no safer boundary—it is only dead time after the user asks for MAN.
+        # Give a naturally finishing action a short chance, then take control.
+        if self._runtime == "agy":
+            timeout_s = min(timeout_s, 4.0)
         if not self.is_running():
             return {"ok": True, "pending": False, "ready": True}
         with self._lock:
