@@ -2749,7 +2749,7 @@ def _cdp_up_cached() -> "bool | None":
 import shutil as _shutil
 import subprocess as _fsp
 
-_CU_DIR = str(Path(__file__).resolve().parent.parent / "computer-use")
+_CU_DIR = str(Path(__file__).resolve().parent / "computer-use")
 
 _SURFACE_DEFS = [
     {"key": "browser", "label": "Browser",
@@ -3407,8 +3407,14 @@ def operator_sessions():
         statuses = operator_agent.runner.conversation_summaries()
         for row in got["sessions"]:
             row["presence"] = _sess_store.presence(row["id"], client_id)
-            row.update(statuses.get(row["id"], {
-                "state": "idle", "bot": None, "alive": False}))
+            status = statuses.get(row["id"], {})
+            row["state"] = status.get("state") or "idle"
+            row["alive"] = bool(status.get("alive"))
+            # A hydrated runner knows the live bot. An archived/idle chat does
+            # not have a runner, so keep the bot saved with its transcript
+            # instead of overwriting useful library metadata with None.
+            if status.get("bot"):
+                row["bot"] = status["bot"]
         return jsonify(ok=True, **got)
     body = request.get_json(silent=True) or {}
     made = _sess_store.create(str(body.get("title") or ""))

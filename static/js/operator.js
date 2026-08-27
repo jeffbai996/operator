@@ -181,12 +181,17 @@
   }
   let _sessPushT = null;
   function _sessionPayload() {
+    const userMessages = log.querySelectorAll('.op-msg.user .bubble');
+    const latestUser = userMessages.length
+      ? (userMessages[userMessages.length - 1].textContent || '').trim() : '';
     return {
       log: log.innerHTML,
       mode: (typeof MODE !== 'undefined' ? MODE : 'man'),
       bot: (document.getElementById('op-action-caret')||{}).value || '',
       model: (document.getElementById('op-model')||{}).value || '',
       effort: (document.getElementById('op-effort')||{}).value || '',
+      surface: op.dataset.surface || 'browser',
+      preview: latestUser.slice(0, 180),
       agent_since: (typeof _agentSince === 'number' ? _agentSince : 0),
     };
   }
@@ -4737,6 +4742,12 @@
       requestAnimationFrame(() => { if (modeBox) modeBox.classList.remove('op-mode-noanim'); });
       if (typeof applyMode === 'function') applyMode();
     }
+    if (d.surface && d.surface !== _surfaceActive) {
+      // Browser and sandbox are safe to restore with the chat. Real-computer
+      // control still respects its explicit authorization gate on this device.
+      if (d.surface !== 'desktop-real' || _realOk)
+        await setSurface(d.surface, d.surface === 'desktop-real');
+    }
     if (d.bot) { const c = document.getElementById('op-action-caret');
       if (c) { c.value = d.bot; await loadModels(selectedBot()); } }
     if (d.model) { const c = document.getElementById('op-model');
@@ -4780,137 +4791,322 @@
   // ── conversations (2026-08-06): the cockpit held exactly ONE chat, so every
   //    errand landed in the same transcript and the only clean start was the
   //    trash can, which destroyed what was there. The server now keeps a map of
-  //    conversations; this is the switcher. Same popover idiom as History —
-  //    the rail is narrow and a permanent column would cost the chat its width.
+  //    conversations. Picking one up belongs to the launchpad, not the cramped
+  //    browser brow, so the picker is a proper welcome-surface dialog.
   (function(){
     const LIST = OP_URLS.sessions, ONE = OP_URLS.session_one;
     const pop = document.getElementById('op-chats');
-    const item = document.getElementById('op-ham-chats');
-    const headItem = document.getElementById('op-chats-open');
-    if (!pop || (!item && !headItem) || !LIST) return;
+    const trigger = document.getElementById('op-lp-chats');
+    const closeBtn = document.getElementById('op-chat-close');
+    if (!pop || !trigger || !LIST) return;
     const listEl = document.getElementById('op-chat-list');
     const newBtn = document.getElementById('op-chat-new');
+    const search = document.getElementById('op-chat-search');
+    const empty = document.getElementById('op-chat-empty');
+    const feedback = document.getElementById('op-chat-feedback');
+    const confirmBox = document.getElementById('op-chat-confirm');
+    const confirmCopy = document.getElementById('op-chat-confirm-copy');
+    const confirmDelete = document.getElementById('op-chat-delete-confirm');
+    const confirmCancel = document.getElementById('op-chat-delete-cancel');
     const one = id => ONE.replace('__S__', encodeURIComponent(id));
+    let rows = [], active = '', deleteTarget = null, loadSeq = 0;
+    let listFingerprint = '';
     function when(ts){
       if (!ts) return '';
       const mins = Math.max(0, (Date.now() / 1000 - ts) / 60);
       if (mins < 1) return 'just now';
       if (mins < 60) return Math.round(mins) + 'm ago';
       if (mins < 60 * 24) return Math.round(mins / 60) + 'h ago';
-      return new Date(ts * 1000).toLocaleDateString(undefined, {month:'short', day:'numeric'});
+      return new Date(ts * 1000).toLocaleDateString(
+        undefined, {month:'short', day:'numeric'});
     }
     async function api(url, opts){
       try {
         const r = await fetch(url, Object.assign({cache:'no-store'}, opts || {}));
-        return await r.json();
-      } catch(_){ return null; }
+        const j = await r.json();
+        if (!r.ok && j && !j.error) j.error = 'Request failed';
+        return j;
+      } catch(_){ return {ok:false, error:'Could not reach Operator'}; }
     }
-    function row(s, active){
+    function setFeedback(message, isError){
+      feedback.textContent = message || '';
+      feedback.classList.toggle('is-error', !!isError);
+    }
+    function closeMenus(except){
+      listEl.querySelectorAll('.op-chat-menu:not([hidden])').forEach(menu => {
+        if (menu === except) return;
+        menu.hidden = true;
+        const button = menu.parentElement.querySelector('.op-chat-more');
+        if (button) button.setAttribute('aria-expanded', 'false');
+      });
+    }
+    function friendlySurface(value){
+      return {'browser':'Browser', 'desktop-sandbox':'Sandbox',
+              'desktop-real':'Computer'}[value] || value || '';
+    }
+    function beginRename(el, s){
+      closeMenus();
+      const form = document.createElement('form');
+      form.className = 'op-chat-rename';
+      const inputEl = document.createElement('input');
+      inputEl.type = 'text'; inputEl.maxLength = 80; inputEl.value = s.title || '';
+      inputEl.setAttribute('aria-label', 'chat name');
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.textContent = 'Cancel';
+      const save = document.createElement('button');
+      save.type = 'submit'; save.textContent = 'Save';
+      form.append(inputEl, cancel, save); el.replaceChildren(form);
+      cancel.onclick = () => render();
+      form.onsubmit = async e => {
+        e.preventDefault(); save.disabled = true;
+        const j = await api(one(s.id), {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({action:'rename', title: inputEl.value})
+        });
+        if (!j || !j.ok) {
+          save.disabled = false;
+          setFeedback((j && j.error) || 'Rename failed', true);
+          return;
+        }
+        s.title = inputEl.value.trim(); render(); setFeedback('');
+      };
+      requestAnimationFrame(() => { inputEl.focus(); inputEl.select(); });
+    }
+    function askDelete(s){
+      closeMenus(); deleteTarget = s;
+      confirmCopy.textContent = '“' + (s.title || 'Untitled')
+        + '” and its transcript will be gone for good.';
+      confirmBox.hidden = false;
+      requestAnimationFrame(() => confirmCancel.focus());
+    }
+    function cancelDelete(){
+      deleteTarget = null; confirmBox.hidden = true;
+    }
+    function row(s){
       const el = document.createElement('div');
-      el.className = 'op-chat-row' + (s.id === active ? ' is-active' : '');
-      const open = document.createElement('button');
-      open.className = 'op-chat-open';
-      open.innerHTML = '<span class="t"></span><span class="s"></span><span class="w"></span>';
-      // textContent, not innerHTML: a title is user text and lands in the DOM.
-      open.querySelector('.t').textContent = s.title || (s.empty ? 'New chat' : 'Untitled');
+      const isActive = s.id === active;
+      const running = s.alive || s.state === 'running';
       const presence = s.presence || {};
-      const status = open.querySelector('.s');
-      if (s.state === 'running') { status.textContent = 'Running'; status.classList.add('running'); }
-      else if (presence.controller_label && !presence.can_control)
-        status.textContent = 'On ' + presence.controller_label;
-      else status.textContent = '';
-      open.querySelector('.w').textContent = when(s.updated_ts);
+      const observing = presence.controller_label && !presence.can_control;
+      el.className = 'op-chat-row' + (isActive ? ' is-active' : '');
+      el.setAttribute('role', 'listitem');
+
+      const open = document.createElement('button');
+      open.type = 'button'; open.className = 'op-chat-open';
+      if (isActive) open.setAttribute('aria-current', 'true');
+      const title = document.createElement('span');
+      title.className = 'op-chat-title';
+      title.textContent = s.title || (s.empty ? 'New chat' : 'Untitled');
+      const time = document.createElement('span');
+      time.className = 'op-chat-when'; time.textContent = when(s.updated_ts);
+      const preview = document.createElement('span');
+      preview.className = 'op-chat-preview';
+      preview.textContent = s.preview
+        || (s.empty ? 'Ready for a new task' : 'No prompt preview');
+      const meta = document.createElement('span');
+      meta.className = 'op-chat-meta';
+      const bot = document.createElement('span'); bot.textContent = s.bot || '';
+      const surface = document.createElement('span');
+      surface.textContent = friendlySurface(s.surface);
+      const state = document.createElement('span');
+      state.className = 'op-chat-state';
+      if (running) {
+        state.textContent = observing
+          ? 'Running on ' + presence.controller_label : 'Running';
+        state.classList.add('running');
+        if (observing) state.classList.add('observer');
+      } else if (observing) {
+        state.textContent = 'On ' + presence.controller_label;
+        state.classList.add('observer');
+      } else if (isActive) state.textContent = 'Current';
+      meta.append(bot, surface, state);
+      open.append(title, time, preview, meta);
       open.onclick = () => switchTo(s.id);
-      const ren = document.createElement('button');
-      ren.className = 'op-chat-act'; ren.title = 'rename'; ren.textContent = '✎';
-      ren.onclick = async (e) => {
-        e.stopPropagation();
-        const t = prompt('Rename this chat', s.title || '');
-        if (t === null) return;
-        await api(one(s.id), {method:'POST', headers:{'Content-Type':'application/json'},
-                              body: JSON.stringify({action:'rename', title: t})});
-        load();
-      };
+
+      const more = document.createElement('button');
+      more.type = 'button'; more.className = 'op-chat-more';
+      more.setAttribute('aria-label', 'chat actions');
+      more.setAttribute('aria-expanded', 'false');
+      more.innerHTML = '<svg viewBox="0 0 18 18" width="15" height="15" '
+        + 'fill="currentColor" aria-hidden="true"><circle cx="4" cy="9" r="1.1">'
+        + '</circle><circle cx="9" cy="9" r="1.1"></circle><circle cx="14" cy="9" '
+        + 'r="1.1"></circle></svg>';
+      const menu = document.createElement('div');
+      menu.className = 'op-chat-menu'; menu.hidden = true;
+      const rename = document.createElement('button');
+      rename.type = 'button'; rename.textContent = 'Rename';
+      rename.onclick = e => { e.stopPropagation(); beginRename(el, s); };
       const del = document.createElement('button');
-      del.className = 'op-chat-act op-chat-del'; del.title = 'delete'; del.textContent = '✕';
-      del.onclick = async (e) => {
+      del.type = 'button'; del.className = 'danger'; del.textContent = 'Delete';
+      del.disabled = !!running;
+      if (running) del.title = 'Stop this chat before deleting it';
+      del.onclick = e => { e.stopPropagation(); if (!running) askDelete(s); };
+      menu.append(rename, del);
+      more.onclick = e => {
         e.stopPropagation();
-        if (!confirm('Delete this chat? The transcript is gone for good.')) return;
-        const j = await api(one(s.id), {method:'DELETE'});
-        // deleting the ACTIVE chat moves the server to a survivor — follow it,
-        // or the cockpit keeps painting a conversation the server dropped.
-        if (j && j.ok && s.id === active && j.active) { await switchTo(j.active, true); return; }
-        load();
+        const willOpen = menu.hidden;
+        closeMenus(menu); menu.hidden = !willOpen;
+        more.setAttribute('aria-expanded', String(willOpen));
       };
-      el.append(open, ren, del);
+      el.append(open, more, menu);
       return el;
     }
-    async function load(){
-      listEl.textContent = 'loading…';
+    function render(){
+      const q = (search.value || '').trim().toLocaleLowerCase();
+      const shown = rows.filter(s => !q
+        || ((s.title || '') + '\n' + (s.preview || ''))
+          .toLocaleLowerCase().includes(q))
+        .sort((a, b) => {
+          const ar = +(a.alive || a.state === 'running');
+          const br = +(b.alive || b.state === 'running');
+          return br - ar || (b.updated_ts || 0) - (a.updated_ts || 0);
+        });
+      listEl.replaceChildren();
+      shown.forEach(s => listEl.appendChild(row(s)));
+      empty.hidden = shown.length !== 0;
+      const strong = empty.querySelector('strong');
+      const copy = empty.querySelector('span');
+      if (strong) strong.textContent = rows.length ? 'No matching chats' : 'No chats yet';
+      if (copy) copy.textContent = rows.length
+        ? 'Try another search or start a new chat.'
+        : 'Start a new chat and it will appear here on every device.';
+      cancelDelete();
+    }
+    function fingerprint(items, activeId){
+      return JSON.stringify([activeId, items.map(s => [
+        s.id, s.title, s.preview, s.bot, s.surface, s.updated_ts,
+        s.state, !!s.alive,
+        (s.presence || {}).controller_label || '',
+        !!(s.presence || {}).can_control
+      ])]);
+    }
+    async function load(silent){
+      const seq = ++loadSeq;
+      if (!silent) setFeedback('Loading chats…');
       const j = await api(LIST + '?client_id=' + encodeURIComponent(_deviceId));
-      if (!j || !j.ok) { listEl.textContent = 'unavailable'; return; }
-      listEl.textContent = '';
-      const rows = j.sessions || [];
-      if (!rows.length) { listEl.textContent = 'no chats yet'; return; }
-      rows.forEach(s => listEl.appendChild(row(s, _conversationId || j.active)));
+      if (seq !== loadSeq || !pop.open) return;
+      if (!j || !j.ok) {
+        rows = []; listEl.replaceChildren(); empty.hidden = true;
+        setFeedback((j && j.error ? j.error + '. ' : 'Chats unavailable. ')
+          + 'Select to retry.', true);
+        feedback.tabIndex = 0; feedback.onclick = load;
+        return;
+      }
+      feedback.onclick = null; feedback.removeAttribute('tabindex');
+      if (!silent) setFeedback('');
+      const nextRows = j.sessions || [];
+      const nextActive = _conversationId || j.active || '';
+      const nextFingerprint = fingerprint(nextRows, nextActive);
+      if (!silent || nextFingerprint !== listFingerprint) {
+        rows = nextRows; active = nextActive;
+        listFingerprint = nextFingerprint; render();
+      }
       const live = document.getElementById('op-chats-live');
-      if (live) live.hidden = !rows.some(s => s.state === 'running');
+      if (live) live.hidden = !rows.some(s => s.alive || s.state === 'running');
     }
     async function switchTo(id, keepOpen){
-      await _sessionFlush();             // old thread is durable before identity changes
-      const j = await api(one(id), {method:'POST', headers:{'Content-Type':'application/json'},
-                                    body: JSON.stringify({action:'activate'})});
-      if (!j || !j.ok) return;
+      await _sessionFlush();
+      const j = await api(one(id), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({action:'activate'})
+      });
+      if (!j || !j.ok) {
+        setFeedback((j && j.error) || 'Could not open chat', true);
+        return;
+      }
       _setConversationId(id);
       _crev = typeof j.conversation_rev === 'number' ? j.conversation_rev : 0;
       _agentSince = Date.now()/1000; _seenMsg.clear(); _sawRunning = false;
       _handledState = ''; _lastAssistant = ''; _queue = []; _inFlight = false;
-      await window._opApplySession(j.data, j.rev, true, id, j.conversation_rev);
+      await window._opApplySession(
+        j.data, j.rev, true, id, j.conversation_rev);
       await _threadHeartbeat(false);
-      // Each conversation owns its browser tabs. Switching chats also brings
-      // that conversation's current tab to the shared cockpit feed.
       api(one(id) + '/browser', {method:'POST'});
       refreshSendButton(); setFollowUp();
-      try { const ctl = wireLaunchpadControls();
-        if (!j.data || !j.data.log) ctl.showDefault();
-        ctl.syncVisibility(); } catch(_){}
-      if (keepOpen) load(); else pop.hidden = true;
+      const fresh = !j.data || !j.data.log;
+      try {
+        const ctl = wireLaunchpadControls();
+        if (fresh) ctl.showDefault();
+        ctl.syncVisibility();
+      } catch(_){}
+      active = id;
+      if (keepOpen) load();
+      else {
+        hide(false);
+        if (fresh) requestAnimationFrame(() => {
+          const composer = document.getElementById('op-lp-input');
+          if (composer) composer.focus();
+        });
+      }
     }
     if (newBtn) newBtn.onclick = async () => {
       await _sessionFlush();
-      const j = await api(LIST, {method:'POST', headers:{'Content-Type':'application/json'}, body: '{}'});
-      if (!j || !j.ok) return;
-      // New chat lands on the welcome view — the wordmark-and-composer splash,
-      // which is what a fresh cockpit looks like.
-      _setConversationId(j.id);
-      _crev = 0;
-      _agentSince = Date.now()/1000; _seenMsg.clear(); _sawRunning = false;
-      _handledState = ''; _lastAssistant = ''; _queue = []; _inFlight = false;
-      await window._opApplySession(null, j.rev, true, j.id, 0);
-      await _threadHeartbeat(true);
-      refreshSendButton(); setFollowUp();
-      try { const ctl = wireLaunchpadControls(); ctl.showDefault(); ctl.syncVisibility(); } catch(_){}
-      pop.hidden = true;
+      newBtn.disabled = true; setFeedback('Opening a new chat…');
+      const j = await api(LIST, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+      });
+      newBtn.disabled = false;
+      if (!j || !j.ok) {
+        setFeedback((j && j.error) || 'Could not start chat', true);
+        return;
+      }
+      await switchTo(j.id);
     };
-    const toggle = (e) => {
-      e.stopPropagation();
-      const menu = document.getElementById('op-ham-menu');
-      if (menu) menu.hidden = true;
-      pop.hidden = !pop.hidden;
-      if (!pop.hidden) { positionPop(); load(); }
-    };
-    [item, headItem].filter(Boolean).forEach(el => el.addEventListener('click', toggle));
-    function positionPop(){
-      // anchor under the rail head like the history popover does
-      const anchor = headItem || document.getElementById('op-ham-btn') || item;
-      const r = anchor.getBoundingClientRect();
-      pop.style.top = Math.round(r.bottom + 6) + 'px';
-      pop.style.left = Math.round(Math.min(r.left, window.innerWidth - 320)) + 'px';
+    function show(){
+      if (pop.open) return;
+      trigger.setAttribute('aria-expanded', 'true');
+      pop.showModal(); load();
+      requestAnimationFrame(() => search.focus());
     }
-    document.addEventListener('click', (e) => {
-      if (!pop.hidden && !pop.contains(e.target)
-          && e.target !== item && e.target !== headItem) pop.hidden = true;
+    function hide(returnFocus){
+      if (!pop.open) return;
+      cancelDelete(); closeMenus(); pop.close();
+      trigger.setAttribute('aria-expanded', 'false');
+      if (returnFocus !== false) trigger.focus();
+    }
+    trigger.addEventListener('click', e => {
+      e.stopPropagation();
+      if (pop.open) hide(false); else show();
     });
+    if (closeBtn) closeBtn.addEventListener('click', () => hide(true));
+    if (search) search.addEventListener('input', render);
+    if (confirmCancel) confirmCancel.addEventListener('click', cancelDelete);
+    if (confirmDelete) confirmDelete.addEventListener('click', async () => {
+      const s = deleteTarget;
+      if (!s) return;
+      confirmDelete.disabled = true;
+      const j = await api(one(s.id), {method:'DELETE'});
+      confirmDelete.disabled = false;
+      if (!j || !j.ok) {
+        cancelDelete();
+        setFeedback((j && j.error) || 'Delete failed', true);
+        return;
+      }
+      cancelDelete();
+      if (s.id === active && j.active) {
+        await switchTo(j.active, true);
+        return;
+      }
+      await load();
+    });
+    pop.addEventListener('cancel', e => {
+      e.preventDefault(); hide(true);
+    });
+    pop.addEventListener('click', e => {
+      if (e.target !== pop) return;
+      const r = pop.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right
+          || e.clientY < r.top || e.clientY > r.bottom) hide(true);
+    });
+    pop.addEventListener(
+      'close', () => trigger.setAttribute('aria-expanded', 'false'));
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.op-chat-row')) closeMenus();
+    });
+    setInterval(() => {
+      if (pop.open && !listEl.querySelector('.op-chat-rename')
+          && confirmBox.hidden) load(true);
+    }, 5000);
   })();
 
   async function _syncRemoteSession(){

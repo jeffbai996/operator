@@ -2776,8 +2776,7 @@ table.with-pin th.type-col { width: 7rem; }
   select.op-action-caret:hover { border-color: var(--accent); background: var(--bg-2);
     box-shadow: 0 0 0 2px rgba(120,160,255,.16); }
   .op-rail { position: relative; }   /* anchor for the settings popover */
-  .op-chats-btn { position: relative; }
-  .op-chats-live { position: absolute; right: 1px; top: 1px; width: 5px; height: 5px;
+  .op-chats-live { position: absolute; right: 5px; top: 4px; width: 5px; height: 5px;
     border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg); }
   .op-chats-live[hidden] { display: none; }
   .op-thread-observer { margin: 0 0.72rem 0.45rem; padding: 0.38rem 0.5rem;
@@ -2805,44 +2804,115 @@ table.with-pin th.type-col { width: 7rem; }
     box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
     width: min(340px, calc(100vw - 24px)); overflow-y: auto; }
   .op-history[hidden] { display: none; }    /* same display-beats-[hidden] trap */
-  /* conversations switcher (2026-08-06) — deliberately the SAME popover shell
-     as history: the rail is narrow, and a permanent sidebar column would take
-     its width from the chat, which is the thing you are actually reading. */
-  .op-chats { position: fixed; z-index: 200; background: var(--bg-2);
-    border: 1px solid var(--border-2); border-radius: 10px;
-    padding: 0.55rem 0.6rem; display: flex; flex-direction: column; gap: 0.4rem;
-    box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
-    width: min(340px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; }
-  .op-chats[hidden] { display: none; }
-  .op-chat-head { display: flex; align-items: center; justify-content: space-between;
-    font: 700 0.72rem 'JetBrains Mono', ui-monospace, monospace;
-    color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
-  .op-chat-newbtn { font: 600 0.64rem 'JetBrains Mono', ui-monospace, monospace;
-    letter-spacing: 0.04em; color: var(--accent); background: transparent;
-    border: 1px solid var(--border-2); border-radius: 6px; padding: 0.16rem 0.4rem;
-    cursor: pointer; text-transform: none; }
-  .op-chat-newbtn:hover { border-color: var(--accent); }
-  .op-chat-list { display: flex; flex-direction: column; gap: 0.25rem;
-    font-size: 0.78rem; color: var(--muted); }
-  .op-chat-row { display: flex; align-items: stretch; gap: 0.2rem;
-    border: 1px solid var(--border); border-radius: 8px; }
+  /* conversations switcher — launched only from the welcome surface. The
+     browser brow and its overflow menu are deliberately free of chat controls;
+     selecting a past, server-synced conversation is a launchpad decision. */
+  .op-chats { position: fixed; inset: 0; box-sizing: border-box; margin: auto;
+    width: min(34rem, calc(100vw - 2rem)); height: min(36rem, calc(100dvh - 2rem));
+    max-width: none; max-height: none; overflow: hidden;
+    color: var(--fg); color-scheme: dark; background: color-mix(in srgb, var(--bg-2) 96%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
+    border-radius: 18px; padding: 1rem; flex-direction: column; gap: 0.75rem;
+    box-shadow: 0 28px 90px -24px rgba(0,0,0,.82);
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+  [data-theme="light"] .op-chats { color-scheme: light; }
+  .op-chats[open] { display: flex; }
+  .op-chats::backdrop { background: rgba(0,0,0,.56);
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  .op-chat-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.8rem; }
+  .op-chat-head h2 { margin: 0; color: var(--fg); font: 650 1rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-head p { margin: 0.18rem 0 0; color: var(--muted);
+    font: 500 0.68rem/1.35 'Plus Jakarta Sans', sans-serif; letter-spacing: .01em; }
+  .op-chat-actions { display: flex; align-items: center; gap: 0.3rem; flex: 0 0 auto; }
+  .op-chat-newbtn { font: 650 0.7rem/1 'Plus Jakarta Sans', sans-serif;
+    color: var(--bg); background: var(--fg); border: 0; border-radius: 8px;
+    padding: 0.48rem 0.7rem; cursor: pointer; }
+  .op-chat-newbtn:hover { filter: brightness(.88); }
+  .op-chat-close { width: 1.75rem; height: 1.75rem; padding: 0; display: inline-flex;
+    align-items: center; justify-content: center; border: 1px solid transparent;
+    border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease; }
+  .op-chat-close:hover { background: var(--bg-3); color: var(--fg); border-color: var(--border-2); }
+  .op-chat-close:active { transform: scale(.94); }
+  .op-chat-search { flex: 0 0 auto; height: 2.45rem; display: flex; align-items: center;
+    gap: .5rem; padding: 0 .7rem; border: 1px solid var(--border-2); border-radius: 11px;
+    color: var(--muted); background: color-mix(in srgb, var(--bg-3) 72%, transparent); }
+  .op-chat-search:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--border-2));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
+  .op-chat-search input { min-width: 0; width: 100%; border: 0; outline: 0; padding: 0;
+    color: var(--fg); background: transparent; font: 500 .78rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-search input::placeholder { color: var(--muted); }
+  .op-chat-feedback { min-height: 0; color: var(--muted);
+    font: 550 .68rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-feedback:empty { display: none; }
+  .op-chat-feedback.is-error { color: var(--bad); }
+  .op-chat-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 0.38rem;
+    min-height: 0; overflow-y: auto; padding: 0 .15rem .15rem 0; color: var(--muted); }
+  .op-chat-row { position: relative; display: grid; grid-template-columns: minmax(0,1fr) 2.1rem;
+    border: 1px solid var(--border); border-radius: 11px; background: transparent;
+    transition: border-color .14s ease, background .14s ease; }
+  .op-chat-row:hover { border-color: var(--border-2); background: color-mix(in srgb, var(--bg-3) 58%, transparent); }
   /* the active row is marked by its LEFT EDGE, not a fill: a filled row reads
      as hover/pressed, and the list is scanned by title, not by colour. */
   .op-chat-row.is-active { border-color: var(--border-2);
     box-shadow: inset 2px 0 0 var(--accent); }
-  .op-chat-open { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline;
-    gap: 0.5rem; background: transparent; border: 0; cursor: pointer;
-    padding: 0.4rem 0.5rem; color: var(--fg-2); text-align: left; font: inherit; }
-  .op-chat-open .t { flex: 1 1 auto; min-width: 0; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .op-chat-open .w { flex: 0 0 auto; font: 500 0.62rem 'JetBrains Mono', monospace;
-    color: var(--muted); }
-  .op-chat-open .s { flex: 0 0 auto; color: var(--muted); font-size: 0.62rem; }
-  .op-chat-open .s.running { color: var(--accent); }
-  .op-chat-act { flex: 0 0 auto; width: 1.6rem; background: transparent; border: 0;
-    color: var(--muted); cursor: pointer; font-size: 0.72rem; border-radius: 0 8px 8px 0; }
-  .op-chat-act:hover { color: var(--fg); background: var(--bg-3); }
-  .op-chat-del:hover { color: var(--bad); }
+  .op-chat-open { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto;
+    gap: .18rem .6rem; background: transparent; border: 0; cursor: pointer;
+    padding: .62rem .2rem .62rem .7rem; color: var(--fg-2); text-align: left;
+    font: 500 .76rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--fg); font-weight: 650; }
+  .op-chat-when { color: var(--muted); font: 500 .6rem/1.4 'JetBrains Mono', monospace; }
+  .op-chat-preview { grid-column: 1 / -1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .68rem; }
+  .op-chat-meta { grid-column: 1 / -1; display: flex; align-items: center; gap: .35rem;
+    min-width: 0; color: var(--muted); font: 550 .59rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-meta > span:not(:empty) + span:not(:empty)::before { content: '·'; margin-right: .35rem; color: var(--border-2); }
+  .op-chat-state.running { color: var(--accent); }
+  .op-chat-state.observer { color: #d29922; }
+  .op-chat-more { align-self: center; box-sizing: border-box; width: 1.8rem; height: 1.8rem;
+    padding: 0; gap: 0; flex: 0 0 auto; display: inline-flex;
+    align-items: center; justify-content: center; border: 0; border-radius: 8px;
+    background: transparent; color: var(--muted); cursor: pointer; }
+  .op-chat-more:hover, .op-chat-more[aria-expanded="true"] { color: var(--fg); background: var(--bg-3); }
+  .op-chat-menu { position: absolute; z-index: 2; right: .35rem; top: 2.45rem;
+    min-width: 7.6rem; padding: .28rem; border: 1px solid var(--border-2); border-radius: 9px;
+    background: var(--bg-2); box-shadow: 0 12px 30px -12px rgba(0,0,0,.72); }
+  .op-chat-menu[hidden] { display: none; }
+  .op-chat-menu button { width: 100%; display: block; border: 0; border-radius: 6px;
+    padding: .42rem .5rem; color: var(--fg-2); background: transparent; text-align: left;
+    cursor: pointer; font: 550 .68rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-menu button:hover { color: var(--fg); background: var(--bg-3); }
+  .op-chat-menu button.danger { color: var(--bad); }
+  .op-chat-menu button:disabled { opacity: .42; cursor: not-allowed; }
+  .op-chat-rename { grid-column: 1 / -1; display: flex; gap: .4rem; padding: .55rem .65rem; }
+  .op-chat-rename input { min-width: 0; flex: 1 1 auto; border: 1px solid var(--border-2);
+    border-radius: 7px; padding: .35rem .45rem; color: var(--fg); background: var(--bg-3);
+    font: 500 .72rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-rename button, .op-chat-confirm button { border: 1px solid var(--border-2);
+    border-radius: 7px; padding: .35rem .52rem; color: var(--fg-2); background: transparent;
+    cursor: pointer; font: 600 .65rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-empty { flex: 1 1 auto; min-height: 8rem; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: .25rem; color: var(--muted);
+    text-align: center; font: 500 .7rem/1.35 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-empty[hidden] { display: none; }
+  .op-chat-empty strong { color: var(--fg-2); font-size: .78rem; }
+  .op-chat-confirm { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    gap: .8rem; padding: .65rem .7rem; border: 1px solid color-mix(in srgb, var(--bad) 38%, var(--border));
+    border-radius: 10px; background: color-mix(in srgb, var(--bad) 8%, var(--bg-3)); }
+  .op-chat-confirm[hidden] { display: none; }
+  .op-chat-confirm > div:first-child { display: flex; flex-direction: column; gap: .12rem;
+    color: var(--muted); font: 500 .64rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-confirm strong { color: var(--fg); font-size: .7rem; }
+  .op-chat-confirm-actions { display: flex; gap: .35rem; }
+  .op-chat-confirm button.danger { color: #fff; border-color: var(--bad); background: var(--bad); }
+  .op-demo .op-lp-chats { display: none !important; }
+  @media (max-width: 600px) {
+    .op-chats { inset: auto 0 0; margin: 0; width: 100%; height: calc(100dvh - max(20px, env(safe-area-inset-top)));
+      border-width: 1px 0 0; border-radius: 20px 20px 0 0; padding: .9rem .8rem max(.8rem, env(safe-area-inset-bottom)); }
+    .op-chat-confirm { align-items: stretch; flex-direction: column; }
+    .op-chat-confirm-actions { justify-content: flex-end; }
+  }
   .op-hist-head { font: 700 0.72rem 'JetBrains Mono', ui-monospace, monospace;
     color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
   .op-hist-list { display: flex; flex-direction: column; gap: 0.3rem;
@@ -3756,10 +3826,11 @@ table.with-pin th.type-col { width: 7rem; }
     /* the +3px on theme/ring is their existing optical offset against the X —
        keep it, or the row goes 3px out of line on mobile only. */
     .op-lp-close { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
-    .op-lp-theme, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
+    .op-lp-theme, .op-lp-chats, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
     .op-lp-close { right: calc(0.75rem + env(safe-area-inset-right)); }
     .op-lp-theme { right: calc(3.5rem + env(safe-area-inset-right)); }
-    .op-lp-mark  { right: calc(6.25rem + env(safe-area-inset-right)); }
+    .op-lp-chats { right: calc(6.25rem + env(safe-area-inset-right)); }
+    .op-lp-mark  { right: calc(9rem + env(safe-area-inset-right)); }
     .op-lp-go { top: 0.7rem; right: 0.7rem; padding: 0.4rem 0.72rem 0.4rem 0.62rem;
       font-size: calc(0.68rem * var(--chat-scale)); }   /* bigger tap target on touch */
     .op-lp-go svg { width: 12px; height: 12px; }
@@ -4274,14 +4345,22 @@ table.with-pin th.type-col { width: 7rem; }
      full ring and the mark fades/scales in — so the "loader" IS the logo
      assembling, not a spinner that gets replaced by one. Colors match the
      favicon's ring stack. */
-  /* Third control in the splash's top-right row: X at 1.1rem, theme at 4rem,
-     this at 6.9rem. Same 32px box as its neighbours so the three read as one
-     row; the 26px art inside leaves the ring visually matched to their glyphs
-     rather than ballooning to the full button. */
-  .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
+  /* Four controls share the splash's top-right row: X at 1.1rem, theme at
+     4rem, chats at 6.9rem, then the health mark at 9.8rem. Same 32px box
+     throughout keeps the centerline clean rather than crowding browser chrome. */
+  .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 9.8rem; z-index: 4;
     width: var(--op-lp-control-size); height: var(--op-lp-control-size);
     display: grid; place-items: center; line-height: 0; }
   .op-lp-mark svg { overflow: visible; }
+  .op-lp-chats { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
+    width: var(--op-lp-control-size); height: var(--op-lp-control-size);
+    padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent; border-radius: 9px; background: transparent;
+    color: var(--muted); cursor: pointer;
+    transition: color .16s ease, background .16s ease, border-color .16s ease, transform .12s ease; }
+  .op-lp-chats:hover { color: var(--fg); background: var(--bg-3); border-color: var(--border-2); }
+  .op-lp-chats:active { transform: scale(.94); }
+  .op-lp-chats svg { display: block; }
 
   .op-lp-mark-tip { position: absolute; top: calc(100% + 6px); right: 0;
     display: grid; gap: 1px; justify-items: end;
@@ -5500,14 +5579,16 @@ table.with-pin th.type-col { width: 7rem; }
       display: grid; opacity: 1; transform: none; }
     /* hover must NOT open it on touch — only the explicit tap does */
     .op-lp-mark:not(.op-menu-open):hover .op-lp-mark-tip { display: none; }
-    /* theme + X: hidden until the ring's menu is open, then stacked beneath it */
-    .op-lp-theme, .op-lp-close { opacity: 0; pointer-events: none;
+    /* Chats, theme, and X stay tucked behind the ring until its menu is open. */
+    .op-lp-chats, .op-lp-theme, .op-lp-close { opacity: 0; pointer-events: none;
       transition: opacity .16s ease, transform .18s cubic-bezier(.2,1,.3,1);
       transform: translateY(-6px); }
+    .op-lp-mark.op-menu-open ~ .op-lp-chats,
     .op-lp-mark.op-menu-open ~ .op-lp-theme,
     .op-lp-mark.op-menu-open ~ .op-lp-close { opacity: 1; pointer-events: auto;
       transform: none; }
-
+    /* ONE line with the ring: it stays at the corner and chats, theme, and X
+       slide to its LEFT. The tip card opens beneath the row. */
     /* Equal 32px boxes share one top coordinate, so their centers align on
        every touch viewport without per-control compensation. */
     .op-lp-close { top: calc(1.1rem + env(safe-area-inset-top)) !important;
@@ -5515,6 +5596,8 @@ table.with-pin th.type-col { width: 7rem; }
       display: inline-flex !important; }
     .op-lp-theme { top: calc(1.1rem + env(safe-area-inset-top)) !important;
       right: calc(6rem + env(safe-area-inset-right)) !important; }
+    .op-lp-chats { top: calc(1.1rem + env(safe-area-inset-top)) !important;
+      right: calc(8.6rem + env(safe-area-inset-right)) !important; }
   }
 
 </style>
@@ -5564,8 +5647,6 @@ table.with-pin th.type-col { width: 7rem; }
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
-      <button class="op-full-btn op-iconbtn op-chats-btn" id="op-chats-open"
-              title="threads" aria-label="open Operator threads"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5h14v8H8.5L5 16.5v-3H3z"></path></svg><span class="op-chats-live" id="op-chats-live" hidden></span></button>
 
       <button class="op-full-btn op-iconbtn op-home-btn" id="op-lp-open" title="home — task launchpad" aria-label="open task launchpad"><svg viewBox="6 6 12 12" width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-clear" title="clear chat" aria-label="clear chat"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path><path d="M10 11v6M14 11v6"></path></svg></button>
@@ -5675,7 +5756,6 @@ table.with-pin th.type-col { width: 7rem; }
           <button class="op-ham-item" data-kind="tab_next"><span>Next tab</span><span class="k">⇥</span></button>
           <button class="op-ham-item" data-kind="home"><span>Home</span><span class="k">⌂</span></button>
           <div class="op-ham-sep"></div>
-          <button class="op-ham-item" id="op-ham-chats"><span>Chats</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5h14v8H8.5L5 16.5v-3H3z"></path></svg></span></button>
           <button class="op-ham-item" id="op-ham-history"><span>History</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M10 6v4l2.6 1.6"></path></svg></span></button>
           <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="2.7"></circle><path d="M10 2.6v2M10 15.4v2M17.4 10h-2M4.6 10h-2M15.2 4.8l-1.4 1.4M6.2 13.8l-1.4 1.4M15.2 15.2l-1.4-1.4M6.2 6.2 4.8 4.8"></path></svg></span></button>
         </div>
@@ -5713,13 +5793,6 @@ table.with-pin th.type-col { width: 7rem; }
           <input type="checkbox" id="op-set-glide" class="op-switch" checked></div>
       </div>
       <!-- flight recorder (1.0.11): every finished run, newest first -->
-      <!-- conversations (2026-08-06): switch/rename/delete chats. The
-           server keeps the map; this lists it. -->
-      <div class="op-chats" id="op-chats" hidden>
-        <div class="op-chat-head"><span>Chats</span>
-          <button class="op-chat-newbtn" id="op-chat-new">New chat</button></div>
-        <div class="op-chat-list" id="op-chat-list"></div>
-      </div>
       <div class="op-history" id="op-history" hidden>
         <div class="op-hist-head">Run history</div>
         <div class="op-hist-list" id="op-hist-list"></div>
@@ -5792,6 +5865,17 @@ table.with-pin th.type-col { width: 7rem; }
             </g>
           </svg>
         </div>
+        {# Chats belong to the launchpad: the browser brow has no room left for
+           another permanent control. The server-backed list is shared across
+           devices, so this is where someone deliberately picks up an earlier
+           conversation. #}
+        <button type="button" class="op-lp-chats" id="op-lp-chats"
+                aria-label="open chats" aria-haspopup="dialog" aria-expanded="false"
+                title="open chats">
+          <svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor"
+               stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.1 3.8h11.8a2.3 2.3 0 0 1 2.3 2.3v5.7a2.3 2.3 0 0 1-2.3 2.3H9L4.8 17.3v-3.2h-.7a2.3 2.3 0 0 1-2.3-2.3V6.1a2.3 2.3 0 0 1 2.3-2.3Z"></path><path d="M6.1 8.1h7.8M6.1 11.2h5.7"></path></svg>
+          <span class="op-chats-live" id="op-chats-live" hidden></span>
+        </button>
 
         <div class="op-about-backdrop" id="op-about-backdrop" hidden></div>
         <div class="op-about" id="op-about" hidden role="dialog" aria-modal="true" aria-label="about Operator">
@@ -5880,6 +5964,51 @@ table.with-pin th.type-col { width: 7rem; }
         <div id="op-overlay-sub" class="op-overlay-sub" hidden></div>
       </div>
     </div>
+
+  {# A sibling of the launchpad inside Operator's theme scope, deliberately.
+     The old picker lived inside
+     .op-lp, where its fixed positioning was overwritten by .op-lp > * and it
+     became a flex child that shoved the composer down. showModal() promotes
+     this dialog into the browser's top layer, independent of cockpit layout. #}
+  <dialog class="op-chats" id="op-chats" role="dialog" aria-modal="true"
+          aria-labelledby="op-chats-title" aria-describedby="op-chats-note">
+    <div class="op-chat-head">
+      <div>
+        <h2 id="op-chats-title">Chats</h2>
+        <p id="op-chats-note">Synced across your devices.</p>
+      </div>
+      <div class="op-chat-actions">
+        <button type="button" class="op-chat-newbtn" id="op-chat-new">New chat</button>
+        <button type="button" class="op-chat-close" id="op-chat-close"
+                aria-label="close chats" title="close">
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none"
+               stroke="currentColor" stroke-width="1.65" stroke-linecap="round"
+               aria-hidden="true"><path d="m5.5 5.5 9 9m0-9-9 9"></path></svg>
+        </button>
+      </div>
+    </div>
+    <label class="op-chat-search" for="op-chat-search">
+      <svg viewBox="0 0 18 18" width="15" height="15" fill="none"
+           stroke="currentColor" stroke-width="1.65" stroke-linecap="round"
+           aria-hidden="true"><circle cx="7.5" cy="7.5" r="4.5"></circle><path d="m11 11 4 4"></path></svg>
+      <input id="op-chat-search" type="search" autocomplete="off"
+             placeholder="Search chats" aria-label="search chats">
+    </label>
+    <div class="op-chat-feedback" id="op-chat-feedback" role="status" aria-live="polite"></div>
+    <div class="op-chat-list" id="op-chat-list" role="list"></div>
+    <div class="op-chat-empty" id="op-chat-empty" hidden>
+      <strong>No chats found</strong><span>Try another search or start a new chat.</span>
+    </div>
+    <div class="op-chat-confirm" id="op-chat-confirm" hidden role="alertdialog"
+         aria-labelledby="op-chat-confirm-title">
+      <div><strong id="op-chat-confirm-title">Delete this chat?</strong>
+        <span id="op-chat-confirm-copy">Its transcript will be gone for good.</span></div>
+      <div class="op-chat-confirm-actions">
+        <button type="button" id="op-chat-delete-cancel">Cancel</button>
+        <button type="button" class="danger" id="op-chat-delete-confirm">Delete</button>
+      </div>
+    </div>
+  </dialog>
   </section>
 
   <!-- New-task modal (#30 v2b) — OpenAI-Operator-style save dialog, opened by 💾 -->
@@ -5970,7 +6099,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1169"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1177"></script>
 
 </body>
 </html>

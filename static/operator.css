@@ -352,8 +352,7 @@
   select.op-action-caret:hover { border-color: var(--accent); background: var(--bg-2);
     box-shadow: 0 0 0 2px rgba(120,160,255,.16); }
   .op-rail { position: relative; }   /* anchor for the settings popover */
-  .op-chats-btn { position: relative; }
-  .op-chats-live { position: absolute; right: 1px; top: 1px; width: 5px; height: 5px;
+  .op-chats-live { position: absolute; right: 5px; top: 4px; width: 5px; height: 5px;
     border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg); }
   .op-chats-live[hidden] { display: none; }
   .op-thread-observer { margin: 0 0.72rem 0.45rem; padding: 0.38rem 0.5rem;
@@ -381,44 +380,115 @@
     box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
     width: min(340px, calc(100vw - 24px)); overflow-y: auto; }
   .op-history[hidden] { display: none; }    /* same display-beats-[hidden] trap */
-  /* conversations switcher (2026-08-06) — deliberately the SAME popover shell
-     as history: the rail is narrow, and a permanent sidebar column would take
-     its width from the chat, which is the thing you are actually reading. */
-  .op-chats { position: fixed; z-index: 200; background: var(--bg-2);
-    border: 1px solid var(--border-2); border-radius: 10px;
-    padding: 0.55rem 0.6rem; display: flex; flex-direction: column; gap: 0.4rem;
-    box-shadow: 0 8px 24px -8px rgba(0,0,0,.6);
-    width: min(340px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; }
-  .op-chats[hidden] { display: none; }
-  .op-chat-head { display: flex; align-items: center; justify-content: space-between;
-    font: 700 0.72rem 'JetBrains Mono', ui-monospace, monospace;
-    color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
-  .op-chat-newbtn { font: 600 0.64rem 'JetBrains Mono', ui-monospace, monospace;
-    letter-spacing: 0.04em; color: var(--accent); background: transparent;
-    border: 1px solid var(--border-2); border-radius: 6px; padding: 0.16rem 0.4rem;
-    cursor: pointer; text-transform: none; }
-  .op-chat-newbtn:hover { border-color: var(--accent); }
-  .op-chat-list { display: flex; flex-direction: column; gap: 0.25rem;
-    font-size: 0.78rem; color: var(--muted); }
-  .op-chat-row { display: flex; align-items: stretch; gap: 0.2rem;
-    border: 1px solid var(--border); border-radius: 8px; }
+  /* conversations switcher — launched only from the welcome surface. The
+     browser brow and its overflow menu are deliberately free of chat controls;
+     selecting a past, server-synced conversation is a launchpad decision. */
+  .op-chats { position: fixed; inset: 0; box-sizing: border-box; margin: auto;
+    width: min(34rem, calc(100vw - 2rem)); height: min(36rem, calc(100dvh - 2rem));
+    max-width: none; max-height: none; overflow: hidden;
+    color: var(--fg); color-scheme: dark; background: color-mix(in srgb, var(--bg-2) 96%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
+    border-radius: 18px; padding: 1rem; flex-direction: column; gap: 0.75rem;
+    box-shadow: 0 28px 90px -24px rgba(0,0,0,.82);
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+  [data-theme="light"] .op-chats { color-scheme: light; }
+  .op-chats[open] { display: flex; }
+  .op-chats::backdrop { background: rgba(0,0,0,.56);
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  .op-chat-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.8rem; }
+  .op-chat-head h2 { margin: 0; color: var(--fg); font: 650 1rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-head p { margin: 0.18rem 0 0; color: var(--muted);
+    font: 500 0.68rem/1.35 'Plus Jakarta Sans', sans-serif; letter-spacing: .01em; }
+  .op-chat-actions { display: flex; align-items: center; gap: 0.3rem; flex: 0 0 auto; }
+  .op-chat-newbtn { font: 650 0.7rem/1 'Plus Jakarta Sans', sans-serif;
+    color: var(--bg); background: var(--fg); border: 0; border-radius: 8px;
+    padding: 0.48rem 0.7rem; cursor: pointer; }
+  .op-chat-newbtn:hover { filter: brightness(.88); }
+  .op-chat-close { width: 1.75rem; height: 1.75rem; padding: 0; display: inline-flex;
+    align-items: center; justify-content: center; border: 1px solid transparent;
+    border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease; }
+  .op-chat-close:hover { background: var(--bg-3); color: var(--fg); border-color: var(--border-2); }
+  .op-chat-close:active { transform: scale(.94); }
+  .op-chat-search { flex: 0 0 auto; height: 2.45rem; display: flex; align-items: center;
+    gap: .5rem; padding: 0 .7rem; border: 1px solid var(--border-2); border-radius: 11px;
+    color: var(--muted); background: color-mix(in srgb, var(--bg-3) 72%, transparent); }
+  .op-chat-search:focus-within { border-color: color-mix(in srgb, var(--accent) 65%, var(--border-2));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
+  .op-chat-search input { min-width: 0; width: 100%; border: 0; outline: 0; padding: 0;
+    color: var(--fg); background: transparent; font: 500 .78rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-search input::placeholder { color: var(--muted); }
+  .op-chat-feedback { min-height: 0; color: var(--muted);
+    font: 550 .68rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-feedback:empty { display: none; }
+  .op-chat-feedback.is-error { color: var(--bad); }
+  .op-chat-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 0.38rem;
+    min-height: 0; overflow-y: auto; padding: 0 .15rem .15rem 0; color: var(--muted); }
+  .op-chat-row { position: relative; display: grid; grid-template-columns: minmax(0,1fr) 2.1rem;
+    border: 1px solid var(--border); border-radius: 11px; background: transparent;
+    transition: border-color .14s ease, background .14s ease; }
+  .op-chat-row:hover { border-color: var(--border-2); background: color-mix(in srgb, var(--bg-3) 58%, transparent); }
   /* the active row is marked by its LEFT EDGE, not a fill: a filled row reads
      as hover/pressed, and the list is scanned by title, not by colour. */
   .op-chat-row.is-active { border-color: var(--border-2);
     box-shadow: inset 2px 0 0 var(--accent); }
-  .op-chat-open { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline;
-    gap: 0.5rem; background: transparent; border: 0; cursor: pointer;
-    padding: 0.4rem 0.5rem; color: var(--fg-2); text-align: left; font: inherit; }
-  .op-chat-open .t { flex: 1 1 auto; min-width: 0; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .op-chat-open .w { flex: 0 0 auto; font: 500 0.62rem 'JetBrains Mono', monospace;
-    color: var(--muted); }
-  .op-chat-open .s { flex: 0 0 auto; color: var(--muted); font-size: 0.62rem; }
-  .op-chat-open .s.running { color: var(--accent); }
-  .op-chat-act { flex: 0 0 auto; width: 1.6rem; background: transparent; border: 0;
-    color: var(--muted); cursor: pointer; font-size: 0.72rem; border-radius: 0 8px 8px 0; }
-  .op-chat-act:hover { color: var(--fg); background: var(--bg-3); }
-  .op-chat-del:hover { color: var(--bad); }
+  .op-chat-open { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto;
+    gap: .18rem .6rem; background: transparent; border: 0; cursor: pointer;
+    padding: .62rem .2rem .62rem .7rem; color: var(--fg-2); text-align: left;
+    font: 500 .76rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--fg); font-weight: 650; }
+  .op-chat-when { color: var(--muted); font: 500 .6rem/1.4 'JetBrains Mono', monospace; }
+  .op-chat-preview { grid-column: 1 / -1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .68rem; }
+  .op-chat-meta { grid-column: 1 / -1; display: flex; align-items: center; gap: .35rem;
+    min-width: 0; color: var(--muted); font: 550 .59rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-meta > span:not(:empty) + span:not(:empty)::before { content: '·'; margin-right: .35rem; color: var(--border-2); }
+  .op-chat-state.running { color: var(--accent); }
+  .op-chat-state.observer { color: #d29922; }
+  .op-chat-more { align-self: center; box-sizing: border-box; width: 1.8rem; height: 1.8rem;
+    padding: 0; gap: 0; flex: 0 0 auto; display: inline-flex;
+    align-items: center; justify-content: center; border: 0; border-radius: 8px;
+    background: transparent; color: var(--muted); cursor: pointer; }
+  .op-chat-more:hover, .op-chat-more[aria-expanded="true"] { color: var(--fg); background: var(--bg-3); }
+  .op-chat-menu { position: absolute; z-index: 2; right: .35rem; top: 2.45rem;
+    min-width: 7.6rem; padding: .28rem; border: 1px solid var(--border-2); border-radius: 9px;
+    background: var(--bg-2); box-shadow: 0 12px 30px -12px rgba(0,0,0,.72); }
+  .op-chat-menu[hidden] { display: none; }
+  .op-chat-menu button { width: 100%; display: block; border: 0; border-radius: 6px;
+    padding: .42rem .5rem; color: var(--fg-2); background: transparent; text-align: left;
+    cursor: pointer; font: 550 .68rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-menu button:hover { color: var(--fg); background: var(--bg-3); }
+  .op-chat-menu button.danger { color: var(--bad); }
+  .op-chat-menu button:disabled { opacity: .42; cursor: not-allowed; }
+  .op-chat-rename { grid-column: 1 / -1; display: flex; gap: .4rem; padding: .55rem .65rem; }
+  .op-chat-rename input { min-width: 0; flex: 1 1 auto; border: 1px solid var(--border-2);
+    border-radius: 7px; padding: .35rem .45rem; color: var(--fg); background: var(--bg-3);
+    font: 500 .72rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-rename button, .op-chat-confirm button { border: 1px solid var(--border-2);
+    border-radius: 7px; padding: .35rem .52rem; color: var(--fg-2); background: transparent;
+    cursor: pointer; font: 600 .65rem/1.2 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-empty { flex: 1 1 auto; min-height: 8rem; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: .25rem; color: var(--muted);
+    text-align: center; font: 500 .7rem/1.35 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-empty[hidden] { display: none; }
+  .op-chat-empty strong { color: var(--fg-2); font-size: .78rem; }
+  .op-chat-confirm { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    gap: .8rem; padding: .65rem .7rem; border: 1px solid color-mix(in srgb, var(--bad) 38%, var(--border));
+    border-radius: 10px; background: color-mix(in srgb, var(--bad) 8%, var(--bg-3)); }
+  .op-chat-confirm[hidden] { display: none; }
+  .op-chat-confirm > div:first-child { display: flex; flex-direction: column; gap: .12rem;
+    color: var(--muted); font: 500 .64rem/1.3 'Plus Jakarta Sans', sans-serif; }
+  .op-chat-confirm strong { color: var(--fg); font-size: .7rem; }
+  .op-chat-confirm-actions { display: flex; gap: .35rem; }
+  .op-chat-confirm button.danger { color: #fff; border-color: var(--bad); background: var(--bad); }
+  .op-demo .op-lp-chats { display: none !important; }
+  @media (max-width: 600px) {
+    .op-chats { inset: auto 0 0; margin: 0; width: 100%; height: calc(100dvh - max(20px, env(safe-area-inset-top)));
+      border-width: 1px 0 0; border-radius: 20px 20px 0 0; padding: .9rem .8rem max(.8rem, env(safe-area-inset-bottom)); }
+    .op-chat-confirm { align-items: stretch; flex-direction: column; }
+    .op-chat-confirm-actions { justify-content: flex-end; }
+  }
   .op-hist-head { font: 700 0.72rem 'JetBrains Mono', ui-monospace, monospace;
     color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
   .op-hist-list { display: flex; flex-direction: column; gap: 0.3rem;
@@ -1406,18 +1476,19 @@
       padding-bottom: 0.5rem; align-content: start; }
     .op-lp-card { padding: 0.8rem 0.9rem; border-radius: 16px; aspect-ratio: auto; }
       /* full-width single column: let cards stay content-height, not tall squares */
-    /* The three top-right controls (X, theme, status ring) DO fit a phone —
-       142px of a 390px viewport — and they are position:fixed so they cost the
+    /* The four top-right controls (X, theme, chats, status ring) fit a phone —
+       186px of a 390px viewport — and they are position:fixed so they cost the
        layout nothing. They only need clearing the safe-area inset, which the
        desktop 1.1rem top does not account for on a notched device. No mobile
        hamburger needed (the owner 2026-07-25 floated one "if not then nvm"). */
     /* the +3px on theme/ring is their existing optical offset against the X —
        keep it, or the row goes 3px out of line on mobile only. */
     .op-lp-close { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
-    .op-lp-theme, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
+    .op-lp-theme, .op-lp-chats, .op-lp-mark { top: calc(0.75rem + 3px + env(safe-area-inset-top)); }
     .op-lp-close { right: calc(0.75rem + env(safe-area-inset-right)); }
     .op-lp-theme { right: calc(3.5rem + env(safe-area-inset-right)); }
-    .op-lp-mark  { right: calc(6.25rem + env(safe-area-inset-right)); }
+    .op-lp-chats { right: calc(6.25rem + env(safe-area-inset-right)); }
+    .op-lp-mark  { right: calc(9rem + env(safe-area-inset-right)); }
     .op-lp-go { top: 0.7rem; right: 0.7rem; padding: 0.4rem 0.72rem 0.4rem 0.62rem;
       font-size: calc(0.68rem * var(--chat-scale)); }   /* bigger tap target on touch */
     .op-lp-go svg { width: 12px; height: 12px; }
@@ -2018,14 +2089,22 @@
      full ring and the mark fades/scales in — so the "loader" IS the logo
      assembling, not a spinner that gets replaced by one. Colors match the
      favicon's ring stack. */
-  /* Third control in the splash's top-right row: X at 1.1rem, theme at 4rem,
-     this at 6.9rem. Same 32px box as its neighbours so the three read as one
-     row; the 26px art inside leaves the ring visually matched to their glyphs
-     rather than ballooning to the full button. */
-  .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
+  /* Four controls share the splash's top-right row: X at 1.1rem, theme at
+     4rem, chats at 6.9rem, then the health mark at 9.8rem. Same 32px box
+     throughout keeps the centerline clean rather than crowding browser chrome. */
+  .op-lp-mark { position: fixed; top: calc(1.1rem + 3px); right: 9.8rem; z-index: 4;
     width: var(--op-lp-control-size); height: var(--op-lp-control-size);
     display: grid; place-items: center; line-height: 0; }
   .op-lp-mark svg { overflow: visible; }
+  .op-lp-chats { position: fixed; top: calc(1.1rem + 3px); right: 6.9rem; z-index: 4;
+    width: var(--op-lp-control-size); height: var(--op-lp-control-size);
+    padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent; border-radius: 9px; background: transparent;
+    color: var(--muted); cursor: pointer;
+    transition: color .16s ease, background .16s ease, border-color .16s ease, transform .12s ease; }
+  .op-lp-chats:hover { color: var(--fg); background: var(--bg-3); border-color: var(--border-2); }
+  .op-lp-chats:active { transform: scale(.94); }
+  .op-lp-chats svg { display: block; }
   /* ── Hover label (the owner 2026-07-25) ────────────────────────────────────────
      Says what the ring MEANS: Ready when the feed is live, and the matching
      wording for trouble — amber ring = a minor/transient problem, red = the
@@ -3573,17 +3652,16 @@
       display: grid; opacity: 1; transform: none; }
     /* hover must NOT open it on touch — only the explicit tap does */
     .op-lp-mark:not(.op-menu-open):hover .op-lp-mark-tip { display: none; }
-    /* theme + X: hidden until the ring's menu is open, then stacked beneath it */
-    .op-lp-theme, .op-lp-close { opacity: 0; pointer-events: none;
+    /* Chats, theme, and X stay tucked behind the ring until its menu is open. */
+    .op-lp-chats, .op-lp-theme, .op-lp-close { opacity: 0; pointer-events: none;
       transition: opacity .16s ease, transform .18s cubic-bezier(.2,1,.3,1);
       transform: translateY(-6px); }
+    .op-lp-mark.op-menu-open ~ .op-lp-chats,
     .op-lp-mark.op-menu-open ~ .op-lp-theme,
     .op-lp-mark.op-menu-open ~ .op-lp-close { opacity: 1; pointer-events: auto;
       transform: none; }
-    /* ONE line with the ring (the owner 2026-07-26: "spinner, theme switcher, and
-       X should be in line and fixed at the top"): ring at the corner, X and
-       theme sliding out to its LEFT on the same row. The tip card opens
-       beneath the row. */
+    /* ONE line with the ring: it stays at the corner and chats, theme, and X
+       slide to its LEFT. The tip card opens beneath the row. */
     /* Equal 32px boxes share one top coordinate, so their centers align on
        every touch viewport without per-control compensation. */
     .op-lp-close { top: calc(1.1rem + env(safe-area-inset-top)) !important;
@@ -3591,4 +3669,6 @@
       display: inline-flex !important; }
     .op-lp-theme { top: calc(1.1rem + env(safe-area-inset-top)) !important;
       right: calc(6rem + env(safe-area-inset-right)) !important; }
+    .op-lp-chats { top: calc(1.1rem + env(safe-area-inset-top)) !important;
+      right: calc(8.6rem + env(safe-area-inset-right)) !important; }
   }

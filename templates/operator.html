@@ -16,7 +16,7 @@
       href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
 {% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1175">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1177">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -67,8 +67,6 @@
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
-      <button class="op-full-btn op-iconbtn op-chats-btn" id="op-chats-open"
-              title="threads" aria-label="open Operator threads"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5h14v8H8.5L5 16.5v-3H3z"></path></svg><span class="op-chats-live" id="op-chats-live" hidden></span></button>
       {# Home is the Operator MARK, not a house glyph (the owner 2026-07-25) — going
          home means going to Operator's own launchpad, and this also puts the
          logo in the persistent cockpit chrome rather than only on the splash. #}
@@ -195,7 +193,6 @@
           <button class="op-ham-item" data-kind="home"><span>Home</span><span class="k">⌂</span></button>
           <div class="op-ham-sep"></div>
           <button class="op-ham-item" data-kind="extensions"><span>Extensions</span><span class="k">✦</span></button>
-          <button class="op-ham-item" id="op-ham-chats"><span>Chats</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5h14v8H8.5L5 16.5v-3H3z"></path></svg></span></button>
           <button class="op-ham-item" id="op-ham-history"><span>History</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M10 6v4l2.6 1.6"></path></svg></span></button>
           <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="2.7"></circle><path d="M10 2.6v2M10 15.4v2M17.4 10h-2M4.6 10h-2M15.2 4.8l-1.4 1.4M6.2 13.8l-1.4 1.4M15.2 15.2l-1.4-1.4M6.2 6.2 4.8 4.8"></path></svg></span></button>
         </div>
@@ -233,13 +230,6 @@
           <input type="checkbox" id="op-set-glide" class="op-switch" checked></div>
       </div>
       <!-- flight recorder (1.0.11): every finished run, newest first -->
-      <!-- conversations (2026-08-06): switch/rename/delete chats. The
-           server keeps the map; this lists it. -->
-      <div class="op-chats" id="op-chats" hidden>
-        <div class="op-chat-head"><span>Chats</span>
-          <button class="op-chat-newbtn" id="op-chat-new">New chat</button></div>
-        <div class="op-chat-list" id="op-chat-list"></div>
-      </div>
       <div class="op-history" id="op-history" hidden>
         <div class="op-hist-head">Run history</div>
         <div class="op-hist-list" id="op-hist-list"></div>
@@ -319,6 +309,17 @@
             </g>
           </svg>
         </div>
+        {# Chats belong to the launchpad: the browser brow has no room left for
+           another permanent control. The server-backed list is shared across
+           devices, so this is where someone deliberately picks up an earlier
+           conversation. #}
+        <button type="button" class="op-lp-chats" id="op-lp-chats"
+                aria-label="open chats" aria-haspopup="dialog" aria-expanded="false"
+                title="open chats">
+          <svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor"
+               stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.1 3.8h11.8a2.3 2.3 0 0 1 2.3 2.3v5.7a2.3 2.3 0 0 1-2.3 2.3H9L4.8 17.3v-3.2h-.7a2.3 2.3 0 0 1-2.3-2.3V6.1a2.3 2.3 0 0 1 2.3-2.3Z"></path><path d="M6.1 8.1h7.8M6.1 11.2h5.7"></path></svg>
+          <span class="op-chats-live" id="op-chats-live" hidden></span>
+        </button>
         {# About card (the owner 2026-07-26): DESKTOP click on the status ring opens
            it (mobile keeps the ring-as-menu). Left-aligned; heading = mark +
            wordmark + version; rights line; Operator · BaiCloud brand foot in
@@ -411,6 +412,51 @@
         <div id="op-overlay-sub" class="op-overlay-sub" hidden></div>
       </div>
     </div>
+
+  {# A sibling of the launchpad inside Operator's theme scope, deliberately.
+     The old picker lived inside
+     .op-lp, where its fixed positioning was overwritten by .op-lp > * and it
+     became a flex child that shoved the composer down. showModal() promotes
+     this dialog into the browser's top layer, independent of cockpit layout. #}
+  <dialog class="op-chats" id="op-chats" role="dialog" aria-modal="true"
+          aria-labelledby="op-chats-title" aria-describedby="op-chats-note">
+    <div class="op-chat-head">
+      <div>
+        <h2 id="op-chats-title">Chats</h2>
+        <p id="op-chats-note">Synced across your devices.</p>
+      </div>
+      <div class="op-chat-actions">
+        <button type="button" class="op-chat-newbtn" id="op-chat-new">New chat</button>
+        <button type="button" class="op-chat-close" id="op-chat-close"
+                aria-label="close chats" title="close">
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none"
+               stroke="currentColor" stroke-width="1.65" stroke-linecap="round"
+               aria-hidden="true"><path d="m5.5 5.5 9 9m0-9-9 9"></path></svg>
+        </button>
+      </div>
+    </div>
+    <label class="op-chat-search" for="op-chat-search">
+      <svg viewBox="0 0 18 18" width="15" height="15" fill="none"
+           stroke="currentColor" stroke-width="1.65" stroke-linecap="round"
+           aria-hidden="true"><circle cx="7.5" cy="7.5" r="4.5"></circle><path d="m11 11 4 4"></path></svg>
+      <input id="op-chat-search" type="search" autocomplete="off"
+             placeholder="Search chats" aria-label="search chats">
+    </label>
+    <div class="op-chat-feedback" id="op-chat-feedback" role="status" aria-live="polite"></div>
+    <div class="op-chat-list" id="op-chat-list" role="list"></div>
+    <div class="op-chat-empty" id="op-chat-empty" hidden>
+      <strong>No chats found</strong><span>Try another search or start a new chat.</span>
+    </div>
+    <div class="op-chat-confirm" id="op-chat-confirm" hidden role="alertdialog"
+         aria-labelledby="op-chat-confirm-title">
+      <div><strong id="op-chat-confirm-title">Delete this chat?</strong>
+        <span id="op-chat-confirm-copy">Its transcript will be gone for good.</span></div>
+      <div class="op-chat-confirm-actions">
+        <button type="button" id="op-chat-delete-cancel">Cancel</button>
+        <button type="button" class="danger" id="op-chat-delete-confirm">Delete</button>
+      </div>
+    </div>
+  </dialog>
   </section>
 
   <!-- New-task modal (#30 v2b) — OpenAI-Operator-style save dialog, opened by 💾 -->
@@ -501,5 +547,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1169"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1177"></script>
 {% endblock %}
