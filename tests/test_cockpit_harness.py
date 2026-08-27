@@ -1626,8 +1626,8 @@ def test_mobile_launchpad_uses_the_full_screen(browser, harness):
         ctx.close()
 
 
-def test_touch_stage_captures_software_keyboard_input(browser, harness):
-    """A quick tap must arm a real input control so iOS can show its keyboard."""
+def test_touch_stage_requires_explicit_keyboard_control(browser, harness):
+    """A browser tap must steer without summoning iOS's keyboard; typing is explicit."""
     ctx = browser.new_context(
         viewport={"width": 820, "height": 1180},
         has_touch=True,
@@ -1648,6 +1648,10 @@ def test_touch_stage_captures_software_keyboard_input(browser, harness):
             "document.getElementById('op-view').naturalWidth > 0",
             timeout=8000, polling=50)
         pg.locator("#op-lp").evaluate("el => { el.hidden = true; }")
+        # The harness begins in the transitional idle state, whose connection
+        # veil correctly sits above every stage control. This test owns the
+        # live-browser interaction contract, so clear that unrelated veil.
+        pg.locator("#op-overlay").evaluate("el => { el.style.display = 'none'; }")
         stage = pg.locator("#op-stage").bounding_box()
         assert stage is not None
 
@@ -1666,6 +1670,22 @@ def test_touch_stage_captures_software_keyboard_input(browser, harness):
             changedTouches:[touch]}));
         }""", [stage["x"] + stage["width"] / 2,
                  stage["y"] + stage["height"] / 2])
+        # A normal browser tap focuses the non-editable stage for hardware-key
+        # handling, but must not focus the hidden textarea and make iOS raise
+        # the software keyboard over the page the user just tapped.
+        assert pg.evaluate("document.activeElement.id") == "op-stage"
+
+        # Mobile typing remains available, deliberately, from the visible
+        # keyboard control rather than as an accidental consequence of click.
+        key_state = pg.locator("#op-keyboard").evaluate("""el => {
+          const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+          return {display:s.display, width:r.width, height:r.height};
+        }""")
+        assert key_state["display"] != "none" and key_state["width"] >= 32, key_state
+        # The stage frame is intentionally repainted very frequently, so a
+        # physical Playwright click may never satisfy its stillness heuristic.
+        # As above, exercise the DOM event contract directly.
+        pg.locator("#op-keyboard").dispatch_event("click")
         pg.wait_for_function(
             "document.activeElement.id === 'op-key-capture'",
             timeout=8000, polling=50)

@@ -16,7 +16,7 @@
       href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
 {% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1177">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1178">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -263,11 +263,15 @@
     <div class="op-stage" id="op-stage" tabindex="0" aria-label="live browser — click to interact, focus to type">
       <img class="op-view" id="op-view" alt="">
       {# A focusable div receives hardware-key events, but iOS will not open its
-         software keyboard. A quick feed tap focuses this offscreen textarea;
-         operator.js drains its input into /operator/steer. #}
+         software keyboard. The explicit mobile keyboard button below focuses
+         this offscreen textarea; operator.js drains its input into /operator/steer. #}
       <textarea class="op-key-capture" id="op-key-capture" tabindex="-1" rows="1"
                 aria-label="remote browser keyboard input" autocomplete="off"
                 autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+      <button class="op-keyboard" id="op-keyboard" type="button"
+              aria-label="show keyboard to type in browser" title="Type in browser">
+        <svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5.1" width="15" height="9.8" rx="2"></rect><path d="M5.4 8.2h.01M8 8.2h.01M10.6 8.2h.01M13.2 8.2h.01M6.7 11.6h6.6"></path></svg>
+      </button>
       <!-- ships COLLAPSED: initLaunchpad() runs post-paint (setTimeout 0), so an
            expanded first paint flashed the category tabs + card grid for ~400ms
            on every splash refresh before the JS collapse landed (the owner 2026-07-20). -->
@@ -399,7 +403,7 @@
         <div class="op-lp-empty" id="op-lp-empty" hidden>No tasks match “<span id="op-lp-empty-q"></span>”</div>
         </div></div>
       </div>
-      <span class="op-kbhint">tap to focus/steer · type to send keys</span>
+      <span class="op-kbhint">focus to steer · use keyboard to type</span>
       <div class="op-agent-cursor" id="op-agent-cursor" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="18" height="18" style="margin:-2px 0 0 -3px"><path d="M5 3l14 7-6 1.6L9.7 18 5 3z" fill="#fff" stroke="#0a0c14" stroke-width="1.3" stroke-linejoin="round"/></svg>
       </div>
@@ -547,5 +551,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1177"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1178"></script>
 {% endblock %}

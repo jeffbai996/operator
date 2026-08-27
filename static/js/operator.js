@@ -5385,6 +5385,14 @@
     resetKeyCapture();
     try { keyCapture.focus({preventScroll:true}); } catch(_) { keyCapture.focus(); }
   }
+  const keyboardBtn = document.getElementById('op-keyboard');
+  if (keyboardBtn) {
+    keyboardBtn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      focusTouchKeyboard();
+    });
+  }
   if (keyCapture) {
     resetKeyCapture();
     // Software keyboards do not consistently emit a useful keydown. Drain
@@ -5471,7 +5479,7 @@
   // iOS's preventDefault kills the tap and "none of the buttons work" (iPad).
   function _overlayTarget(e){
     const t = e.target;
-    return t && t.closest && t.closest('.op-lp, .op-panic, .op-handoff, .op-takeover-btn');
+    return t && t.closest && t.closest('.op-lp, .op-panic, .op-handoff, .op-takeover-btn, .op-keyboard');
   }
   stage.addEventListener('touchstart', e => {
     if (_overlayTarget(e)) return;   // let the overlay handle its own tap
@@ -5533,9 +5541,6 @@
     if (_overlayTarget(e)) return;   // overlay tap — don't preventDefault its click
     if (_tScroll) { _tScroll = false; e.preventDefault(); _endTouch(); return; }
     if (_tHoldTimer) { clearTimeout(_tHoldTimer); _tHoldTimer = null; }
-    // Focus an actual editable control while the quick tap is still a trusted
-    // iOS gesture. Focusing the stage div cannot summon the software keyboard.
-    if (!_tDragging && !_tHolding && _tN) focusTouchKeyboard();
     e.preventDefault();
     if (_tDragging && _tStart && _tN) {          // DRAG (one atomic action)
       act({kind:'drag', x0:_tStart.n.x, y0:_tStart.n.y, x1:_tN.x, y1:_tN.y}, null, true);

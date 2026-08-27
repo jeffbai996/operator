@@ -1218,6 +1218,22 @@
     margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none;
     resize: none; overflow: hidden; font-size: 16px; caret-color: transparent;
     -webkit-user-select: text; user-select: text; }
+  /* Deliberate iOS text entry: regular taps steer the remote page, while this
+     small control is the only route that focuses the hidden capture textarea.
+     Keeping it in the stage avoids sacrificing scarce browser-toolbar space. */
+  .op-keyboard { display: none; position: absolute; right: 0.55rem; bottom: 0.55rem;
+    z-index: 9; width: 34px; height: 34px; padding: 0; place-items: center;
+    color: var(--fg-2); background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+    border: 1px solid var(--border-2); border-radius: 9px;
+    box-shadow: 0 5px 15px rgba(0,0,0,.28); -webkit-tap-highlight-color: transparent; }
+  .op-keyboard:active { color: var(--fg); background: var(--bg-3); transform: scale(.96); }
+  .op-keyboard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Touch capability, not width: an iPad in landscape still needs the same
+     deliberate text-entry affordance as a phone. */
+  @media (hover: none) and (pointer: coarse) {
+    .op-keyboard { display: grid; }
+    .op:has(.op-lp:not([hidden])) .op-keyboard { display: none; }
+  }
   .op-kbhint { position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
     font: 500 0.6rem/1 'JetBrains Mono', monospace; color: var(--muted);
     background: rgba(10,12,20,.8); border: 1px solid var(--border); padding: 0.22rem 0.45rem;

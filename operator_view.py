@@ -403,11 +403,6 @@ def _landing_url() -> str:
 # must exceed the inner one or it reports success as failure.
 TAB_INNER_BUDGET = 16.0
 TAB_OP_TIMEOUT = 20.0
-_DESKTOP_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-)
-
 # Color scheme forced onto every attached target (see _force_desktop_page).
 # The host browser/OS run dark; CDP attach flips pages to light, so we pin it.
 _COLOR_SCHEME = _os_cfg.environ.get("OPERATOR_COLOR_SCHEME") or "dark"
@@ -1919,12 +1914,12 @@ class _Streamer:
         return sess
 
     async def _force_desktop_page(self, p, force=False) -> None:
-        """Clear stale mobile emulation and advertise a desktop browser.
+        """Clear stale mobile emulation while retaining Chrome's native identity.
 
         Operator is a persistent shared Chrome, so an earlier computer-use run
         can leave a target with mobile metrics/touch enabled. Apply this per
-        target (including new tabs) so both responsive layout and HTTP UA stay
-        desktop without changing the real window geometry or screenshot scale.
+        target (including new tabs) so responsive layout remains desktop without
+        changing the real window geometry, screenshot scale, or browser identity.
         """
         try:
             _u = ""
@@ -1964,30 +1959,6 @@ class _Streamer:
             await asyncio.wait_for(sess.send("Emulation.setEmulatedMedia", {
                 "features": [{"name": "prefers-color-scheme",
                               "value": _COLOR_SCHEME}]}), timeout=3)
-            await asyncio.wait_for(sess.send("Emulation.setUserAgentOverride", {
-                "userAgent": _DESKTOP_USER_AGENT,
-                "acceptLanguage": "en-US,en;q=0.9",
-                "platform": "Win32",
-                "userAgentMetadata": {
-                    "brands": [
-                        {"brand": "Chromium", "version": "150"},
-                        {"brand": "Google Chrome", "version": "150"},
-                        {"brand": "Not_A Brand", "version": "99"},
-                    ],
-                    "fullVersionList": [
-                        {"brand": "Chromium", "version": "150.0.0.0"},
-                        {"brand": "Google Chrome", "version": "150.0.0.0"},
-                        {"brand": "Not_A Brand", "version": "99.0.0.0"},
-                    ],
-                    "platform": "Windows",
-                    "platformVersion": "10.0.0",
-                    "architecture": "x86",
-                    "model": "",
-                    "mobile": False,
-                    "bitness": "64",
-                    "wow64": False,
-                },
-            }), timeout=3)
         except Exception:
             pass
 

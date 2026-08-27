@@ -372,19 +372,17 @@ def test_attach_prefers_restored_real_page_over_launcher_blank(monkeypatch, stre
     assert not navs, "restored pages must be preserved, not replaced with home"
 
 
-def test_attach_forces_desktop_identity(monkeypatch, streamer):
+def test_attach_preserves_native_desktop_identity(monkeypatch, streamer):
     ctx = FakeCtx(n_pages=1)
     pw = FakePW(ctx=ctx)
     _install(monkeypatch, [pw])
 
     asyncio.run(streamer._attach())
 
-    calls = [p for m, p in ctx.sess.sent if m == "Emulation.setUserAgentOverride"]
-    assert calls
-    assert "Windows NT 10.0; Win64; x64" in calls[0]["userAgent"]
-    assert calls[0]["platform"] == "Win32"
-    assert calls[0]["userAgentMetadata"]["mobile"] is False
-    assert calls[0]["userAgentMetadata"]["platform"] == "Windows"
+    # The cockpit may clear stale metrics/touch emulation, but it must not
+    # impersonate a browser version. A hard-coded UA falls out of date at the
+    # next Chrome update and creates a needless client-hint/TLS mismatch.
+    assert not any(m == "Emulation.setUserAgentOverride" for m, _ in ctx.sess.sent)
     # force-desktop now OVERWRITES stale metrics (no clear-first — the
     # clear+apply pair was one visible size pulse per nav, the 2026-07-26
     # strobe); the apply itself is the desktop-identity marker.
