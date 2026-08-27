@@ -16,7 +16,7 @@
       href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
 {% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1178">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1180">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -116,7 +116,7 @@
     </div>
     <div class="op-man-note" id="op-man-note" hidden>
       <div class="op-man-head"><svg class="op-warn" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3.2 22 20H2L12 3.2z" fill="#f5c542" stroke="#1a1205" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 9.5v5" stroke="#1a1205" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.15" fill="#1a1205"/></svg><strong>Manual mode</strong></div>
-      <div class="op-man-line">You have control of the computer. Switch to Auto mode to message <span id="op-surface-name">Operator</span>.</div>
+      <div class="op-man-line">You have control of the computer. Switch to Auto mode to steer <span id="op-surface-name">Operator</span>.</div>
       <!-- Finish-up hand-back: shown ONLY when Operator handed control to the user (op-handedback) -->
       <div class="op-finish" id="op-finish" hidden>
         <button type="button" class="op-takeover-btn op-finish-btn" id="op-finish-btn">Finish up</button>
@@ -192,6 +192,7 @@
           <button class="op-ham-item" data-kind="tab_next"><span>Next tab</span><span class="k">⇥</span></button>
           <button class="op-ham-item" data-kind="home"><span>Home</span><span class="k">⌂</span></button>
           <div class="op-ham-sep"></div>
+          <button class="op-ham-item" data-kind="onepassword"><span>1Password</span><span class="k">⌁</span></button>
           <button class="op-ham-item" data-kind="extensions"><span>Extensions</span><span class="k">✦</span></button>
           <button class="op-ham-item" id="op-ham-history"><span>History</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M10 6v4l2.6 1.6"></path></svg></span></button>
           <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="k k-icon"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="2.7"></circle><path d="M10 2.6v2M10 15.4v2M17.4 10h-2M4.6 10h-2M15.2 4.8l-1.4 1.4M6.2 13.8l-1.4 1.4M15.2 15.2l-1.4-1.4M6.2 6.2 4.8 4.8"></path></svg></span></button>
@@ -521,6 +522,7 @@
     agent_say: "{{ url_for('operator.operator_agent_say') }}",
     agent_state: "{{ url_for('operator.operator_agent_state') }}",
     agent_stop: "{{ url_for('operator.operator_agent_stop') }}",
+    agent_takeover: "{{ url_for('operator.operator_agent_takeover') }}",
     dispatch: "{{ url_for('operator.operator_dispatch') }}",
     drivers: "{{ url_for('operator.operator_drivers') }}",
     frame: "{{ url_for('operator.operator_frame') }}",
@@ -551,5 +553,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1178"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1180"></script>
 {% endblock %}

@@ -993,6 +993,42 @@ def test_target_id_cache_drops_closed_tabs(monkeypatch, streamer):
         "closed-tab entries must be pruned so the cache can't grow unbounded"
 
 
+def test_onepassword_popup_is_brought_to_a_visible_tab_once(monkeypatch, streamer):
+    """Chrome extension popups are CDP targets but not Playwright pages.
+
+    An unlock prompt therefore needs a normal tab for the streamed browser
+    surface. It must happen once per popup target, not steal focus every poll.
+    """
+    ctx = _follow_setup(monkeypatch, streamer, n_pages=1, active_index=0,
+                        busy=False)
+    unlock = FakePage(ctx)
+    opens = []
+
+    def popup_targets():
+        return {"onepassword-popup"}
+    monkeypatch.setattr(streamer, "_onepassword_popup_targets", popup_targets)
+
+    async def open_unlock(url):
+        opens.append(url)
+        if unlock not in ctx.pages:
+            ctx.pages.append(unlock)
+        return unlock
+    monkeypatch.setattr(streamer, "_cdp_open_tab", open_unlock)
+
+    async def target_id(self, page):
+        return "onepassword-unlock-tab" if page is unlock else "normal-tab"
+    monkeypatch.setattr(OV._Streamer, "_page_target_id", target_id)
+
+    asyncio.run(streamer._follow_active_tab())
+    assert streamer._page is unlock
+    assert unlock.fronted == 1
+    assert opens == ["chrome-extension://aeblfdkhhhdcdjpifhhbdiojplfjncoa/popup/index.html"]
+
+    streamer._tab_check_ts = 0
+    asyncio.run(streamer._follow_active_tab())
+    assert len(opens) == 1, "one unlock popup must not continuously steal focus"
+
+
 # ---- dead-driver self-heal (the 2026-08-10 operator-fam incident) ----------
 # The Playwright node driver died (uncaught CRPage frame-detach race on
 # Google's cookie-rotation page). The old run_action posted coroutines onto

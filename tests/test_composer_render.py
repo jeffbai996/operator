@@ -243,3 +243,34 @@ def test_chat_input_centered_in_grow_wrap(page):
     # constant since forever and invisible. 3px catches real drift on top.
     assert abs(m["centerDelta"]) <= 3.0, (
         f"chat input off grow-wrap center by {m['centerDelta']:.2f}px")
+
+
+def test_chat_composer_finishes_shrinking_at_the_smallest_notches(page):
+    """The last two A− notches used to shrink only the chat text.
+
+    That made the composer look comically overbuilt at the accessibility
+    minimum: the text got smaller while its chrome stayed at the normal size.
+    Pin the rendered geometry, not a selector spelling, so future tuning can
+    keep the deliberate compact range without reintroducing that mismatch.
+    """
+    def size(compact: float) -> dict:
+        return page.evaluate("""(compact) => {
+            const op = document.getElementById('op');
+            op.classList.remove('op-booting'); op.classList.add('op-ready');
+            op.style.setProperty('--op-composer-compact', compact);
+            document.getElementById('op-lp').hidden = true;
+            void op.offsetHeight;
+            const box = document.querySelector('.op-inputbox').getBoundingClientRect();
+            const send = document.querySelector('.op-send').getBoundingClientRect();
+            const model = document.querySelector('.op-modelrow').getBoundingClientRect();
+            return {box: box.height, send: send.height, modelTop: model.top};
+        }""", compact)
+
+    normal = size(0)
+    penultimate = size(0.5)
+    smallest = size(1)
+    assert normal["box"] > penultimate["box"] > smallest["box"], (
+        f"composer did not finish compacting: {normal}, {penultimate}, {smallest}")
+    assert normal["send"] > penultimate["send"] > smallest["send"], (
+        f"send control did not shrink with the final type notches: "
+        f"{normal}, {penultimate}, {smallest}")

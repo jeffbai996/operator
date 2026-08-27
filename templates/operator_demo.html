@@ -2756,6 +2756,11 @@ table.with-pin th.type-col { width: 7rem; }
   /* active label reads against its thumb color */
   .op-mode[data-mode="man"] .op-mode-btn[data-mode="man"] { color: #2a1402; }
   .op-mode[data-mode="auto"] .op-mode-btn[data-mode="auto"] { color: #062611; }
+  /* MAN requested mid-run: the thumb remains on truthful AUTO while the
+     backend finishes the current action; the destination label queues softly. */
+  .op-mode[data-pending="man"] .op-mode-btn[data-mode="man"] {
+    color: #f5a04a; animation: op-mode-pending 1s ease-in-out infinite alternate; }
+  @keyframes op-mode-pending { to { opacity: .58; } }
   .op-mode-btn { text-indent: 2.5px; }   /* nudge MAN/AUTO labels right (text only) */   /* labels centered, no rightward shove */
   .op-mode-btn:hover { background: transparent; }   /* kill the global button:hover gray pill */
   .op-mode-btn:not(.active):hover { color: var(--fg-2); background: transparent; }
@@ -3633,17 +3638,16 @@ table.with-pin th.type-col { width: 7rem; }
   @keyframes op-rip{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
   /* MANUAL-steer cursor — drawn from LOCAL tap/move coords the instant you act,
      so perceived input latency is ~0 regardless of how far behind the video feed
-     is. The ffmpeg-drawn pointer in the frame is the ground truth; this overlay
-     is the immediate feedback while that frame is still in flight. Shown ONLY in
-     MAN mode on a desktop surface (the agent cursor covers AUTO). No transition
+     is. The pointer in the incoming frame is the ground truth; this overlay is
+     the immediate feedback while that frame is still in flight. Shown ONLY in
+     MAN mode (including browser mode; the agent cursor covers AUTO). No transition
      on left/top — it must SNAP to where you touched, not glide. */
   .op-steer-cursor { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 8;
     opacity: 0; transition: opacity .25s; }
   .op-steer-cursor.show { opacity: .92; }
   .op-steer-cursor svg { display: block; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
-  /* only meaningful in manual mode on a desktop surface */
+  /* only meaningful in manual mode */
   .op:not([data-mode="man"]) .op-steer-cursor { display: none; }
-  .op[data-surface="browser"] .op-steer-cursor { display: none; }
   .op-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
     flex-direction: column; gap: .6rem; color: var(--muted); font: 500 0.85rem/1 'JetBrains Mono', monospace;
     background: radial-gradient(circle at 50% 40%, var(--bg-2), var(--bg)); }
@@ -3726,7 +3730,7 @@ table.with-pin th.type-col { width: 7rem; }
     /* MOBILE: the header is taller (28px controls), so the floating minimized pill
        needs to sit lower to clear it; man-note drops further to keep the gap. */
     .op[data-status-min="1"] .op-action { top: 58px; }
-    .op[data-status-min="1"] .op-man-note { margin-top: 70px; }   /* +4px buffer: unstick from pill */
+    .op[data-status-min="1"] .op-man-note { margin-top: 30px; }   /* clear the 32px pill without an expanded-card void */
 
     /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px).
        Desktop keeps the compact 20px sizing. */
@@ -3771,6 +3775,16 @@ table.with-pin th.type-col { width: 7rem; }
       box-shadow: 0 -10px 34px -10px rgba(0,0,0,.7);
       transition: height .28s cubic-bezier(.22,1,.36,1);
       padding: 0 0.7rem 0.7rem; overflow: hidden; touch-action: pinch-zoom; }
+    /* When iOS lifts the sheet above its keyboard, a half-height sheet covers
+       almost every remaining browser pixel. Make explicit keyboard mode a
+       compact control shelf; do not re-beacon this temporary local geometry. */
+    .op.op-keyboard-open .op-browser {
+      height: calc(100dvh - min(var(--sheet-h), 12rem) - var(--op-hdr-h, 0px)); }
+    .op.op-keyboard-open .op-rail {
+      height: min(var(--sheet-h), 12rem); transition: none; }
+    .op.op-keyboard-open .op-logwrap,
+    .op.op-keyboard-open .op-disclaimer,
+    .op.op-keyboard-open .op-man-note { display: none; }
     .op.op-sheet-dragging .op-rail { transition: none; }   /* live drag = no lag */
 
     .op-sheet-handle { display: flex; align-items: flex-start; justify-content: center;
@@ -3945,7 +3959,7 @@ table.with-pin th.type-col { width: 7rem; }
 
   /* the whole input box: one bordered container holding the input row + model row */
   .op-inputbox { border: 1px solid var(--border-2); border-radius: 11px; background: var(--bg);
-    padding: 0.35rem 0.5rem;
+    padding: calc(0.35rem - (0.12rem * var(--op-composer-compact, 0))) 0.5rem;   /* final A− notches compact chrome with text; equal top/bottom */
     transition: border-color .25s, box-shadow .25s, background .3s ease, opacity .3s ease; }
   .op-inputbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
   .op-steer { display: flex; gap: 0.4rem; align-items: flex-end; }
@@ -4049,7 +4063,7 @@ table.with-pin th.type-col { width: 7rem; }
   .op-input::placeholder { color: var(--muted); text-align: left;
     font-weight: 500; }
 
-  .op-send { flex: 0 0 auto; width: 21px; height: 21px; background: #ededea; color: #0b0e18;
+  .op-send { flex: 0 0 auto; width: calc(21px - (4px * var(--op-composer-compact, 0))); height: calc(21px - (4px * var(--op-composer-compact, 0))); background: #ededea; color: #0b0e18;
     border: 1px solid var(--border-2); border-radius: 6px; cursor: pointer; padding: 0;
     display: grid; place-items: center;   /* SVG centers geometrically */
     transition: filter .15s, transform .05s, background .15s; }
@@ -4105,8 +4119,8 @@ table.with-pin th.type-col { width: 7rem; }
      (it's an active reassurance while the user is driving), not just on hover. */
   .op-noshot { display: inline-block; vertical-align: middle; position: relative; top: -1px; }   /* center the icon on the text midline (not flush at baseline) */
   /* model row blended INSIDE the inputbox: model left, effort right, ghost styling */
-  .op-modelrow { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: nowrap;
-    padding-top: 0.25rem; border-top: 1px solid var(--border); overflow: visible;
+  .op-modelrow { display: flex; align-items: center; gap: 0.5rem; margin-top: calc(0.25rem - (0.11rem * var(--op-composer-compact, 0))); flex-wrap: nowrap;
+    padding-top: calc(0.25rem - (0.11rem * var(--op-composer-compact, 0))); border-top: 1px solid var(--border); overflow: visible;
     visibility: hidden; }   /* revealed once loadModels sets the saved model — avoids default-flash on refresh */
   .op-modelrow.op-ready { visibility: visible; }
   /* #op-model width is owned by fitMini (dynamic caret) — it sets flex:0 0 auto
@@ -5696,7 +5710,7 @@ table.with-pin th.type-col { width: 7rem; }
     </div>
     <div class="op-man-note" id="op-man-note" hidden>
       <div class="op-man-head"><svg class="op-warn" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3.2 22 20H2L12 3.2z" fill="#f5c542" stroke="#1a1205" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 9.5v5" stroke="#1a1205" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.15" fill="#1a1205"/></svg><strong>Manual mode</strong></div>
-      <div class="op-man-line">You have control of the computer. Switch to Auto mode to message <span id="op-surface-name">Operator</span>.</div>
+      <div class="op-man-line">You have control of the computer. Switch to Auto mode to steer <span id="op-surface-name">Operator</span>.</div>
       <!-- Finish-up hand-back: shown ONLY when Operator handed control to the user (op-handedback) -->
       <div class="op-finish" id="op-finish" hidden>
         <button type="button" class="op-takeover-btn op-finish-btn" id="op-finish-btn">Finish up</button>
@@ -6089,6 +6103,7 @@ table.with-pin th.type-col { width: 7rem; }
     agent_say: "{{ url_for('operator.operator_agent_say') }}",
     agent_state: "{{ url_for('operator.operator_agent_state') }}",
     agent_stop: "{{ url_for('operator.operator_agent_stop') }}",
+    agent_takeover: "{{ url_for('operator.operator_agent_takeover') }}",
     dispatch: "{{ url_for('operator.operator_dispatch') }}",
     drivers: "{{ url_for('operator.operator_drivers') }}",
     frame: "{{ url_for('operator.operator_frame') }}",
@@ -6119,7 +6134,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1178"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1180"></script>
 
 </body>
 </html>

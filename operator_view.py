@@ -370,6 +370,14 @@ import base64 as _b64ph
 # the stored value and the scheme guard; this constant is what you get when
 # nothing is stored.
 _NEWTAB_DATA_URL = operator_prefs.DEFAULT_HOMEPAGE
+_ONEPASSWORD_EXTENSION_ID = _os_cfg.environ.get(
+    "OPERATOR_1PASSWORD_EXTENSION_ID", "aeblfdkhhhdcdjpifhhbdiojplfjncoa")
+_ONEPASSWORD_POPUP_PREFIX = (
+    f"chrome-extension://{_ONEPASSWORD_EXTENSION_ID}/popup/")
+
+
+def _onepassword_visible_page() -> str:
+    return _ONEPASSWORD_POPUP_PREFIX + "index.html"
 
 
 def _op_error(e: Exception) -> str:
@@ -455,6 +463,7 @@ class _Streamer:
     _metric_sessions: dict = field(default_factory=dict)
     _target_ids: dict = field(default_factory=dict)   # page -> CDP target id (stable per page)
     _crashed_pages: set = field(default_factory=set)
+    _onepassword_seen: set = field(default_factory=set)
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
     _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch (the owner)
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
@@ -726,6 +735,27 @@ class _Streamer:
             return None
         except Exception:  # noqa: BLE001 — best-effort foreground probe
             return None
+
+    def _onepassword_popup_targets(self) -> set[str]:
+        """CDP ids for 1Password unlock popups Playwright does not expose.
+
+        Chrome's extension popup is a page target in /json/list, but it is not
+        included in context.pages, so the MJPEG streamer cannot follow it.
+        Detect it here and mirror the unlock URL into an ordinary streamable
+        tab exactly once per popup target.
+        """
+        import json as _json
+        import urllib.request
+        try:
+            raw = urllib.request.urlopen(CDP_URL + "/json/list", timeout=1.5).read()
+            return {
+                str(t.get("id")) for t in _json.loads(raw)
+                if t.get("type") == "page"
+                and str(t.get("url") or "").startswith(_ONEPASSWORD_POPUP_PREFIX)
+                and t.get("id")
+            }
+        except Exception:  # noqa: BLE001 — extension affordance is best-effort
+            return set()
 
     async def _page_target_id(self, pg) -> "str | None":
         """CDP target id for a Playwright page, memoized per page.
@@ -1452,6 +1482,16 @@ class _Streamer:
             self._tab_check_ts = now
             ctx = self._browser.contexts[0]
             live = self._live_pages(ctx)
+            # Extension popups are real Chrome targets but absent from
+            # Playwright's context.pages. Follow a fresh 1Password unlock
+            # prompt into a normal tab before the single-page early return.
+            popups = self._onepassword_popup_targets()
+            fresh_popups = popups - self._onepassword_seen
+            self._onepassword_seen = set(popups)
+            if fresh_popups:
+                opened = await self._open_onepassword_tab()
+                if opened is not None:
+                    return
             try:
                 _busy = operator_agent.runner.is_running()
             except Exception:  # noqa: BLE001
@@ -2310,6 +2350,32 @@ class _Streamer:
             await asyncio.sleep(0.05)
         return None
 
+    async def _open_onepassword_tab(self):
+        """Open 1Password's unlock UI as a streamable, foreground tab."""
+        pg = await self._cdp_open_tab(_onepassword_visible_page())
+        if pg is None:
+            try:
+                pg = await asyncio.wait_for(
+                    self._browser.contexts[0].new_page(), timeout=5)
+                self._cdp = None
+                await self._cdp_navigate(pg, _onepassword_visible_page())
+            except Exception:  # noqa: BLE001
+                return None
+        self._track_page(pg)
+        self._page = pg
+        self._cdp = None
+        self._update_viewport()
+        await self._force_desktop_page(pg)
+        try:
+            await asyncio.wait_for(pg.bring_to_front(), timeout=1)
+        except Exception:  # noqa: BLE001 — streaming it is the important part
+            pass
+        tid = await self._page_target_id(pg)
+        if tid:
+            self._onepassword_seen.add(tid)
+        self._vp_log("onepassword-unlock", "foreground tab")
+        return pg
+
     async def _cdp_close_tab(self, p) -> bool:
         """Close a tab over raw CDP. False means the caller should fall back."""
         try:
@@ -2607,6 +2673,11 @@ class _Streamer:
                 return res
             elif kind == "extensions":
                 await self._cdp_navigate(p, "chrome://extensions/")
+            elif kind == "onepassword":
+                pg = await self._open_onepassword_tab()
+                if pg is None:
+                    return {"ok": False, "error": "1Password unlock page unavailable"}
+                return {"ok": True, "url": _onepassword_visible_page()}
             elif kind == "hard_reload":
                 await p.reload(timeout=20000)
                 await p.keyboard.press("Control+Shift+r")
@@ -3598,7 +3669,7 @@ def _desktop_steer(action: dict) -> dict:
 @bp.route("/operator/steer", methods=["POST"])
 def operator_steer():
     data = request.get_json(silent=True) or request.form
-    if DEMO and data.get("kind") == "extensions":
+    if DEMO and data.get("kind") in ("extensions", "onepassword"):
         return jsonify(ok=False, error="extensions are unavailable in demo mode"), 403
     action = {"kind": data.get("kind"), "value": data.get("value", ""),
               "x": data.get("x", 0), "y": data.get("y", 0),
@@ -4185,6 +4256,18 @@ def operator_agent_stop():
     if control_error:
         return control_error
     return jsonify(operator_agent.runner.stop(
+        conversation_id=conversation_id))
+
+
+@bp.route("/operator/agent/takeover", methods=["POST"])
+def operator_agent_takeover():
+    """Arm MAN at the current tool boundary, bounded by the runner timeout."""
+    data = request.get_json(silent=True) or request.form or {}
+    conversation_id = _conversation_for(data)
+    control_error = _thread_control_guard(data, conversation_id)
+    if control_error:
+        return control_error
+    return jsonify(operator_agent.runner.request_takeover(
         conversation_id=conversation_id))
 
 

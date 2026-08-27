@@ -412,6 +412,13 @@ class AgentRunner:
         self.effort: str = ''
         self.ended_ts: float = 0.0
         self.handoff: dict | None = None  # {reason, ts} when the agent asks the human to take over (#4)
+        # MAN requested during a live turn is a deferred takeover, not a UI
+        # repaint. Runtimes with structured tool events stop immediately after
+        # the active tool result; agy's plain-text stream has no such seam and
+        # therefore relies on the bounded timeout.
+        self._tool_active: bool | None = False
+        self._takeover_requested: bool = False
+        self._takeover_token: int = 0
         self._cur_session: str = ''       # session id captured this run
         self._agy_buf: list = []          # agy plain-text stdout lines (no JSON stream)
         self._agy_brain_dir: str = ''     # ~/.gemini/antigravity-cli/brain (set per-run)
@@ -639,6 +646,10 @@ class AgentRunner:
                       demo: bool, binpath: str, b: dict) -> dict:
         """The pre-spawn setup of start() — runs inside its lock + revert guard."""
         self.handoff = None           # fresh run → clear any prior takeover request
+        self._runtime = b.get("runtime", "claude")
+        self._takeover_token += 1     # invalidate a prior run's timeout callback
+        self._takeover_requested = False
+        self._tool_active = None if self._runtime == "agy" else False
         self._cancel_requested = False   # B3: a new run consumes any stale Stop
         self.messages = []
         self._transcript.append({"role": "user", "text": task})
@@ -746,6 +757,11 @@ class AgentRunner:
             self.ended_ts = time.time()
             self.messages.append({"ts": time.time(), "role": "error",
                                   "text": f"launch failed: {e}"})
+        finally:
+            with self._lock:
+                self._tool_active = False
+                self._takeover_requested = False
+                self._takeover_token += 1
 
     def _run_inner(self, binpath: str, b: dict, task: str) -> str | None:
         # Returns a §3.3 gate prompt when the clean exit needs one follow-up
@@ -991,6 +1007,16 @@ class AgentRunner:
         if getattr(self, "_runtime", "claude") == "codex":
             self._consume_codex(evt)
             return
+        # Claude reports a tool request in an assistant event and its result in
+        # the following user event. That result is the safe MAN takeover seam:
+        # the consequential call has completed, but the model has not been
+        # allowed to continue indefinitely into another action.
+        if evt.get("type") == "user":
+            _msg = evt.get("message") if isinstance(evt.get("message"), dict) else {}
+            _content = _msg.get("content")
+            if any(isinstance(block, dict) and block.get("type") == "tool_result"
+                   for block in (_content if isinstance(_content, list) else [])):
+                self._set_tool_active(False)
         # capture the session id (for --resume continuity on the next turn);
         # a non-string id would end up inside the next turn's --resume argv
         if evt.get("type") == "system" and evt.get("subtype") == "init":
@@ -1025,12 +1051,14 @@ class AgentRunner:
                     name = name if isinstance(name, str) else ""
                     args = block.get("input")
                     args = args if isinstance(args, dict) else {}
+                    self._set_tool_active(True)
                     self._note_action(name, args)
                     label, detail = _action_label(name, args)
                     if label:
                         self.messages.append({"ts": time.time(), "role": "action",
                                               "text": label, "detail": detail})
         elif evt.get("type") == "result":
+            self._set_tool_active(False)
             res = evt.get("result")
             res = res.strip() if isinstance(res, str) else ""
             res, _reason = _extract_handoff(res)
@@ -1383,6 +1411,12 @@ class AgentRunner:
             tid = evt.get("thread_id")
             if isinstance(tid, str) and tid:
                 self._cur_session = tid          # codex resume id
+        elif t == "item.started":
+            item = evt.get("item")
+            item = item if isinstance(item, dict) else {}
+            if item.get("type") in ("mcp_tool_call", "tool_call", "function_call",
+                                     "command_execution"):
+                self._set_tool_active(True)
         elif t == "item.completed":
             item = evt.get("item")
             item = item if isinstance(item, dict) else {}
@@ -1419,6 +1453,9 @@ class AgentRunner:
                     self._note_action("command", cmd)
                     self.messages.append({"ts": time.time(), "role": "action",
                                           "text": "Running command", "detail": cmd[:70]})
+            if it in ("mcp_tool_call", "tool_call", "function_call",
+                      "command_execution"):
+                self._set_tool_active(False)
         elif t == "token_count":
             # codex stream-json emits cumulative token usage; the last_token_usage /
             # info carries this turn's input size — guard against runaway context.
@@ -1430,6 +1467,7 @@ class AgentRunner:
                 _it = info.get("input_tokens") or info.get("total_tokens")
             self._note_token_usage(_it)
         elif t == "error":
+            self._set_tool_active(False)
             msg = evt.get("message") or evt.get("error")
             msg = msg.strip() if isinstance(msg, str) else ""
             if msg:
@@ -1575,6 +1613,10 @@ class AgentRunner:
         return ("error", f"exit {returncode}")
 
     def stop(self) -> dict:
+        with self._lock:
+            self._takeover_requested = False
+            self._takeover_token += 1
+            self._tool_active = False
         p = self._proc
         self.handoff = None   # a takeover/stop clears any pending handoff request
         try:
@@ -1684,6 +1726,65 @@ class AgentRunner:
             return {"ok": True, "unwedged": True}
         return {"ok": False, "error": "nothing running"}
 
+    def _set_tool_active(self, active: bool) -> None:
+        """Track a structured runtime's current tool and honor deferred MAN."""
+        with self._lock:
+            self._tool_active = bool(active)
+            fire = not active and self._takeover_requested
+        if fire:
+            self._stop_for_takeover()
+
+    def _stop_for_takeover(self) -> None:
+        """Consume the pending request once, then use normal process-group stop."""
+        with self._lock:
+            if not self._takeover_requested:
+                return
+            self._takeover_requested = False
+            self._takeover_token += 1
+        self.stop()
+
+    def _takeover_timeout(self, token: int) -> None:
+        with self._lock:
+            fire = self._takeover_requested and token == self._takeover_token
+        if fire:
+            self._stop_for_takeover()
+
+    def _takeover_if_idle(self, token: int) -> None:
+        """Claim a stable between-tools seam without racing a just-starting call."""
+        with self._lock:
+            fire = (self._takeover_requested and token == self._takeover_token
+                    and self._tool_active is False)
+        if fire:
+            self._stop_for_takeover()
+
+    def request_takeover(self, timeout_s: float = 12.0) -> dict:
+        """Stop at the next tool-result boundary, with a bounded stuck fallback."""
+        try:
+            timeout_s = max(2.0, min(30.0, float(timeout_s)))
+        except (TypeError, ValueError):
+            timeout_s = 12.0
+        if not self.is_running():
+            return {"ok": True, "pending": False, "ready": True}
+        with self._lock:
+            self._takeover_requested = True
+            self._takeover_token += 1
+            token = self._takeover_token
+            # Structured runtimes know when no call is active. agy does not;
+            # let a naturally finishing run win, otherwise its timeout stops it.
+            idle_known = self._tool_active is False and self._runtime != "agy"
+        timer = threading.Timer(timeout_s, lambda: self._takeover_timeout(token))
+        timer.daemon = True
+        timer.start()
+        if idle_known:
+            # Give a tool-start event already in flight 150ms to land. If one
+            # does, _tool_active flips true and this no-ops until its result;
+            # otherwise this is a genuine between-tools boundary.
+            idle_timer = threading.Timer(0.15,
+                                         lambda: self._takeover_if_idle(token))
+            idle_timer.daemon = True
+            idle_timer.start()
+        return {"ok": True, "pending": True, "timeout_s": timeout_s}
+
     def snapshot(self, since_ts: float = 0.0) -> dict:
         # ── stall watchdog (§2.1) — piggybacks on the status poll ──────────
         # `alive` distinguishes dead from silent; this distinguishes silent-but-
@@ -1747,6 +1848,8 @@ class AgentRunner:
             # 1.0.12: steers queued but not yet consumed by a delivery seam —
             # the client renders "queued" until this drops back to 0.
             "steer_pending": len(operator_steer.pending(self.conversation_id)),
+            "tool_active": self._tool_active,
+            "takeover_pending": self._takeover_requested,
             # 1.0.15 live run economics: the ledger's token numbers, visible
             # WHILE the run burns (same _note_token_usage basis — cache reads
             # excluded, so these read small vs the raw API meter). NB both
@@ -1911,6 +2014,14 @@ class RunnerRegistry:
         if target is None:
             return {"ok": False, "error": "nothing running"}
         return target.stop()
+
+    def request_takeover(self, conversation_id: str | None = None) -> dict:
+        cid = _conversation_id(conversation_id)
+        with self._lock:
+            target = self._runners.get(cid)
+        if target is None:
+            return {"ok": True, "pending": False, "ready": True}
+        return target.request_takeover()
 
     def steer(self, text: str, conversation_id: str | None = None) -> dict:
         cid = _conversation_id(conversation_id)
