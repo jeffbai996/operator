@@ -635,6 +635,7 @@ class FakeRunner:
         self.reset_bot = None
         self.stop_conversation_id = None
         self.snapshot_conversation_id = None
+        self.takeover_conversation_id = None
 
     def start(self, bot, task, model="", effort="", demo=False,
               surface="browser", real_ok=False, conversation_id=None):
@@ -653,6 +654,10 @@ class FakeRunner:
         self.stopped = True
         self.stop_conversation_id = conversation_id
         return {"ok": True, "stopped": True}
+
+    def request_takeover(self, conversation_id=None):
+        self.takeover_conversation_id = conversation_id
+        return {"ok": True, "pending": True, "timeout_s": 12.0}
 
     def reset_session(self, bot="", conversation_id=None):
         self.reset_bot = bot
@@ -1109,6 +1114,26 @@ def test_extensions_action_is_blocked_in_demo(demo, monkeypatch):
     assert demo_streamer.actions == []
 
 
+def test_onepassword_action_reaches_private_browser(live, monkeypatch):
+    live_client, live_mod = live
+    live_streamer = FakeStreamer()
+    _patch_streamer(monkeypatch, live_mod, live_streamer)
+    live_resp = live_client.post("/operator/steer", json={"kind": "onepassword"})
+
+    assert live_resp.status_code == 200
+    assert live_streamer.actions[0]["kind"] == "onepassword"
+
+
+def test_onepassword_action_is_blocked_in_demo(demo, monkeypatch):
+    demo_client, demo_mod = demo
+    demo_streamer = FakeStreamer()
+    _patch_streamer(monkeypatch, demo_mod, demo_streamer)
+    demo_resp = demo_client.post("/operator/steer", json={"kind": "onepassword"})
+
+    assert demo_resp.status_code == 403
+    assert demo_streamer.actions == []
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. /operator/status + /operator/tasks — happy path + missing-state resilience
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1303,6 +1328,15 @@ def test_agent_stop_and_snapshot_target_the_requested_conversation(live, fake_ru
     assert fake_runner.snapshot_conversation_id == "conv-b"
 
 
+def test_agent_takeover_targets_requested_conversation(live, fake_runner):
+    client, _ = live
+    response = client.post("/operator/agent/takeover",
+                           json={"conversation_id": "conv-takeover"})
+    assert response.status_code == 200
+    assert response.get_json()["pending"] is True
+    assert fake_runner.takeover_conversation_id == "conv-takeover"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. pure-ish helpers — event tail + driver detection (no Chrome, filesystem seam)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1408,7 +1442,10 @@ def test_operator_page_renders_and_is_no_store(live):
     resp = client.get("/operator")
     assert resp.status_code == 200
     assert "no-store" in resp.headers.get("Cache-Control", "")
-    assert 'data-kind="extensions"' in resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    assert 'data-kind="extensions"' in html
+    assert 'data-kind="onepassword"' in html
+    assert "Switch to Auto mode to steer Operator." in re.sub(r"<[^>]+>", "", html)
 
 
 def test_demo_page_does_not_expose_extensions_launcher(demo):
@@ -1416,6 +1453,7 @@ def test_demo_page_does_not_expose_extensions_launcher(demo):
     resp = client.get("/operator")
     assert resp.status_code == 200
     assert 'data-kind="extensions"' not in resp.get_data(as_text=True)
+    assert 'data-kind="onepassword"' not in resp.get_data(as_text=True)
 
 
 def test_standalone_flag_hides_the_squad_store_chrome(live, monkeypatch):

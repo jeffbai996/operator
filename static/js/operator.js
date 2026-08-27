@@ -1938,6 +1938,10 @@
   try { const v = parseFloat(localStorage.getItem(SIZE_KEY)); if (v) _scale = v; } catch {}
   function applyScale(){ _scale = Math.min(SIZE_MAX, Math.max(SIZE_MIN, _scale));
     op.style.setProperty('--chat-scale', _scale.toFixed(2));
+    // At the final two A− notches, compact the composer chrome with its text.
+    // Above .90 the established geometry is untouched; .82 is fully compact.
+    const composerCompact = Math.max(0, Math.min(1, (0.90 - _scale) / 0.08));
+    op.style.setProperty('--op-composer-compact', composerCompact.toFixed(3));
     try { localStorage.setItem(SIZE_KEY, _scale.toFixed(2)); } catch {}
     // re-fit the model picker to the new font scale so its dynamic-caret width
     // grows with the text (else the name clips at higher zoom). rAF: let the
@@ -2011,6 +2015,7 @@
   const DRIVERS_URL = OP_URLS.drivers;
   const DISPATCH = OP_URLS.dispatch;
   const AGENT_URL = OP_URLS.agent_state;
+  const TAKEOVER_URL = OP_URLS.agent_takeover;
 
   // ── surface switcher (Track C): hover/tap the Operator brand ────────────
   // browser / desktop-sandbox / desktop-real. The pick swaps the live feed
@@ -3900,9 +3905,41 @@
     if (_atBottom) log.scrollTop = log.scrollHeight;
     else log.scrollTop = Math.max(0, log.scrollHeight - _fromBottom);
   }
-  modeBox.addEventListener('click', e => { const b=e.target.closest('.op-mode-btn');
-    if (b) { MODE = b.dataset.mode; _handedToUser = false;   // a MANUAL mode toggle (either dir) is never a hand-off → no Finish-up (only Take control sets it)
-      applyMode(); saveSession(); } });
+  let _manualPending = false;
+  function commitMode(next) {
+    MODE = next;
+    _handedToUser = false;   // a manual toggle is not an agent-requested handoff
+    _manualPending = false;
+    delete modeBox.dataset.pending;
+    applyMode();
+    saveSession();
+  }
+  async function requestManualTakeover() {
+    if (_manualPending) return;
+    if (!_inFlight) { commitMode('man'); return; }
+    // Keep MODE=AUTO so telemetry continues polling while the server waits for
+    // the current tool-result seam. The thumb stays truthful until control is
+    // actually ours; the MAN label shows the queued intent.
+    _manualPending = true;
+    modeBox.dataset.pending = 'man';
+    setCardSub(selectedBot() || '', 'finishing current action…', '⏳');
+    try {
+      const response = await fetch(TAKEOVER_URL, _conversationPost());
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || 'takeover failed');
+      if (result.ready === true && !_inFlight) commitMode('man');
+    } catch (_) {
+      _manualPending = false;
+      delete modeBox.dataset.pending;
+      setCardSub(selectedBot() || '', 'takeover failed — still in Auto', '⚠️');
+    }
+  }
+  modeBox.addEventListener('click', e => {
+    const b=e.target.closest('.op-mode-btn');
+    if (!b || _manualPending) return;
+    if (b.dataset.mode === 'man' && MODE === 'auto') requestManualTakeover();
+    else commitMode(b.dataset.mode);
+  });
   // ── Finish-up hand-back flow (only present after Operator handed control to you) ──
   (function(){
     const finBtn=document.getElementById('op-finish-btn');
@@ -4055,6 +4092,18 @@
       // non-running poll — the killed run's stale done/error must not finish the fresh
       // turn as "Worked for 0s". Cleared the instant the new run reports running.
       if (_steering && d.state !== 'running') { return; }
+      // MAN-in-flight completes only after the server stops at a tool-result
+      // boundary (or its 12s stuck timeout). Swallow the interrupted tail:
+      // this is a deliberate control transfer, not a failed turn.
+      if (_manualPending && d.state !== 'running') {
+        _handledState = d.state;
+        _runProgressTs = 0;
+        if (_task) { try { finishTask(false, 'Paused'); } catch(_){} }
+        _inFlight = false;
+        refreshSendButton();
+        commitMode('man');
+        return;
+      }
       // A turn that finished BEFORE this page load (refresh): we never saw it run, so
       // don't re-emit its reply/handoff/error — the restored log already shows it.
       // Just mark the state handled and bail.
@@ -4626,11 +4675,12 @@
   }
   // MANUAL-steer local cursor: snap a client-drawn pointer to normalized coords
   // the INSTANT you act, so input feels immediate even while the video feed (the
-  // ground-truth ffmpeg-drawn pointer) is still catching up over the wire. Only
-  // meaningful on a desktop surface in MAN mode; CSS hides it otherwise.
+  // ground-truth cursor in the incoming frame) is still catching up over the
+  // wire. Browser steering needs it just as much as desktop steering: CDP
+  // clicks move no native host pointer, so without this it looks stuck.
   const _steerCursor = document.getElementById('op-steer-cursor');
   function steerCursorAt(nx, ny){
-    if (!_steerCursor || _surfaceActive === 'browser' || MODE !== 'man') return;
+    if (!_steerCursor || MODE !== 'man') return;
     if (typeof nx !== 'number' || typeof ny !== 'number') return;
     const r = stage.getBoundingClientRect();
     const nW = view.naturalWidth, nH = view.naturalHeight;
@@ -5382,6 +5432,7 @@
   }
   function focusTouchKeyboard(){
     if (!keyCapture) { stage.focus(); return; }
+    op.classList.add('op-keyboard-open');
     resetKeyCapture();
     try { keyCapture.focus({preventScroll:true}); } catch(_) { keyCapture.focus(); }
   }
@@ -5395,6 +5446,10 @@
   }
   if (keyCapture) {
     resetKeyCapture();
+    keyCapture.addEventListener('blur', () => setTimeout(() => {
+      if (document.activeElement !== keyCapture)
+        op.classList.remove('op-keyboard-open');
+    }, 40));
     // Software keyboards do not consistently emit a useful keydown. Drain
     // their edit operation instead; hardware keyboards are handled below and
     // preventDefault(), so they never double-send through this fallback.

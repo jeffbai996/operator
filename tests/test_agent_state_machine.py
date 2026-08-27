@@ -168,6 +168,54 @@ def test_start_clears_cancel_requested(runner):
     assert runner._cancel_requested is False
 
 
+def test_manual_takeover_waits_for_active_tool_and_arms_timeout(runner, monkeypatch):
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, fn):
+            timers.append((delay, fn))
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(OA.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(runner, "is_running", lambda: True)
+    runner._runtime = "codex"
+    runner._tool_active = True
+
+    result = runner.request_takeover(timeout_s=12)
+
+    assert result == {"ok": True, "pending": True, "timeout_s": 12.0}
+    assert runner._takeover_requested is True
+    assert timers and timers[0][0] == 12
+
+
+def test_manual_takeover_timeout_stops_a_stuck_tool(runner, monkeypatch):
+    callbacks = []
+    stops = []
+
+    class FakeTimer:
+        def __init__(self, _delay, fn):
+            callbacks.append(fn)
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(OA.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(runner, "is_running", lambda: True)
+    monkeypatch.setattr(runner, "stop", lambda: stops.append("stop") or {"ok": True})
+    runner._runtime = "codex"
+    runner._tool_active = True
+
+    runner.request_takeover(timeout_s=12)
+    callbacks[0]()
+
+    assert stops == ["stop"]
+    assert runner._takeover_requested is False
+
+
 def test_run_inner_never_resets_the_cancel_flag():
     """Grep-level guard: _run_inner's per-run reset block must never WRITE
     _cancel_requested — that wipe was the whole B3 bug class. Reading it is

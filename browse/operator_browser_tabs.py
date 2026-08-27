@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Reserve one Chrome page target per Operator conversation.
+"""Own Chrome page targets per Operator conversation.
 
 The browser profile is intentionally shared (cookies, 1Password, adblock), but
-the page a runtime is allowed to see is not.  A tiny locked registry gives each
-conversation a stable CDP target across follow-up turns and concurrent MCP
-processes.  Closed/stale targets are replaced; another conversation's target
-is never adopted.
+the pages a runtime is allowed to see are not.  A tiny locked registry gives
+each conversation a stable root target plus every popup or explicit new tab it
+opens.  Closed/stale targets are replaced; another conversation's targets are
+never adopted.  Deleting a conversation can then close the whole owned set.
 """
 from __future__ import annotations
 
@@ -24,22 +24,41 @@ DEFAULT_REGISTRY = Path(os.environ.get(
     os.path.expanduser("~/.cache/computer-use/operator-browser-tabs.json")))
 
 
-def _read_registry(path: Path = DEFAULT_REGISTRY) -> dict[str, str]:
+def _targets(value: object) -> list[str]:
+    """Normalise v1's ``conversation -> target`` registry to a target list."""
+    if isinstance(value, str):
+        raw = [value]
+    elif isinstance(value, list):
+        raw = value
+    else:
+        raw = []
+    out: list[str] = []
+    for target in raw:
+        target = str(target or "").strip()
+        if target and target not in out:
+            out.append(target)
+    return out
+
+
+def _read_registry(path: Path = DEFAULT_REGISTRY) -> dict[str, list[str]]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(raw, dict):
         return {}
-    return {str(k): str(v) for k, v in raw.items() if k and v}
+    return {str(k): targets for k, value in raw.items() if k
+            if (targets := _targets(value))}
 
 
-def _write_registry(data: dict[str, str], path: Path = DEFAULT_REGISTRY) -> None:
+def _write_registry(data: dict[str, list[str]], path: Path = DEFAULT_REGISTRY) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, separators=(",", ":"), sort_keys=True)
+            clean = {str(cid): _targets(targets)
+                     for cid, targets in data.items() if _targets(targets)}
+            json.dump(clean, handle, separators=(",", ":"), sort_keys=True)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
@@ -115,13 +134,42 @@ def reserve(conversation_id: str, endpoint: str,
     try:
         registry = _read_registry(path)
         live = _page_targets(endpoint)
-        target = registry.get(conversation_id, "")
-        if target in live:
+        targets = registry.get(conversation_id, [])
+        target = next((target for target in targets if target in live), "")
+        if target:
+            # Write the v1 -> v2 shape while this conversation is already
+            # touching the lock, so a later popup claim has one canonical form.
+            registry[conversation_id] = targets
+            _write_registry(registry, path)
             return target
         target = _new_target(endpoint)
-        registry[conversation_id] = target
+        registry[conversation_id] = [target]
         _write_registry(registry, path)
         return target
+    finally:
+        lock.close()
+
+
+def claim(conversation_id: str, target: str, path: Path = DEFAULT_REGISTRY) -> bool:
+    """Record a popup or ``newPage`` target as belonging to a conversation.
+
+    The wrapper calls this the instant Playwright exposes a descendant page.
+    It intentionally does not ask Chrome whether the target is live: a popup
+    can appear between that probe and the write, and a stale entry is harmless
+    because ``release`` treats close as best-effort.
+    """
+    conversation_id = str(conversation_id or "").strip()
+    target = str(target or "").strip()
+    if not conversation_id or not target:
+        raise ValueError("conversation id and target are required")
+    lock = _locked(path)
+    try:
+        registry = _read_registry(path)
+        targets = registry.setdefault(conversation_id, [])
+        if target not in targets:
+            targets.append(target)
+            _write_registry(registry, path)
+        return True
     finally:
         lock.close()
 
@@ -131,12 +179,28 @@ def release(conversation_id: str, endpoint: str,
     lock = _locked(path)
     try:
         registry = _read_registry(path)
-        target = registry.pop(str(conversation_id), "")
-        if not target:
+        targets = registry.pop(str(conversation_id), [])
+        if not targets:
             return False
         _write_registry(registry, path)
         if close:
-            _close_target(endpoint, target)
+            # Closing Chrome's final page can end the interactive browser and
+            # take the shared signed-in profile down with it.  Park one neutral
+            # page first only when this conversation owns every live page.
+            try:
+                live = _page_targets(endpoint)
+            except Exception:
+                live = set()
+            if live and live.issubset(set(targets)):
+                try:
+                    _new_target(endpoint)
+                except Exception:
+                    # Do not turn a best-effort cleanup into a browser outage.
+                    # Chrome normally creates this target; if it refuses, leave
+                    # the final owned page intact rather than closing Chrome.
+                    targets = targets[:-1]
+            for target in targets:
+                _close_target(endpoint, target)
         return True
     finally:
         lock.close()
@@ -146,7 +210,8 @@ def activate(conversation_id: str, endpoint: str,
              path: Path = DEFAULT_REGISTRY) -> bool:
     lock = _locked(path)
     try:
-        target = _read_registry(path).get(str(conversation_id), "")
+        targets = _read_registry(path).get(str(conversation_id), [])
+        target = targets[0] if targets else ""
         if not target or target not in _page_targets(endpoint):
             return False
         _activate_target(endpoint, target)
@@ -157,13 +222,18 @@ def activate(conversation_id: str, endpoint: str,
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("reserve", "release", "activate"))
+    parser.add_argument("action", choices=("reserve", "claim", "release", "activate"))
     parser.add_argument("conversation_id")
     parser.add_argument("endpoint")
+    parser.add_argument("target_id", nargs="?")
     parser.add_argument("--close", action="store_true")
     args = parser.parse_args(argv)
     if args.action == "reserve":
         print(reserve(args.conversation_id, args.endpoint))
+    elif args.action == "claim":
+        if not args.target_id:
+            parser.error("claim needs a target id")
+        print("1" if claim(args.conversation_id, args.target_id) else "0")
     elif args.action == "release":
         release(args.conversation_id, args.endpoint, close=args.close)
     else:

@@ -717,6 +717,60 @@ def test_midrun_message_interrupt_steers(browser, harness):
         ctx.close()
 
 
+def test_manual_mode_waits_for_server_takeover_boundary(browser, harness):
+    """MAN during a live turn stays pending until the server has stopped the
+    run at a tool boundary; it must not merely repaint AUTO as MAN."""
+    state = {"value": "running", "takeovers": 0}
+    ctx = browser.new_context()
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+
+    def agent_routes(route):
+        req = route.request
+        if req.url.endswith("/operator/agent/takeover"):
+            state["takeovers"] += 1
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"ok": True, "pending": True,
+                                           "timeout_s": 12}))
+            return
+        if "/operator/agent?" in req.url:
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({
+                              "bot": "gpt", "task": "book it",
+                              "state": state["value"], "messages": [],
+                              "final": "", "alive": state["value"] == "running",
+                              "stalled": False, "stalled_for": 0,
+                              "handoff": None, "surface": "browser",
+                              "steer_pending": 0, "tool_active": True}))
+            return
+        route.continue_()
+
+    # Playwright's trailing `*` does not cross the slash in `/agent/takeover`.
+    # Register the mutating seam explicitly and keep the query route separate.
+    pg.route("**/operator/agent/takeover", agent_routes)
+    pg.route("**/operator/agent?**", agent_routes)
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op-send').classList.contains('stopping')",
+            timeout=8000, polling=100)
+        pg.locator('.op-mode-btn[data-mode="man"]').dispatch_event("click")
+        pg.wait_for_function("document.getElementById('op-mode').dataset.pending === 'man'",
+                             timeout=3000, polling=50)
+        assert pg.locator("#op").get_attribute("data-mode") == "auto"
+        assert state["takeovers"] == 1
+
+        state["value"] = "interrupted"
+        pg.wait_for_function("document.getElementById('op').dataset.mode === 'man'",
+                             timeout=5000, polling=100)
+        assert pg.locator("#op-mode").get_attribute("data-pending") is None
+    finally:
+        ctx.close()
+
+
 def test_var_task_card_prefills_composer(browser, harness):
     """1.0.13: clicking Go on a {{variable}} saved task loads the prompt into
     the composer (first placeholder selected) and fires NOTHING — no task run,
@@ -1689,6 +1743,19 @@ def test_touch_stage_requires_explicit_keyboard_control(browser, harness):
         pg.wait_for_function(
             "document.activeElement.id === 'op-key-capture'",
             timeout=8000, polling=50)
+        # Keyboard mode deliberately compacts the rail before iOS has finished
+        # animating its keyboard. Otherwise the fixed half-sheet gets lifted
+        # above the keyboard and covers the entire remaining browser viewport.
+        keyboard_layout = pg.evaluate("""() => {
+          const op = document.getElementById('op');
+          const rail = document.querySelector('.op-rail').getBoundingClientRect();
+          const stage = document.getElementById('op-stage').getBoundingClientRect();
+          return {open: op.classList.contains('op-keyboard-open'),
+            railH: rail.height, stageH: stage.height};
+        }""")
+        assert keyboard_layout["open"], keyboard_layout
+        assert keyboard_layout["railH"] <= 205, keyboard_layout
+        assert keyboard_layout["stageH"] >= 900, keyboard_layout
 
         # Mobile Safari can deliver software-keyboard text as an input event
         # without a useful keydown. Exercise that path directly.
@@ -1704,6 +1771,34 @@ def test_touch_stage_requires_explicit_keyboard_control(browser, harness):
         assert sent.value.post_data_json["value"] == "hello"
     finally:
         harness.mode = "real"
+        ctx.close()
+
+
+def test_mobile_minimized_status_keeps_manual_note_close(browser, harness):
+    """The minimized status pill is absolute, so the manual card must supply
+    only its overlap clearance—not the old expanded-card-sized void."""
+    ctx = browser.new_context(viewport={"width": 390, "height": 844})
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        # A previous harness page can legitimately leave the isolated shared
+        # session in its collapsed launchpad state. This test sets the exact
+        # minimized-status geometry below, so require the shell to exist rather
+        # than accidentally coupling the assertion to suite execution order.
+        pg.wait_for_selector("#op-lp", state="attached", timeout=8000)
+        geometry = pg.evaluate("""() => {
+          const op = document.getElementById('op');
+          op.classList.remove('op-booting'); op.classList.add('op-ready');
+          op.dataset.mode = 'man'; op.dataset.statusMin = '1';
+          document.getElementById('op-lp').hidden = true;
+          document.getElementById('op-man-note').hidden = false;
+          void op.offsetHeight;
+          const pill = document.querySelector('.op-action').getBoundingClientRect();
+          const note = document.getElementById('op-man-note').getBoundingClientRect();
+          return {gap: note.top - pill.bottom, pill, note};
+        }""")
+        assert 4 <= geometry["gap"] <= 14, geometry
+    finally:
         ctx.close()
 
 
@@ -1724,6 +1819,12 @@ def test_desktop_stage_keeps_hardware_keyboard_input(browser, harness):
             "document.getElementById('op-view').naturalWidth > 0",
             timeout=8000, polling=50)
         pg.locator("#op-lp").evaluate("el => { el.hidden = true; }")
+        # The persisted shell can restore AUTO. Put the real mode control in
+        # MAN before asserting the manual pointer feedback.
+        pg.locator('.op-mode-btn[data-mode="man"]').dispatch_event("click")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.mode === 'man'",
+            timeout=3000, polling=50)
         # Exercise the stage's desktop click handler without making this
         # keyboard-path test depend on headless compositor stability.
         pg.locator("#op-stage").evaluate("""el => {
@@ -1732,6 +1833,12 @@ def test_desktop_stage_keeps_hardware_keyboard_input(browser, harness):
             clientX:r.left+100, clientY:r.top+100, detail:1}));
         }""")
         assert pg.evaluate("document.activeElement.id") == "op-stage"
+        # A browser-stage click gets an immediate local pointer while the next
+        # streamed frame catches up. Without this, the cursor looks stuck at
+        # its old location even though the remote click did arrive.
+        assert pg.locator("#op-steer-cursor").evaluate(
+            "el => el.classList.contains('show') "
+            "&& getComputedStyle(el).display !== 'none'")
 
         with pg.expect_request(lambda r: (
                 r.url.endswith("/operator/steer")

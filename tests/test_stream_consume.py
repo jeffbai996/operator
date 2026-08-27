@@ -79,6 +79,23 @@ def test_tool_use_with_non_string_name_is_safe(runner):
     # no crash; nothing meaningful to label
 
 
+def test_claude_tool_result_releases_pending_manual_takeover(runner, monkeypatch):
+    stops = []
+    monkeypatch.setattr(runner, "_stop_for_takeover",
+                        lambda: stops.append("stop"))
+    runner._takeover_requested = True
+
+    runner._consume(_line({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "browser_click", "input": {"x": 10}}]}}))
+    assert runner._tool_active is True
+    assert stops == []
+
+    runner._consume(_line({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}]}}))
+    assert runner._tool_active is False
+    assert stops == ["stop"]
+
+
 def test_result_of_wrong_type_is_ignored(runner):
     runner._consume(_line({"type": "result", "result": 42}))
     runner._consume(_line({"type": "result", "result": {"nested": "dict"}}))
@@ -145,6 +162,23 @@ def test_codex_wellformed_message_still_lands(codex):
     codex._consume(_line({"type": "item.completed", "item": {
         "type": "agent_message", "text": "codex says hi"}}))
     assert codex.messages[-1]["text"] == "codex says hi"
+
+
+def test_codex_completed_tool_releases_pending_manual_takeover(codex, monkeypatch):
+    stops = []
+    monkeypatch.setattr(codex, "_stop_for_takeover",
+                        lambda: stops.append("stop"))
+    codex._takeover_requested = True
+
+    item = {"type": "mcp_tool_call", "tool": "browser_click",
+            "arguments": {"x": 10}}
+    codex._consume(_line({"type": "item.started", "item": item}))
+    assert codex._tool_active is True
+    assert stops == []
+
+    codex._consume(_line({"type": "item.completed", "item": item}))
+    assert codex._tool_active is False
+    assert stops == ["stop"]
 
 
 def test_codex_tool_call_with_garbage_arguments_is_safe(codex):
