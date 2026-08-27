@@ -198,12 +198,35 @@ def browser():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_session_store(monkeypatch):
+def _fresh_session_store(monkeypatch, harness):
     """Each test gets an empty shared-session store — otherwise a session
     pushed by an earlier test's page boot gets ADOPTED by the next test's
     fresh context (log swap + mode re-apply mid-test = flaky sampling)."""
+    harness.mode = "real"
+    harness.agent_mode = None
+    harness.agent_messages.clear()
+    harness.say_posts.clear()
+    harness.stop_posts.clear()
+    harness.dispatch_posts.clear()
+    harness.run_posts.clear()
+    session_path = os.path.join(_HARNESS_STATE_DIR, "session.json")
+    # Other test modules reload operator_session against their own tmp paths.
+    # Rebind its module-level path here as well as restoring the environment;
+    # unlinking only the env path leaves the already-imported store pointed at
+    # the previous module's file when the suites run in one pytest process.
+    monkeypatch.setenv("OPERATOR_SESSION_PATH", session_path)
+    import operator_session as _osess
+    importlib.reload(_osess)
     try:
-        os.unlink(os.environ["OPERATOR_SESSION_PATH"])
+        os.unlink(session_path)
+    except FileNotFoundError:
+        pass
+    # pagehide uses a final asynchronous session POST. Chromium can finish
+    # that local request just after the previous context closes; give it one
+    # short drain window, then clear again before this page is allowed to boot.
+    threading.Event().wait(0.05)
+    try:
+        os.unlink(session_path)
     except FileNotFoundError:
         pass
     # The conversation registry instantiates runners lazily. Keep the harness
@@ -219,10 +242,16 @@ def _fresh_session_store(monkeypatch):
     monkeypatch.setenv("OPERATOR_STATE_PATH", state_path)
     monkeypatch.setattr(
         OV.operator_agent, "runner", OV.operator_agent.RunnerRegistry())
-    import operator_session as _osess
     with _osess._PRESENCE_LOCK:
         _osess._PRESENCE.clear()
     yield
+    # Context teardown can finish one last session flush after the test body.
+    # Clear at both boundaries so that write cannot seed the next test.
+    for path in (session_path, state_path):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
 
 @pytest.fixture()
@@ -545,7 +574,11 @@ def test_second_device_observes_until_it_takes_over(browser, harness):
             "out.push({id:n.id, cls:n.className, hidden:n.hidden, display:s.display,"
             "visibility:s.visibility, rect:n.getBoundingClientRect().toJSON()});} return out; }") + errors
         assert b.locator("#op-input").is_disabled()
-        assert b.locator("#op-chats-open").is_visible()
+        # Chats are a launchpad action, not one more occupied slot in the
+        # narrow browser brow. The trigger still exists for this device once
+        # the user returns home.
+        assert b.locator("#op-chats-open").count() == 0
+        assert b.locator("#op-lp-chats").count() == 1
 
         # Both "devices" are tabs in one headless test browser. A real phone is
         # foregrounded when its user taps; mirror that first, otherwise Chromium
@@ -869,6 +902,197 @@ def test_launchpad_wordmark_and_corner_controls_are_centered(browser, harness):
         assert corner["themeRight"] < corner["closeLeft"]
         assert corner["viewport"] - corner["closeRight"] <= 20
     finally:
+        ctx.close()
+
+
+def test_chat_picker_is_launchpad_only_and_uses_the_corner_control_row(browser, harness):
+    """Chats stay out of the cramped brow and open from the welcome surface."""
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        _expand_launchpad(pg)
+        pg.add_style_tag(content="#op-lp{transition:none!important;transform:none!important}")
+
+        # Switching chats is deliberately a launchpad action now. The browser
+        # brow and browser hamburger both need their scarce slots back.
+        assert pg.locator("#op-chats-open").count() == 0
+        assert pg.locator("#op-ham-chats").count() == 0
+        picker = pg.locator("#op-lp-chats")
+        assert picker.is_visible()
+        assert picker.get_attribute("aria-haspopup") == "dialog"
+        assert picker.get_attribute("aria-expanded") == "false"
+
+        row = pg.evaluate("""() => {
+          const rect = id => document.getElementById(id).getBoundingClientRect();
+          const center = r => ({x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2});
+          const mark = rect('op-lp-mark'), chats = rect('op-lp-chats');
+          const theme = rect('op-lp-theme'), close = rect('op-lp-x');
+          const icon = document.querySelector('#op-lp-chats svg');
+          return {mark: center(mark), chats: center(chats), theme: center(theme), close: center(close),
+                  sizes: [mark.width, chats.width, theme.width, close.width],
+                  linecap: icon.getAttribute('stroke-linecap'), linejoin: icon.getAttribute('stroke-linejoin')};
+        }""")
+        assert row["mark"]["x"] < row["chats"]["x"] < row["theme"]["x"] < row["close"]["x"]
+        assert max(abs(row[key]["y"] - row["close"]["y"])
+                   for key in ("mark", "chats", "theme")) <= 0.25
+        assert max(row["sizes"]) - min(row["sizes"]) <= 0.25
+        assert row["linecap"] == row["linejoin"] == "round"
+
+        before = pg.evaluate("""() => {
+          const box = sel => {
+            const r = document.querySelector(sel).getBoundingClientRect();
+            return [r.x, r.y, r.width, r.height];
+          };
+          return {hero: box('.op-lp-hero'), composer: box('.op-lp-composer')};
+        }""")
+        picker.dispatch_event("click")
+        dialog = pg.locator("#op-chats")
+        assert dialog.is_visible()
+        assert dialog.get_attribute("role") == "dialog"
+        assert dialog.get_attribute("aria-modal") == "true"
+        assert picker.get_attribute("aria-expanded") == "true"
+        geometry = pg.evaluate("""() => {
+          const d = document.getElementById('op-chats').getBoundingClientRect();
+          const box = sel => {
+            const r = document.querySelector(sel).getBoundingClientRect();
+            return [r.x, r.y, r.width, r.height];
+          };
+          return {
+            dialogCenter: [d.x + d.width / 2, d.y + d.height / 2],
+            viewportCenter: [innerWidth / 2, innerHeight / 2],
+            hero: box('.op-lp-hero'), composer: box('.op-lp-composer'),
+            outsideLaunchpad: !document.getElementById('op-lp').contains(
+              document.getElementById('op-chats')),
+            insideOperator: document.getElementById('op').contains(
+              document.getElementById('op-chats')),
+            focusInside: document.getElementById('op-chats').contains(
+              document.activeElement)
+          };
+        }""")
+        assert geometry["outsideLaunchpad"] is True
+        assert geometry["insideOperator"] is True
+        assert geometry["focusInside"] is True
+        assert geometry["hero"] == pytest.approx(before["hero"], abs=0.25)
+        assert geometry["composer"] == pytest.approx(before["composer"], abs=0.25)
+        assert geometry["dialogCenter"] == pytest.approx(
+            geometry["viewportCenter"], abs=1)
+
+        pg.keyboard.press("Escape")
+        assert not dialog.is_visible()
+        assert picker.get_attribute("aria-expanded") == "false"
+        assert picker.evaluate("el => document.activeElement === el") is True
+    finally:
+        harness.mode = "real"
+        ctx.close()
+
+
+def test_chat_library_becomes_a_phone_sheet_without_reflowing_the_launchpad(
+        browser, harness):
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 390, "height": 844})
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.bring_to_front()
+        # Enter through the same Home control a phone user uses. The preceding
+        # Chromium context may legitimately finish a pagehide transcript save
+        # after teardown, in which case this fresh page resumes that chat and
+        # the launchpad starts closed.
+        pg.wait_for_function(
+            "document.getElementById('op-lp-open')._wired === true",
+            timeout=8000, polling=50)
+        pg.locator("#op-lp-open").dispatch_event("click")
+        pg.wait_for_selector("#op-lp-chats", state="visible", timeout=8000)
+        pg.add_style_tag(content="*{transition:none!important}")
+        rect = ("el => { const r=el.getBoundingClientRect(); "
+                "return {x:r.x,y:r.y,width:r.width,height:r.height} }")
+        before = pg.locator(".op-lp-composer").evaluate(rect)
+        pg.locator("#op-lp-chats").dispatch_event("click")
+        dialog = pg.locator("#op-chats")
+        box = dialog.bounding_box()
+
+        assert dialog.is_visible()
+        assert box["x"] <= 12
+        assert box["width"] >= 366
+        assert box["y"] >= 20
+        assert box["y"] + box["height"] >= 832
+        assert pg.locator(".op-lp-composer").evaluate(rect) == pytest.approx(
+            before, abs=0.25)
+    finally:
+        harness.mode = "real"
+        ctx.close()
+
+
+def test_chat_library_searches_and_manages_server_backed_threads(
+        browser, harness, monkeypatch):
+    older = OS_MOD.create()["id"]
+    OS_MOD.save({"log": '<div class="op-msg user"><span class="bubble">older request</span></div>',
+                 "preview": "Find a hotel in Kelowna", "bot": "gemma",
+                 "surface": "browser"}, conversation_id=older)
+    OS_MOD.title_if_unset("Kelowna hotels", older)
+    newer = OS_MOD.create()["id"]
+    OS_MOD.save({"log": '<div class="op-msg user"><span class="bubble">newer request</span></div>',
+                 "preview": "Compare flights to Tokyo", "bot": "gpt",
+                 "surface": "desktop-sandbox"}, conversation_id=newer)
+    OS_MOD.title_if_unset("Tokyo flights", newer)
+    monkeypatch.setattr(
+        OV.operator_agent.runner, "conversation_summaries",
+        lambda: {older: {"state": "running", "bot": "gemma", "alive": True}})
+
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.bring_to_front()
+        pg.wait_for_selector("#op-lp-open", state="visible", timeout=8000)
+        pg.locator("#op-lp-open").dispatch_event("click")
+        pg.wait_for_selector("#op-lp-chats", state="visible", timeout=8000)
+        pg.locator("#op-lp-chats").dispatch_event("click")
+        pg.wait_for_selector(".op-chat-row", state="visible", timeout=8000)
+
+        titles = pg.locator(".op-chat-title").all_text_contents()
+        assert titles == ["Kelowna hotels", "Tokyo flights"]
+        assert "Find a hotel in Kelowna" in pg.locator("#op-chat-list").inner_text()
+        assert "Gemma" not in pg.locator("#op-chat-list").inner_text()
+        assert "gemma" in pg.locator("#op-chat-list").inner_text()
+
+        pg.locator("#op-chat-search").fill("TOKYO")
+        assert pg.locator(".op-chat-row").count() == 1
+        assert pg.locator(".op-chat-title").inner_text() == "Tokyo flights"
+        pg.locator("#op-chat-search").fill("")
+
+        rows = pg.locator(".op-chat-row")
+        rows.nth(0).locator(".op-chat-more").dispatch_event("click")
+        assert rows.nth(0).locator(".op-chat-menu .danger").is_disabled()
+        rows.nth(1).locator(".op-chat-more").dispatch_event("click")
+        rows.nth(1).locator(
+            ".op-chat-menu button", has_text="Rename").dispatch_event("click")
+        rename = rows.nth(1).locator(".op-chat-rename input")
+        rename.fill("Japan fare research")
+        rows.nth(1).locator(".op-chat-rename").evaluate("form => form.requestSubmit()")
+        pg.wait_for_selector("text=Japan fare research", timeout=5000)
+
+        rows = pg.locator(".op-chat-row")
+        rows.nth(1).locator(".op-chat-more").dispatch_event("click")
+        rows.nth(1).locator(
+            ".op-chat-menu button", has_text="Delete").dispatch_event("click")
+        assert pg.locator("#op-chat-confirm").is_visible()
+        pg.locator("#op-chat-delete-confirm").dispatch_event("click")
+        pg.wait_for_function(
+            "document.querySelectorAll('.op-chat-row').length === 1",
+            timeout=5000, polling=50)
+        assert errors == []
+    finally:
+        harness.mode = "real"
         ctx.close()
 
 

@@ -8,6 +8,7 @@ The public demo keeps per-visitor localStorage — these routes are 403 there.
 import importlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from flask import Flask
@@ -111,6 +112,35 @@ def test_session_routes_demo_gated(tmp_path, monkeypatch):
                   json={"data": {"log": "x"}}).status_code == 403
 
 
+def test_new_chat_route_reuses_an_empty_cloud_draft(tmp_path, monkeypatch):
+    app = _app(False, tmp_path, monkeypatch)
+    c = app.test_client()
+
+    first = c.post("/operator/sessions", json={}).get_json()
+    second = c.post("/operator/sessions", json={}).get_json()
+
+    assert first["ok"] is True and first["reused"] is False
+    assert second["ok"] is True and second["reused"] is True
+    assert second["id"] == first["id"]
+
+
+def test_session_list_keeps_saved_bot_and_surface_for_idle_chats(
+        tmp_path, monkeypatch):
+    app = _app(False, tmp_path, monkeypatch)
+    c = app.test_client()
+    c.post("/operator/session", json={
+        "conversation_id": "legacy",
+        "data": {"log": "message", "preview": "Plan the weekend",
+                 "bot": "gemma", "surface": "desktop-sandbox"},
+    })
+
+    row = c.get("/operator/sessions").get_json()["sessions"][0]
+
+    assert row["bot"] == "gemma"
+    assert row["surface"] == "desktop-sandbox"
+    assert row["preview"] == "Plan the weekend"
+
+
 # ------------------------------------------------------- conversations --
 # One session was not enough (the owner 2026-08-06): every task landed in the same
 # transcript and the only clean start was the trash can. The store now holds a
@@ -131,6 +161,52 @@ def test_a_new_conversation_is_empty_and_active(store):
     made = store.create()
     assert store.listing()["active"] == made["id"]
     assert store.load()["data"] is None          # the new one starts blank
+
+
+def test_create_reuses_the_single_empty_draft(store):
+    first = store.create()
+    second = store.create()
+
+    assert second["id"] == first["id"]
+    assert second["reused"] is True
+    assert len(store.listing()["sessions"]) == 1
+
+
+def test_concurrent_new_chat_requests_share_one_draft(store):
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        made = list(pool.map(lambda _: store.create(), range(2)))
+
+    assert len({item["id"] for item in made}) == 1
+    assert len(store.listing()["sessions"]) == 1
+
+
+def test_create_starts_a_new_draft_after_the_first_task_is_saved(store):
+    first = store.create()
+    store.save({"log": "<div class='op-msg user'>find a hotel</div>"},
+               conversation_id=first["id"])
+
+    second = store.create()
+
+    assert second["id"] != first["id"]
+    assert second["reused"] is False
+    assert len(store.listing()["sessions"]) == 2
+
+
+def test_listing_exposes_safe_compact_metadata(store):
+    store.save({
+        "log": "<script>not list metadata</script>",
+        "preview": "Find a quiet hotel near Mission Hill",
+        "bot": "gpt",
+        "surface": "browser",
+    }, conversation_id="legacy")
+
+    row = store.listing()["sessions"][0]
+
+    assert row["preview"] == "Find a quiet hotel near Mission Hill"
+    assert row["bot"] == "gpt"
+    assert row["surface"] == "browser"
+    assert "log" not in row
+    assert "script" not in json.dumps(row)
 
 
 def test_switching_back_returns_the_earlier_chat(store):

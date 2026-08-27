@@ -1579,20 +1579,24 @@ def test_tasks_list_exposes_vars(live, fake_runner, monkeypatch):
 
 def test_splash_mark_is_a_top_right_status_ring_not_a_hero_logo() -> None:
     # the owner 2026-07-24: the mark does NOT sit above the wordmark. It lives in the
-    # splash's top-right control row (X at 1.1rem, theme at 4rem, mark at 6.9rem)
+    # splash's top-right control row (X at 1.1rem, theme at 4rem, chats at
+    # 6.9rem, mark at 9.8rem)
     # at the same 32px box, and doubles as a backend-health readout.
     root = Path(__file__).resolve().parents[1]
     css = (root / "static/operator.css").read_text(encoding="utf-8")
     html = (root / "templates/operator.html").read_text(encoding="utf-8")
 
-    # markup order: the mark precedes the theme toggle, i.e. it is a sibling in
-    # the control row rather than a child of the hero block.
-    assert html.index('id="op-lp-mark"') < html.index('id="op-lp-theme"')
+    # markup order: mark → chats → theme. These are sibling controls rather
+    # than part of the hero block.
+    assert html.index('id="op-lp-mark"') < html.index('id="op-lp-chats"') < html.index('id="op-lp-theme"')
     assert html.index('id="op-lp-mark"') < html.index('class="op-lp-hero"')
 
     rule = css[css.index(".op-lp-mark { position: fixed"):]
     rule = rule[: rule.index("}")]
-    assert "right: 6.9rem" in rule                      # third slot in the row
+    chats_rule = css[css.index(".op-lp-chats { position: fixed"):]
+    chats_rule = chats_rule[: chats_rule.index("}")]
+    assert "right: 9.8rem" in rule                      # fourth slot in the row
+    assert "right: 6.9rem" in chats_rule                # chats sit before theme
     assert "--op-lp-control-size: 32px;" in css          # shared with theme + X
     assert "width: var(--op-lp-control-size);" in rule
     assert "height: var(--op-lp-control-size);" in rule

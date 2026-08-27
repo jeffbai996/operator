@@ -16,10 +16,10 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-multisession-v1.1.0.png" alt="Operator 1.1 running a live browser task with its cross-device conversation switcher open">
+  <img src="docs/img/operator-multisession-v1.1.0.png" alt="Operator 1.1 launchpad with its cross-device Chats library open">
 </p>
 
-<p><sub><i>Three conversations, one logged-in Chrome. Each thread owns its runner, transcript, resumed model session, work directory, state, and browser tab; the switcher shows which thread is active on another device. Concurrent agents share cookies and extensions without being able to see, select, navigate, or close each other's tabs.</i></sub></p>
+<p><sub><i>The launchpad is the one place to find and manage cloud chats: search by title or prompt, see the bot, surface, and live state, then resume, rename, or safely remove a thread. Each conversation owns its runner, transcript, resumed model session, work directory, state, and browser tab. Concurrent agents share cookies and extensions without being able to see, select, navigate, or close each other's tabs.</i></sub></p>
 
 ---
 
@@ -27,9 +27,10 @@ A live **browser / computer-use agent cockpit**. Give it a task, watch the exact
 Chrome it is driving, take the wheel whenever you want, and keep separate jobs
 alive in separate conversations. Threads synchronize across devices with an
 explicit watch/take-over lease, while per-conversation tab ownership lets
-multiple agents safely use the same signed-in browser. Claude, GPT, and Gemini
-runtimes use their normal subscription sign-ins rather than metered
-screenshot-heavy API calls.
+multiple agents safely use the same signed-in browser. A responsive Chats
+library lives on the launchpad instead of consuming the browser brow. Claude,
+GPT, and Gemini runtimes use their normal subscription sign-ins rather than
+metered screenshot-heavy API calls.
 
 > **Inspired by OpenAI's Operator.** This project borrows the name and the spirit of a watch-the-agent-drive interface. It is an independent implementation, not affiliated with, endorsed by OpenAI, or derived from any OpenAI products.
 
@@ -70,8 +71,9 @@ expensive (a screenshot per step) — the logged-in CLI path is strongly preferr
 > **Status:** **v1.1.0** — conversations now follow you across devices and safely
 > share one logged-in browser through isolated tab leases. Another device can
 > watch a thread live and deliberately take over; stale local state cannot
-> overwrite newer server state. Recovery nudges are amber notices, not false
-> “Turn failed” errors.
+> overwrite newer server state. The launchpad Chats library adds search, prompt
+> previews, live metadata, inline rename, guarded delete, and a reusable empty
+> draft. Recovery nudges are amber notices, not false “Turn failed” errors.
 
 ## What a session looks like
 
@@ -112,7 +114,7 @@ must stay together, without making installation meaningfully easier.
 | **Manual steer** | Click / type / scroll / press-hold / drag flow straight through to the page. |
 | **Agent drive** | Claude, Codex, and Gemini CLI runtimes on subscription auth — no metered API keys. Each conversation owns its transcript, resumed runtime sessions, work directory, state file, stop/steer channel, and browser-tab lease. |
 | **Trace** | Interleaved thinking + actions; commands and URLs render as code blocks, element targets as plain text; per-turn step counts; modern error blocks that surface the failure reason. Agent answers render as real markdown — pipe tables included — and ASCII/box-drawing fences scroll sideways instead of wrapping to soup. |
-| **UX** | MAN/AUTO modes, cross-device switchable/renamable conversations, observer/take-over state, drag-to-resize chat, live font controls, mobile/PWA layout, saved-task launchpad, `/` palette, history replay, and a real scheduler (repeat/time/day → cron). |
+| **UX** | MAN/AUTO modes, a launchpad-only Chats library with search/previews/rename/guarded delete, observer/take-over state, drag-to-resize chat, live font controls, mobile/PWA layout, saved tasks, `/` palette, history replay, and a real scheduler (repeat/time/day → cron). |
 | **Reliability** | Revisioned server-authoritative threads with optimistic writes; conversation-scoped state machines behind a shared global cap and one-slot-per-runtime guard; tab-filtered Playwright contexts on one shared Chrome; deterministic Stop/timeout/token-cap outcomes; browser preflight that refuses invisible work; hardened stream parsing; first-paint/re-entry viewport repair; deployment admission draining; and persisted scheduler dedupe. |
 | **Surfaces** | Browser (default), an isolated sandbox desktop (Xvfb), or the real desktop (gated — explicit per-session confirm, panic-STOP always on screen). Switch from a popover on the brand mark; the live feed follows. |
 | **Perception** | Zero-token local vision (`vision/`): template/colour-blob target finding + OCR, per-game region maps, and grid/crop grounding overlays — the agent reads labeled targets instead of squinting at raw pixels. |
@@ -218,9 +220,13 @@ one device controls while others observe and can deliberately take over. Every
 conversation keeps separate runner/runtime state and a stable Chrome tab lease.
 Agents still share the logged-in profile, cookies, 1Password, and content
 blocking, but their Playwright contexts expose only their owned tabs and popups.
-Loop-breaker and completion-recheck nudges render as amber recovery notices
-instead of false red failures. The first 1.1 start uses a fresh conversation
-store; the run-history ledger is retained.
+The finished launchpad Chats library is a centered desktop modal and a
+near-full-height phone sheet, with search, prompt previews, bot/surface/live
+state, inline rename, guarded delete, and reusable empty drafts. It lives in the
+browser top layer, so opening it cannot reflow the composer. Loop-breaker and
+completion-recheck nudges render as amber recovery notices instead of false red
+failures. The first 1.1 start uses a fresh conversation store; the run-history
+ledger is retained.
 
 **v1.0.40** — **one clear handoff + a finished header**. Human-handoff alerts
 use one clear headline and keep the specific takeover instruction in the body,

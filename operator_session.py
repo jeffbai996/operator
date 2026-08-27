@@ -41,6 +41,8 @@ log = logging.getLogger("operator.session")
 # unaffected.
 MAX_BYTES = 1_000_000
 TITLE_LIMIT = 80
+PREVIEW_LIMIT = 180
+META_LIMIT = 40
 
 # .demo backstop: same-user demo server must never read/write the owner's
 # session (routes are 403 in demo, but the suffix removes the shared file too).
@@ -152,6 +154,12 @@ def _clip_title(text: str) -> str:
     return text if len(text) <= TITLE_LIMIT else text[: TITLE_LIMIT - 1] + "…"
 
 
+def _clip_meta(value: object, limit: int) -> str:
+    """Plain-text list metadata; transcripts never belong in the list API."""
+    text = " ".join(value.split()) if isinstance(value, str) else ""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 # ── the single-session contract the client already speaks ───────────────
 
 def load(conversation_id: str | None = None) -> dict:
@@ -217,26 +225,51 @@ def _is_empty(sess: dict) -> bool:
 
 
 def listing() -> dict:
-    """{rev, active, sessions:[{id, title, updated_ts, empty}]}, newest first."""
+    """Compact, safe conversation metadata, newest first.
+
+    ``data.log`` is intentionally excluded: the library needs a preview, not a
+    second copy of every transcript (or a raw-HTML injection surface).
+    """
     with _LOCK:
         st = _read_unlocked()
-        rows = [{"id": sid, "title": s.get("title") or "",
-                 "conversation_rev": int(s.get("rev") or 0),
-                 "updated_ts": s.get("updated_ts") or 0, "empty": _is_empty(s)}
-                for sid, s in st["sessions"].items()]
+        rows = []
+        for sid, sess in st["sessions"].items():
+            data = sess.get("data") if isinstance(sess.get("data"), dict) else {}
+            rows.append({
+                "id": sid,
+                "title": sess.get("title") or "",
+                "conversation_rev": int(sess.get("rev") or 0),
+                "updated_ts": sess.get("updated_ts") or 0,
+                "empty": _is_empty(sess),
+                "preview": _clip_meta(data.get("preview"), PREVIEW_LIMIT),
+                "bot": _clip_meta(data.get("bot"), META_LIMIT),
+                "surface": _clip_meta(data.get("surface"), META_LIMIT),
+            })
         rows.sort(key=lambda r: r["updated_ts"], reverse=True)
         return {"rev": st["rev"], "active": st["active"], "sessions": rows}
 
 
 def create(title: str = "") -> dict:
-    """Start a new, empty conversation and make it active. {id, rev}."""
+    """Get or create the one reusable empty draft and make it active.
+
+    Repeated taps and concurrent devices must not manufacture a trail of blank
+    chats. Once the draft has transcript content, the next call creates a new
+    identity.
+    """
     with _LOCK:
         st = _read_unlocked()
+        empty = [(sid, sess) for sid, sess in st["sessions"].items()
+                 if _is_empty(sess)]
+        if empty:
+            sid, _sess = max(
+                empty, key=lambda item: item[1].get("updated_ts") or 0)
+            st["active"] = sid
+            return {"id": sid, "rev": _write_unlocked(st), "reused": True}
         sid = _new_id()
         st["sessions"][sid] = {"rev": 0, "title": _clip_title(title),
                                "updated_ts": time.time(), "data": None}
         st["active"] = sid
-        return {"id": sid, "rev": _write_unlocked(st)}
+        return {"id": sid, "rev": _write_unlocked(st), "reused": False}
 
 
 def activate(sid: str) -> dict:

@@ -8,8 +8,16 @@ endpoint while the interactive demo is disabled.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-from flask import Flask
+from flask import Flask, abort, send_from_directory
+
+
+_FONT_DIR = Path(__file__).with_name("static") / "fonts"
+_FONT_FILES = {
+    "jakarta.woff2": "PlusJakartaSans-latin.woff2",
+    "urbanist.woff2": "urbanist-latin.woff2",
+}
 
 
 PAGE = """<!doctype html>
@@ -19,13 +27,17 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Operator</title>
 <style>
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:200 800;font-display:swap;
+src:url('/assets/jakarta.woff2') format('woff2')}@font-face{font-family:'Urbanist';font-style:normal;
+font-weight:100 900;font-display:swap;src:url('/assets/urbanist.woff2') format('woff2')}
 html,body{margin:0;height:100%}*{box-sizing:border-box}body{display:grid;place-items:center;
 min-height:100dvh;background:#000;color:#e7e9ee;padding:2rem;font:400 16px/1.55
 system-ui,-apple-system,"Segoe UI",sans-serif}.stack{display:grid;justify-items:center;text-align:center}
 .mark{width:clamp(96px,22vw,150px);height:auto;transform-origin:center}.mark:hover{animation:greet
 .78s cubic-bezier(.34,1.06,.44,1)}.wordmark{font-weight:700;font-size:clamp(2.2rem,8vw,3.4rem);
-line-height:1;letter-spacing:-.03em;color:#fff;margin-top:1.6rem}.msg{color:#8b93a3;font-size:.95rem;
-max-width:30rem;margin-top:1.5rem}.msg span{display:block}@keyframes greet{to{transform:rotate(360deg)}}
+font-family:'Plus Jakarta Sans',sans-serif;line-height:1;letter-spacing:-.03em;color:#fff;margin-top:1.6rem}
+.msg{font:500 .95rem/1.55 'Urbanist',sans-serif;color:#8b93a3;max-width:30rem;margin-top:1.5rem}
+.msg span{display:block}@keyframes greet{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.mark:hover{animation:none}}
 </style>
 </head>
@@ -48,6 +60,7 @@ def create_app() -> Flask:
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; style-src 'unsafe-inline'; "
+            "font-src 'self'; "
             "img-src data:; base-uri 'none'; form-action 'none'; "
             "frame-ancestors 'none'"
         )
@@ -59,6 +72,13 @@ def create_app() -> Flask:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         return response
+
+    @app.get("/assets/<name>")
+    def font_asset(name: str):
+        filename = _FONT_FILES.get(name)
+        if filename is None:
+            abort(404)
+        return send_from_directory(_FONT_DIR, filename, mimetype="font/woff2")
 
     @app.route("/", defaults={"_path": ""})
     @app.route("/<path:_path>")
