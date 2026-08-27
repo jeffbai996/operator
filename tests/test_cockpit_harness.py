@@ -762,6 +762,18 @@ def test_manual_mode_waits_for_server_takeover_boundary(browser, harness):
                              timeout=3000, polling=50)
         assert pg.locator("#op").get_attribute("data-mode") == "auto"
         assert state["takeovers"] == 1
+        pg.wait_for_function(
+            "parseFloat(getComputedStyle(document.getElementById('op-mode'), '::after').opacity) > .9",
+            timeout=1000, polling=25)
+        pending_visual = pg.locator("#op-mode").evaluate("""el => {
+          const label = el.querySelector('[data-mode="man"]');
+          const queue = getComputedStyle(el, '::after');
+          return {labelAnimation: getComputedStyle(label).animationName,
+            queueOpacity: queue.opacity, queueAnimation: queue.animationName};
+        }""")
+        assert pending_visual["labelAnimation"] == "none", pending_visual
+        assert float(pending_visual["queueOpacity"]) > 0.9, pending_visual
+        assert pending_visual["queueAnimation"] == "op-mode-takeover-sweep", pending_visual
 
         state["value"] = "interrupted"
         pg.wait_for_function("document.getElementById('op').dataset.mode === 'man'",

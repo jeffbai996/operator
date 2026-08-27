@@ -1018,19 +1018,13 @@ details summary::-webkit-details-marker { color: var(--muted); }
   /* The table forced its own min-width via fixed cell widths; release it so the
      remaining columns (id + text) reflow to the viewport instead of scrolling. */
   table { table-layout: auto !important; }
-
-  .deep-head { flex-wrap: wrap; gap: 0.6rem; }
-  .deep-head .result-count { flex: 1 1 100%; }
-
-  .deep-head .btn-primary { flex: 1 1 100%; white-space: nowrap; text-align: center; }
 }
 
 /* ─── Dark form controls for script-built panels ──────────────────────────
    Inputs created in JavaScript never land inside form.filters, so they miss
    the themed styling and render as browser-default WHITE bars on a dark page.
-   #deep-search below was the first instance and got a per-ID patch;
-   /inventory/vecgrep was the second, an entire config panel of white boxes.
-   Opt-in by container rather than another per-ID rule, and opt-in rather than
+   /inventory/vecgrep was the first instance, an entire config panel of white
+   boxes. Opt-in by container rather than another per-ID rule, and opt-in rather than
    styling every input on the site, so no existing page changes underneath us.
    Covers the whole family — text, number, select, checkbox, time — because a
    panel that needs one invariably has the rest. */
@@ -1073,17 +1067,6 @@ details summary::-webkit-details-marker { color: var(--muted); }
 .form-dark input[type="checkbox"]:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
-
-
-#deep-search {
-  background: var(--bg-3); color: var(--fg);
-  border: 1px solid var(--border-2); border-radius: var(--radius);
-  padding: 0.5rem 0.85rem; font-family: var(--ui-font); font-size: 0.9rem;
-  box-sizing: border-box;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-#deep-search::placeholder { color: #555c66; font-weight: 400; }
-#deep-search:focus { outline: none; border-color: var(--accent); background: var(--bg-2); }
 
 /* ─── Files explorer (scratch browser) — Finder-style ──────────────────────
    A real GUI filesystem explorer: a left LOCATIONS sidebar (machine→bot→roots)
@@ -2195,102 +2178,6 @@ form[data-delete-confirm] .delete-armed {
 .subtab:not(.active):hover { color: var(--fg); }
 .subtab.active { color: var(--sel-fg); background: var(--sel-bg);
   border-color: var(--sel-border); }
-
-.deep-cat { display: flex; align-items: center; gap: 0.55rem;
-  margin: 1.9rem 0 0.5rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
-.deep-cat::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 3px;
-  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); flex: 0 0 auto; }
-.deep-cat-name { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--fg); font-weight: 700; }
-.deep-cat-count { font-size: 0.7rem; font-weight: 600; color: var(--accent);
-  background: var(--accent-soft); padding: 0.08rem 0.5rem; border-radius: 999px; }
-/* Deep entries sit in a shared .card per category (2026-07-07 interface pass)
-   so the rows read as a grouped surface instead of a floating flat list, in
-   line with the rest of the app. The card owns the padding; rows are edge-to-
-   edge with hairline separators + a full-row hover (not just first-cell). */
-.deep-cat-card { margin-top: 0.5rem; padding: 0.35rem 0.6rem; }
-.deep-table { width: 100%; border-collapse: collapse; }
-.deep-table td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--border);
-  vertical-align: middle; }
-.deep-table tr:last-child td { border-bottom: none; }
-.deep-table tr { transition: background 100ms ease; border-radius: 7px; }
-.deep-table tr:hover td { background: var(--bg-3); }
-/* type pill column — snug to the title (was 6.5rem, leaving a big dead gap). */
-.deep-table .type-col { width: 1%; white-space: nowrap; padding-right: 0.7rem; }
-.deep-table .type-col .pill { font-size: 0.7rem; }
-.deep-table .name-cell a.entry { font-weight: 600; }
-.deep-table .name-cell a.entry:hover { color: var(--fg-2); }
-.deep-title { font-weight: 600; color: var(--fg); }
-.deep-desc { font-size: 0.8rem; margin-top: 0.15rem; line-height: 1.4; color: var(--muted); }
-/* rendered deep .md doc — readable long-form */
-.deep-doc { max-width: 80ch; line-height: 1.6; font-family: var(--reading-font); }
-.deep-doc h1, .deep-doc h2, .deep-doc h3 { margin: 1.2rem 0 0.5rem; }
-.deep-doc code { background: var(--bg-3); padding: 0.1rem 0.3rem; border-radius: 4px;
-  font-family: var(--code-font); font-size: 0.85em; }
-.deep-doc pre { background: var(--bg-2); padding: 0.8rem; border-radius: var(--radius);
-  overflow-x: auto; border: 1px solid var(--bg-3); }
-.deep-doc pre code { background: none; padding: 0; }
-.deep-doc table { border-collapse: collapse; margin: 0.6rem 0; }
-.deep-doc th, .deep-doc td { border: 1px solid var(--bg-3); padding: 0.3rem 0.6rem; }
-.deep-doc blockquote { border-left: 3px solid var(--bg-3); margin: 0.6rem 0; padding-left: 0.8rem; color: var(--muted); }
-.deep-doc a.wikilink { color: var(--accent); text-decoration: none; }
-/* deep CRUD — header actions + new/edit forms */
-.deep-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 1rem; }
-.deep-head-count { margin: 0; }
-.deep-head-path { font-family: var(--code-font); font-size: 0.78rem; }
-.deep-search-input { width: 100%; margin-bottom: 1rem; }
-.deep-undobar-subject { color: var(--fg); }
-.deep-undo-form { margin: 0; }
-.deep-noresults { margin-top: 1rem; }
-.deep-inline-form { display: inline; margin: 0; }
-.deep-file-title { font-size: 1.45rem; font-weight: 600; margin: 0.45rem 0 0.15rem; }
-.deep-file-desc { margin: 0 0 0.4rem; max-width: 74ch; font-size: 0.93rem;
-                  line-height: 1.5; color: var(--fg-2, var(--fg)); }
-.deep-file-meta { margin: 0.1rem 0 0.7rem; }
-.deep-file-path { font-family: var(--code-font); font-size: 0.82rem; }
-.deep-file-mtime { font-size: 0.8rem; }
-/* new/edit/promote forms share this back-link + heading spacing */
-.deep-back-link { margin: 0 0 0.6rem; }
-.deep-heading-mono { font-family: var(--code-font); font-size: 0.9rem; }
-.deep-promote-hint { font-size: 0.85rem; max-width: 70ch; }
-.deep-file-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0.2rem 0 0.4rem; }
-.deep-file-actions { display: flex; gap: 0.4rem; }
-.deep-del { color: #ff7b72; border-color: rgba(255,123,114,0.32); }
-.deep-del:hover { border-color: rgba(255,123,114,0.6); background: rgba(248,81,73,0.10); }
-.deep-form { display: flex; flex-direction: column; gap: 0.9rem; max-width: 80ch; }
-.deep-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.82rem; color: var(--muted); }
-.deep-form input, .deep-form textarea, .deep-form select { background: var(--bg-2); border: 1px solid var(--bg-3);
-  border-radius: var(--radius); color: var(--fg); padding: 0.5rem 0.6rem; font-size: 0.9rem; width: 100%; }
-.deep-form textarea { font-family: var(--code-font); font-size: 0.82rem; line-height: 1.5; resize: vertical; }
-.deep-form input:focus, .deep-form textarea:focus, .deep-form select:focus { outline: none; border-color: var(--accent); }
-.deep-form-row { display: flex; gap: 0.9rem; }
-.deep-form-row label { flex: 1; }
-/* Two-across form rows crush on phones (long prefilled titles clip) — stack. */
-@media (max-width: 620px) { .deep-form-row { flex-direction: column; } }
-.deep-form-actions { display: flex; gap: 0.6rem; align-items: center; }
-.deep-raw { background: var(--bg-2); border: 1px solid var(--bg-3); border-radius: var(--radius);
-  padding: 0.9rem; overflow-x: auto; white-space: pre-wrap; font-size: 0.82rem; line-height: 1.5; max-width: 80ch; }
-.deep-undobar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  background: var(--bg-2); border: 1px solid var(--bg-3); border-radius: var(--radius);
-  padding: 0.4rem 0.7rem; margin-bottom: 1rem; font-size: 0.82rem; }
-.deep-health { background: rgba(207,122,0,0.12); border: 1px solid rgba(207,122,0,0.35);
-  color: #ffa657; border-radius: var(--radius); padding: 0.6rem 0.85rem; margin-bottom: 1rem; font-size: 0.83rem; }
-
-/* Shared flash banners — theme-aware ok/err/warn message boxes. Replaces the
-   per-page hardcoded dark hexes (context, context_file, archive, promote…)
-   that were unreadable on the light theme. Built on the status tokens so the
-   light theme's darkened --ok/--warn/--bad carry through. */
-.flash { border-radius: var(--radius); padding: 0.6rem 0.85rem;
-         margin-bottom: 1rem; font-size: 0.85rem; border: 1px solid; }
-.flash-ok   { background: color-mix(in srgb, var(--ok) 12%, transparent);
-              border-color: color-mix(in srgb, var(--ok) 38%, transparent);  color: var(--ok); }
-.flash-err  { background: color-mix(in srgb, var(--bad) 12%, transparent);
-              border-color: color-mix(in srgb, var(--bad) 38%, transparent); color: var(--bad); }
-.flash-warn { background: color-mix(in srgb, var(--warn) 12%, transparent);
-              border-color: color-mix(in srgb, var(--warn) 38%, transparent); color: var(--warn); }
-.deep-health code { background: rgba(0,0,0,0.25); }
-.deep-health div { margin-top: 0.3rem; }
-
 /* iPhone-style notification badge on the vecgrep nav link: red circle with a
    count, shown only when there are pending write proposals to confirm. */
 .nav-badge-wrap { position: relative; display: inline-block; }
@@ -2414,7 +2301,7 @@ table.with-pin th.type-col { width: 7rem; }
    inline-flex with a gap, so "+ new" spaces naturally with no wrapper span.
    The bold-enlarged glyph looked inconsistent; plain "+ new" is cleaner.) */
 
-/* ── memory_detail / memory_new / memory_archive — inline-style cleanup ──── */
+/* ── memory_detail / memory_new — inline-style cleanup ──────────────────── */
 .detail-id-hash { font-weight: 500; }
 .detail-title-sp { margin-left: 0.4rem; }
 .meta-tight { margin-top: 0.35rem; }
@@ -2746,6 +2633,17 @@ table.with-pin th.type-col { width: 7rem; }
   .op-mode-thumb { position: absolute; top: 0; bottom: 0; left: 0; width: 50%; z-index: 0;
     border-radius: 7px; background: #f0883e;
     transition: transform .32s cubic-bezier(.5,1.25,.4,1), background-color .28s ease; }
+  /* Queued MAN intent sits in the destination half while the real thumb stays
+     on truthful AUTO. A restrained sweep reads as progress without blinking
+     the label or pretending control has already moved. */
+  .op-mode::after { content: ''; position: absolute; z-index: 0; pointer-events: none;
+    top: 1px; bottom: 1px; left: 1px; width: calc(50% - 2px); border-radius: 6px;
+    border: 1px solid rgba(245,160,74,.72);
+    background: linear-gradient(105deg, rgba(245,160,74,.03) 22%,
+      rgba(245,160,74,.26) 50%, rgba(245,160,74,.03) 78%);
+    background-size: 240% 100%; background-position: 180% 0;
+    opacity: 0; transform: scale(.92);
+    transition: opacity .16s ease, transform .24s cubic-bezier(.22,1,.36,1); }
   .op-mode.op-mode-noanim .op-mode-thumb { transition: none; }   /* no slide on restore */
   .op-mode.op-mode-noanim .op-mode-btn { transition: none; }
   .op-mode[data-mode="auto"] .op-mode-thumb { transform: translateX(100%); background: #3fb950; }
@@ -2757,10 +2655,18 @@ table.with-pin th.type-col { width: 7rem; }
   .op-mode[data-mode="man"] .op-mode-btn[data-mode="man"] { color: #2a1402; }
   .op-mode[data-mode="auto"] .op-mode-btn[data-mode="auto"] { color: #062611; }
   /* MAN requested mid-run: the thumb remains on truthful AUTO while the
-     backend finishes the current action; the destination label queues softly. */
+     backend finishes the current action; the destination gets a quiet sweep. */
   .op-mode[data-pending="man"] .op-mode-btn[data-mode="man"] {
-    color: #f5a04a; animation: op-mode-pending 1s ease-in-out infinite alternate; }
-  @keyframes op-mode-pending { to { opacity: .58; } }
+    color: #f5a04a; }
+  .op-mode[data-pending="man"]::after { opacity: 1; transform: scale(1);
+    animation: op-mode-takeover-sweep 1.15s linear infinite; }
+  @keyframes op-mode-takeover-sweep {
+    from { opacity: 1; background-position: 180% 0; }
+    to { opacity: 1; background-position: -80% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .op-mode[data-pending="man"]::after { animation: none; background-position: 50% 0; }
+  }
   .op-mode-btn { text-indent: 2.5px; }   /* nudge MAN/AUTO labels right (text only) */   /* labels centered, no rightward shove */
   .op-mode-btn:hover { background: transparent; }   /* kill the global button:hover gray pill */
   .op-mode-btn:not(.active):hover { color: var(--fg-2); background: transparent; }
@@ -6134,7 +6040,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1180"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1181"></script>
 
 </body>
 </html>

@@ -216,6 +216,31 @@ def test_manual_takeover_timeout_stops_a_stuck_tool(runner, monkeypatch):
     assert runner._takeover_requested is False
 
 
+def test_gemini_manual_takeover_uses_shorter_fallback(runner, monkeypatch):
+    """Agy has no structured tool-result seam, so its fallback is the whole
+    user-visible wait. Keep MAN responsive instead of inheriting the longer
+    structured-runtime safety window."""
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, _fn):
+            timers.append(delay)
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(OA.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(runner, "is_running", lambda: True)
+    runner._runtime = "agy"
+    runner._tool_active = None
+
+    result = runner.request_takeover()
+
+    assert result == {"ok": True, "pending": True, "timeout_s": 4.0}
+    assert timers == [4.0]
+
+
 def test_run_inner_never_resets_the_cancel_flag():
     """Grep-level guard: _run_inner's per-run reset block must never WRITE
     _cancel_requested — that wipe was the whole B3 bug class. Reading it is
