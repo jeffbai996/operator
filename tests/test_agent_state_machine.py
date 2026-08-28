@@ -318,6 +318,45 @@ def test_stop_kills_real_run_and_leaves_no_orphans(runner, monkeypatch):
     assert runner.start("claude-a", "next")["ok"]
 
 
+def test_stop_kills_group_after_leader_exits_but_descendant_holds_stdout(
+        runner, monkeypatch):
+    """The CLI leader can exit before a child that inherited its stdout pipe.
+    Stop must address the retained process-group id, not ask the dead leader
+    for its group and leave the reader thread plus admission slot wedged."""
+    real_popen = subprocess.Popen
+
+    def fake_popen(cmd, **kw):
+        return real_popen(["bash", "-c", "sleep 30 & exit 0"],
+                          stdout=subprocess.PIPE, text=True,
+                          start_new_session=True)
+
+    monkeypatch.setattr(OA.subprocess, "Popen", fake_popen)
+    assert runner.start("gemma", "leader exits first")["ok"]
+    proc = None
+    try:
+        for _ in range(100):
+            proc = runner._proc
+            if proc is not None and proc.poll() is not None:
+                break
+            time.sleep(0.02)
+        assert proc is not None and proc.poll() is not None
+        assert runner._thread.is_alive(), "fixture did not reproduce blocked stdout"
+
+        assert runner.stop()["ok"]
+        runner._thread.join(timeout=3)
+        assert not runner._thread.is_alive(), "dead leader left runner thread wedged"
+        assert runner.state == "interrupted"
+        assert not runner.is_running()
+    finally:
+        if proc is not None:
+            try:
+                import os
+                import signal
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 # ── 2026-07-12: `alive` must not lie at birth or wrap-up ─────────────────────
 # The client's dead-run watchdog kills any run whose poll reads alive:false
 # past its grace window. is_running() returning False in the PRE-SPAWN window
