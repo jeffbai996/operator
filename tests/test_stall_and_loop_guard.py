@@ -49,11 +49,18 @@ def test_different_args_reset_the_exact_streak(runner):
 # the cursor is no longer proof of progress.
 
 def test_varied_coordinates_still_read_as_flailing(runner):
-    for x in (100, 300, 640, 20):
+    for x in (100, 300, 640, 20, 800, 55):
         runner._note_action("browser_click", {"x": x, "y": 200})
     assert runner._repeat_nudge_pending is True
     warns = [m for m in runner.messages if m["role"] == "notice"]
     assert len(warns) == 1 and "no page snapshot" in warns[0]["text"]
+
+
+def test_four_varied_browser_actions_are_not_yet_a_loop(runner):
+    for x in (100, 300, 640, 20):
+        runner._note_action("browser_click", {"x": x, "y": 200})
+    assert runner._repeat_nudge_pending is False
+    assert runner.messages == []
 
 
 def test_a_snapshot_clears_the_window(runner):
@@ -84,6 +91,16 @@ def test_a_few_clicks_far_apart_are_not_a_loop(runner):
     different places is a form being filled in, not a run going in circles."""
     for x, y in ((10, 10), (500, 480), (1000, 90)):
         runner._note_action("browser_click", {"x": x, "y": y})
+    assert runner._repeat_nudge_pending is False
+    assert runner.messages == []
+
+
+def test_distinct_commands_do_not_trigger_browser_regrounding(runner):
+    """A research chain can legitimately make several different command calls.
+    A browser snapshot cannot re-ground shell work, so the rolling browser-loop
+    heuristic must not fire merely because the tool name is repeated."""
+    for step in range(8):
+        runner._note_action("run_command", {"cmd": f"research-step-{step}"})
     assert runner._repeat_nudge_pending is False
     assert runner.messages == []
 

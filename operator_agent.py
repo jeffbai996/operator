@@ -400,6 +400,11 @@ class AgentRunner:
         self._use_legacy_storage = bool(use_legacy_storage)
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
+        # Popen uses start_new_session=True, so the leader PID is also the
+        # process-group id. Retain it independently: a CLI leader may exit
+        # while a descendant still owns stdout, and getpgid(dead_pid) cannot
+        # recover the group Stop still needs to kill.
+        self._process_group_id: int | None = None
         self._thread: threading.Thread | None = None
         self.bot: str | None = None
         self.task: str | None = None
@@ -877,6 +882,7 @@ class AgentRunner:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
+            self._process_group_id = getattr(self._proc, "pid", None)
             self._gate_pending = False   # §3.3: the follow-up turn is live now
             self._touch()   # B2: spawn is progress — don't inherit a stale heartbeat
             if _boot and _boot_bot:
@@ -978,6 +984,7 @@ class AgentRunner:
             self._agy_mcp_dir = ""
             self.ended_ts = time.time()
             self._proc = None
+            self._process_group_id = None
 
     def _consume(self, line: str) -> None:
         """Parse one stream-json line → push assistant text into messages."""
@@ -1097,8 +1104,9 @@ class AgentRunner:
     # coordinates, with a screenshot between each, so every call resets the
     # streak. A Cathay booking run burned ~25 calls that way and never tripped
     # it. These catch the shape instead of the exact repeat.
-    _WINDOW = 8                  # how many recent tool calls we keep
-    _WINDOW_SAME_TOOL = 4        # >= this many of one tool in the window...
+    _WINDOW = 10                 # how many recent tool calls we keep
+    _WINDOW_MIN = 4              # enough evidence for the near-click branch
+    _WINDOW_SAME_TOOL = 6        # sustained browser action before regrounding
     _NEAR_PX = 30                # ...or clicks landing within this many px
     _WINDOW_NEAR_CLICKS = 3      # >= this many near-identical clicks
 
@@ -1176,13 +1184,19 @@ class AgentRunner:
         self._recent_calls.append((nl, x, y))
         if len(self._recent_calls) > self._WINDOW:
             self._recent_calls.pop(0)
-        if self._repeat_warned or len(self._recent_calls) < self._WINDOW_SAME_TOOL:
+        if self._repeat_warned or len(self._recent_calls) < self._WINDOW_MIN:
             return
 
         reason = ""
         names = [c[0] for c in self._recent_calls]
         top = max(set(names), key=names.count)
-        if names.count(top) >= self._WINDOW_SAME_TOOL:
+        # Same-tool dominance only means "re-ground on the page" for browser
+        # interaction tools. Four different run_command calls during research
+        # are four steps, not a loop, and a browser snapshot cannot help them.
+        browser_action = ("browser" in top and any(
+            verb in top for verb in
+            ("click", "hover", "type", "press", "navigate", "drag", "select")))
+        if browser_action and names.count(top) >= self._WINDOW_SAME_TOOL:
             reason = ("%d× %s in the last %d calls with no page snapshot"
                       % (names.count(top), top or "action", len(self._recent_calls)))
         else:
@@ -1203,7 +1217,7 @@ class AgentRunner:
         self._recent_calls = []
         self.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
             "text": ("⚠️ Going in circles — %s. Take a fresh browser_snapshot "
-                     "and click by element ref instead of coordinates." % reason)})
+                     "and continue from fresh element refs." % reason)})
 
     def _note_token_usage(self, in_tokens) -> None:
         try:
@@ -1645,7 +1659,11 @@ class AgentRunner:
             # of just the leader (the "stop doesn't fully stop" bug). SIGTERM the group,
             # then SIGKILL anything still alive a moment later.
             try:
-                _pgid = os.getpgid(p.pid)
+                # start_new_session=True makes the original leader PID the
+                # group id. Do not call getpgid(p.pid): the leader may already
+                # be reaped while a descendant keeps stdout (and this runner
+                # thread) open. The retained id still addresses that group.
+                _pgid = self._process_group_id or p.pid
                 os.killpg(_pgid, _sig.SIGTERM)
                 def _hard_kill(pgid=_pgid):
                     import time as _t
