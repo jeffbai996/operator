@@ -63,6 +63,16 @@ def test_four_varied_browser_actions_are_not_yet_a_loop(runner):
     assert runner.messages == []
 
 
+def test_browser_evaluate_waits_for_the_higher_window_threshold(runner):
+    for step in range(4):
+        runner._note_action("browser_evaluate", {"expression": f"step-{step}"})
+    assert runner._repeat_nudge_pending is False
+
+    for step in range(4, 6):
+        runner._note_action("browser_evaluate", {"expression": f"step-{step}"})
+    assert runner._repeat_nudge_pending is True
+
+
 def test_a_snapshot_clears_the_window(runner):
     """Re-grounding on the DOM is exactly the recovery the nudge asks for, so
     it must not count against the run."""

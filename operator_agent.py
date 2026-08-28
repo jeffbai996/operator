@@ -1195,7 +1195,8 @@ class AgentRunner:
         # are four steps, not a loop, and a browser snapshot cannot help them.
         browser_action = ("browser" in top and any(
             verb in top for verb in
-            ("click", "hover", "type", "press", "navigate", "drag", "select")))
+            ("click", "hover", "type", "press", "navigate", "drag", "select",
+             "evaluate")))
         if browser_action and names.count(top) >= self._WINDOW_SAME_TOOL:
             reason = ("%d× %s in the last %d calls with no page snapshot"
                       % (names.count(top), top or "action", len(self._recent_calls)))
