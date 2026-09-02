@@ -77,8 +77,9 @@ IDLE_STOP_AFTER = 90.0
 # forever on that target and the agent used to start against no usable browser.
 BROWSER_ATTACH_TIMEOUT = 10.0
 BROWSER_READY_TIMEOUT = 12.0
-# F1 adaptive frame tier — ?tier=lo (narrow viewport / Save-Data clients) gets
-# lean frames. Browser lo frames are downscaled PER-CAPTURE via CDP clip+scale
+# F1 adaptive frame tiers — ?tier=lo (narrow viewport) gets lean frames;
+# ?tier=eco (cellular, Save-Data, or measured-slow delivery) cuts again.
+# Browser lean frames are downscaled PER-CAPTURE via CDP clip+scale
 # (never Emulation.setDeviceMetricsOverride, which would resize the SHARED page
 # under the agent) and compressed harder; a Retina tablet otherwise pulls the
 # full device-resolution JPEG every frame. Sandbox lo lowers the ffmpeg rate
@@ -86,6 +87,9 @@ BROWSER_READY_TIMEOUT = 12.0
 TIER_LO_QUALITY = 35
 TIER_LO_MAX_W = 900
 TIER_LO_SANDBOX_FPS, TIER_LO_SANDBOX_Q = 6, 12
+TIER_ECO_QUALITY = 24
+TIER_ECO_MAX_W = 640
+TIER_ECO_SANDBOX_FPS, TIER_ECO_SANDBOX_Q = 4, 16
 MIN_VIEWPORT_W, MIN_VIEWPORT_H = 320, 240
 DESKTOP_LAYOUT_MIN_W = 1280
 DESKTOP_CSS_MIN_W = 1024
@@ -1176,9 +1180,14 @@ class _Streamer:
             # sweep / any page swap can leave the cache bound to a DIFFERENT
             # page, streaming one tab while input targets another (Codex P1).
             sess = await self._cdp_session(page)
-            lo = self.tier == "lo"
+            quality = (TIER_ECO_QUALITY if self.tier == "eco"
+                       else TIER_LO_QUALITY if self.tier == "lo"
+                       else JPEG_QUALITY)
+            max_w = (TIER_ECO_MAX_W if self.tier == "eco"
+                     else TIER_LO_MAX_W if self.tier == "lo"
+                     else 0)
             args = {"format": "jpeg",
-                    "quality": TIER_LO_QUALITY if lo else JPEG_QUALITY}
+                    "quality": quality}
             # FULL-COVERAGE, DEVICE-RES frames (2026-07-12, rev 2). On a Chrome
             # whose device scale ≠ 1 (Windows display scaling — here 1.25),
             # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
@@ -1382,7 +1391,7 @@ class _Streamer:
                 else:
                     _src, _bw, _bh = _dev, _dw, _dh
                 if self._accept_viewport(_cw, _ch) and _bw and _bh:
-                    _scale = min(1.0, TIER_LO_MAX_W / _bw) if lo else 1.0
+                    _scale = min(1.0, max_w / _bw) if max_w else 1.0
                     # clip uses document coordinates, so its origin must follow
                     # the live viewport. At y=0 a scrolled page captures the
                     # offscreen region above it (a giant blank band on Yahoo).
@@ -1413,7 +1422,9 @@ class _Streamer:
                 return await asyncio.wait_for(
                     page.screenshot(
                         type="jpeg",
-                        quality=TIER_LO_QUALITY if self.tier == "lo" else JPEG_QUALITY,
+                        quality=(TIER_ECO_QUALITY if self.tier == "eco"
+                                 else TIER_LO_QUALITY if self.tier == "lo"
+                                 else JPEG_QUALITY),
                         animations="disabled"),
                     timeout=2.5)
             except Exception:
@@ -2935,11 +2946,13 @@ class _DesktopFeed:
     _HEALTH_GRACE_S = 15.0    # never judge a freshly-spawned stream
 
     @classmethod
-    def _stream_decayed(cls, n_frames: int, window_s: float, age_s: float) -> bool:
+    def _stream_decayed(cls, n_frames: int, window_s: float, age_s: float,
+                        min_fps: float | None = None) -> bool:
         """Pure decision: has the stream's delivery rate sagged enough to cycle?"""
         if age_s < cls._HEALTH_GRACE_S or window_s < cls._HEALTH_WINDOW_S:
             return False
-        return (n_frames / window_s) < cls._HEALTH_MIN_FPS
+        floor = cls._HEALTH_MIN_FPS if min_fps is None else min_fps
+        return (n_frames / window_s) < floor
 
     def _stream(self) -> bool:
         """Read the sandbox's long-lived ffmpeg MJPEG pipe until the surface
@@ -2954,7 +2967,9 @@ class _DesktopFeed:
         # change breaks the read loop below so the outer loop respawns with the
         # new params (~0.5s blip, same path as the decay cycle).
         spawn_tier = self.tier
-        fps, q = ((TIER_LO_SANDBOX_FPS, TIER_LO_SANDBOX_Q)
+        fps, q = ((TIER_ECO_SANDBOX_FPS, TIER_ECO_SANDBOX_Q)
+                  if spawn_tier == "eco" else
+                  (TIER_LO_SANDBOX_FPS, TIER_LO_SANDBOX_Q)
                   if spawn_tier == "lo" else (10, 8))
         try:
             proc = sb.open_stream(fps=fps, quality=q)
@@ -2983,7 +2998,9 @@ class _DesktopFeed:
                     self.detail = ""
                 now = time.monotonic()
                 if now - win_t >= self._HEALTH_WINDOW_S:
-                    if self._stream_decayed(win_n, now - win_t, now - born):
+                    health_floor = min(self._HEALTH_MIN_FPS, fps * 0.6)
+                    if self._stream_decayed(
+                            win_n, now - win_t, now - born, health_floor):
                         break   # cycle: finally reaps, outer loop respawns fresh
                     win_t, win_n = now, 0
         finally:
@@ -3083,12 +3100,13 @@ def effective_tier(seen: dict, now: float) -> str:
     live = [t for t, ts in seen.values() if now - ts <= TIER_IDLE_S]
     if not live:
         return "hi"
-    return "hi" if "hi" in live else "lo"
+    return max(live, key={"eco": 0, "lo": 1, "hi": 2}.get)
 
 
 def _apply_feed_tier() -> None:
-    """F1: read ?tier=lo|hi and ?cid off the request and stamp both feeds."""
-    tier = "lo" if request.args.get("tier") == "lo" else "hi"
+    """F1: read ?tier=eco|lo|hi and ?cid, then stamp both feeds."""
+    requested = request.args.get("tier")
+    tier = requested if requested in {"eco", "lo", "hi"} else "hi"
     cid = request.args.get("cid") or "anon"
     now = time.monotonic()
     _TIER_SEEN[cid] = (tier, now)

@@ -4549,6 +4549,7 @@ table.with-pin th.type-col { width: 7rem; }
   .op-lp-input:placeholder-shown { -webkit-user-select: none; user-select: none;
     height: 1.3em !important; }
   .op-lp-input:not(:placeholder-shown) { -webkit-user-select: text; user-select: text; }
+  .op-lp-placeholder { display: none; }
 
   @media (min-width: 821px) {
     .op-lp-input:placeholder-shown { font-size: calc(0.96rem * var(--chat-scale)); }
@@ -4689,6 +4690,14 @@ table.with-pin th.type-col { width: 7rem; }
       .op-lp-input { font-size: 16px !important; width: 142.857%;
         transform: scale(.7); transform-origin: left top;
         margin-bottom: -0.39em; }
+      .op-lp-input::placeholder { color: transparent; opacity: 0; }
+      .op-lp-placeholder { position: absolute; inset: 0 3rem 0 0.92rem;
+        display: none; align-items: center; pointer-events: none;
+        color: var(--muted); opacity: .88;
+        font: 500 calc(0.672rem * var(--chat-scale))/1.14 'DM Sans', var(--chat-font);
+        letter-spacing: -.01em; white-space: nowrap; }
+      .op-lp-composer:has(.op-lp-input:placeholder-shown) .op-lp-placeholder {
+        display: flex; }
     }
   }
   .op-lp-results { width: min(100%, var(--op-lp-w)); display: grid; grid-template-rows: 1fr;
@@ -5848,6 +5857,7 @@ table.with-pin th.type-col { width: 7rem; }
           <div class="op-lp-demonote" id="op-lp-demonote">Live demo — contact the administrator for access.</div>
           <div class="op-lp-composer">
             <textarea id="op-lp-input" class="op-lp-input" rows="1" autocomplete="off" spellcheck="false" placeholder="What can I help you do?"></textarea>
+            <span class="op-lp-placeholder" aria-hidden="true">What can I help you do?</span>
             <button type="button" class="op-lp-send" id="op-lp-send" aria-label="send task" title="send task">
               <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.5 4.5v5a3 3 0 0 1-3 3H5"></path><path d="M8 9.5l-3 3 3 3"></path></svg>
             </button>
@@ -6040,7 +6050,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1181"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1197"></script>
 
 </body>
 </html>

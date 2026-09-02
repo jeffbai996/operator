@@ -953,15 +953,41 @@
   let backoff = 600;
   let _hasFrame = false;
   const PUMP_MS = 90;
+  const PUMP_ECO_MS = 220;
   const _sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
-  // F1: lean frames on small screens / metered connections — tier=lo makes the
-  // server downscale + compress harder (a full-res frame per pump tick rips
-  // through mobile data). Read per fetch so rotation/Save-Data flips adapt live.
+  // F1: narrow screens use `lo`; explicit metering and observed constrained
+  // throughput use `eco`. Chromium/Android can expose connection.type,
+  // effectiveType, and Save-Data. Safari exposes none of them, so three slow
+  // response-body transfers trip the same tier. Hysteresis keeps a briefly
+  // stalled frame from flapping quality on every pull.
   const _mqNarrow = matchMedia('(max-width: 820px)');
+  let _adaptiveEco = false, _slowBodies = 0, _fastBodies = 0;
+  function _meteredConnection(c) {
+    return !!(c && (c.saveData || c.type === 'cellular' ||
+      /(^|\b)(slow-)?2g|3g\b/.test(c.effectiveType || '')));
+  }
   function _feedTier() {
     const c = navigator.connection || {};
-    return (_mqNarrow.matches || c.saveData ||
-            /(^|\b)(slow-)?2g|3g\b/.test(c.effectiveType || '')) ? 'lo' : 'hi';
+    const tier = (_meteredConnection(c) || _adaptiveEco) ? 'eco' :
+      (_mqNarrow.matches ? 'lo' : 'hi');
+    op.dataset.feedTier = tier;
+    return tier;
+  }
+  function _observeFrameBody(bytes, elapsedMs, placeholder) {
+    if (placeholder || !bytes || !Number.isFinite(elapsedMs)) return;
+    const bps = bytes / (Math.max(elapsedMs, 0.5) / 1000);
+    const slow = elapsedMs >= 80 && bps < 300000;
+    const fast = elapsedMs <= 25 || bps >= 750000;
+    if (slow) {
+      _slowBodies += 1; _fastBodies = 0;
+      if (_slowBodies >= 3) _adaptiveEco = true;
+    } else if (fast) {
+      _fastBodies += 1; _slowBodies = 0;
+      if (_adaptiveEco && _fastBodies >= 12) _adaptiveEco = false;
+    } else {
+      _slowBodies = Math.max(0, _slowBodies - 1);
+      _fastBodies = Math.max(0, _fastBodies - 1);
+    }
   }
   let _pumpOn = false, _prevBlobUrl = null, _pumpFails = 0, _frameId = '';
   // true while the frame on stage is the server's PLACEHOLDER (dark filler the
@@ -976,7 +1002,8 @@
     while (true) {
       if (document.visibilityState !== 'visible') { await _sleepMs(350); continue; }
       try {
-        let frameUrl = FRAME + "?t=" + Date.now() + "&tier=" + _feedTier() +
+        const requestedTier = _feedTier();
+        let frameUrl = FRAME + "?t=" + Date.now() + "&tier=" + requestedTier +
           "&cid=" + CID + "&wait=900";
         if (_frameId) frameUrl += "&since=" + encodeURIComponent(_frameId);
         const r = await fetch(frameUrl,
@@ -988,9 +1015,13 @@
           _pumpFails = 0; backoff = 600;
           continue;                         // quiet long-poll heartbeat; no JPEG to decode
         }
+        const isPlaceholder =
+          (r.headers.get('X-Operator-Frame') === 'placeholder');
+        const bodyStarted = performance.now();
         const b = await r.blob();
+        _observeFrameBody(b.size, performance.now() - bodyStarted, isPlaceholder);
         const u = URL.createObjectURL(b);
-        _phFrame = (r.headers.get('X-Operator-Frame') === 'placeholder');
+        _phFrame = isPlaceholder;
         view.src = u;                    // fires 'load' → signalOk (real frames only)
         if (_prevBlobUrl) URL.revokeObjectURL(_prevBlobUrl);
         _prevBlobUrl = u;
@@ -1001,7 +1032,8 @@
         // a narrow screen, idle the feed to ~2.5fps; it snaps back on blur.
         const _typing = _mqNarrow.matches &&
           document.activeElement === document.getElementById('op-input');
-        await _sleepMs(_typing ? 400 : PUMP_MS);
+        await _sleepMs(_typing ? 400 :
+          (_feedTier() === 'eco' ? PUMP_ECO_MS : PUMP_MS));
       } catch (_) {
         _pumpFails++;
         if (_pumpFails === 2) signalLost();   // one blip ≠ lost; two in a row is

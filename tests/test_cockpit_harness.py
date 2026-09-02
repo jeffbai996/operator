@@ -105,6 +105,7 @@ class _Harness:
         self.stop_posts: list = []
         self.dispatch_posts: list = []
         self.run_posts: list = []
+        self.frame_tiers: list[str] = []
         self._steer_pending = 0
         app = Flask(__name__)
         app.config["TESTING"] = True
@@ -154,6 +155,7 @@ class _Harness:
             if self.mode == "real":
                 return None
             if request.path.endswith("/operator/frame"):
+                self.frame_tiers.append(request.args.get("tier", ""))
                 if self.mode == "dead":
                     return Response("down", status=503)
                 resp = Response(self.mod._PLACEHOLDER_JPEG, mimetype="image/jpeg")
@@ -209,6 +211,7 @@ def _fresh_session_store(monkeypatch, harness):
     harness.stop_posts.clear()
     harness.dispatch_posts.clear()
     harness.run_posts.clear()
+    harness.frame_tiers.clear()
     session_path = os.path.join(_HARNESS_STATE_DIR, "session.json")
     # Other test modules reload operator_session against their own tmp paths.
     # Rebind its module-level path here as well as restoring the environment;
@@ -305,6 +308,86 @@ def test_boot_clean_fresh_session(page, harness):
     page.goto(harness.base + "/operator", wait_until="domcontentloaded")
     page.wait_for_timeout(3000)
     assert page._errors == [], f"JS errors on fresh boot: {page._errors}"
+
+
+def _connection_context(browser, *, width=1280, connection=None,
+                        slow_body_ms=0):
+    ctx = browser.new_context(viewport={"width": width, "height": 820})
+    payload = json.dumps([connection or {}, slow_body_ms])
+    ctx.add_init_script("""(() => {
+      const [connection, slowMs] = %s;
+      Object.defineProperty(navigator, 'connection', {
+        configurable: true, value: Object.assign({
+          type: 'wifi', effectiveType: '4g', saveData: false
+        }, connection || {})
+      });
+      window.__opSlowBodyMs = slowMs;
+      if (slowMs) {
+        const nativeBlob = Response.prototype.blob;
+        Response.prototype.blob = async function() {
+          const delay = window.__opSlowBodyMs || 0;
+          if (delay && this.url.includes('/operator/frame'))
+            await new Promise(resolve => setTimeout(resolve, delay));
+          return nativeBlob.call(this);
+        };
+      }
+    })()""" % payload)
+    return ctx
+
+
+@pytest.mark.parametrize("connection", [
+    {"type": "cellular", "effectiveType": "4g"},
+    {"type": "wifi", "effectiveType": "4g", "saveData": True},
+    {"type": "wifi", "effectiveType": "3g"},
+])
+def test_feed_uses_eco_tier_for_metered_connection(browser, harness, connection):
+    harness.mode = "live"
+    ctx = _connection_context(browser, connection=connection)
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'eco'",
+            timeout=5000, polling=50)
+        assert "eco" in harness.frame_tiers
+    finally:
+        ctx.close()
+
+
+def test_narrow_wifi_keeps_the_normal_mobile_tier(browser, harness):
+    harness.mode = "live"
+    ctx = _connection_context(browser, width=390)
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'lo'",
+            timeout=5000, polling=50)
+        assert "lo" in harness.frame_tiers
+    finally:
+        ctx.close()
+
+
+def test_slow_frame_delivery_falls_back_to_eco_and_recovers(browser, harness):
+    harness.mode = "live"
+    ctx = _connection_context(browser, connection={}, slow_body_ms=160)
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'eco'",
+            timeout=8000, polling=50)
+        pg.wait_for_timeout(500)
+        assert harness.frame_tiers.count("hi") >= 3
+        assert "eco" in harness.frame_tiers
+        pg.evaluate("window.__opSlowBodyMs = 0")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'hi'",
+            timeout=8000, polling=50)
+        pg.wait_for_timeout(250)
+        assert harness.frame_tiers[-1] == "hi"
+    finally:
+        ctx.close()
 
 
 def test_boot_clean_seeded_session(browser, harness):
@@ -2172,9 +2255,18 @@ def test_splash_composer_ios_scaled_geometry(browser, harness):
     IOS_DECLS = (
         ".op-lp-composer { display: block !important; overflow: hidden !important;"
         " border-radius: 22px !important; min-height: 0 !important;"
-        " padding: 0.86rem 3rem 0.98rem 0.92rem !important; }"
+        " padding: 0.86rem 3rem 0.86rem 0.92rem !important; }"
         " .op-lp-input { font-size: 16px !important; width: 142.857% !important;"
-        " transform: scale(.7) !important; transform-origin: left top !important; }")
+        " transform: scale(.7) !important; transform-origin: left top !important; }"
+        " .op-lp-input:placeholder-shown { margin-bottom: -0.39em !important; }"
+        " .op-lp-input::placeholder { color: transparent !important; opacity: 0 !important; }"
+        " .op-lp-placeholder { position: absolute !important;"
+        " inset: 0 3rem 0 0.92rem !important; align-items: center !important;"
+        " pointer-events: none !important; }"
+        " .op-lp-composer:has(.op-lp-input:placeholder-shown) .op-lp-placeholder"
+        " { display: flex !important; }"
+        " .op-lp-composer:not(:has(.op-lp-input:placeholder-shown)) .op-lp-placeholder"
+        " { display: none !important; }")
     ctx = browser.new_context(viewport={"width": 1024, "height": 1366})
     ctx.add_init_script(
         "localStorage.setItem('operator-session-v2', "
@@ -2209,6 +2301,16 @@ def test_splash_composer_ios_scaled_geometry(browser, harness):
         # the 3rem send gutter and 0.92rem left pad, ±10px slack)
         assert base["iw"] >= base["cw"] - 75, f"squished input: {base}"
         assert base["clip"], "composer must clip (caret containment)"
+        placeholder_delta = pg.evaluate("""() => {
+          const p = document.querySelector('.op-lp-placeholder');
+          const c = document.querySelector('.op-lp-composer');
+          const range = document.createRange();
+          range.selectNodeContents(p);
+          const pr = range.getBoundingClientRect(), cr = c.getBoundingClientRect();
+          return (pr.top + pr.height / 2) - (cr.top + cr.height / 2);
+        }""")
+        assert abs(placeholder_delta) <= 0.75, \
+            f"placeholder off pill center by {placeholder_delta:.2f}px"
 
         pg.fill("#op-lp-input", "wrapped splash draft " * 15)
         pg.wait_for_timeout(150)
@@ -2233,5 +2335,7 @@ def test_splash_composer_ios_scaled_geometry(browser, harness):
         pg.wait_for_timeout(150)
         shrunk = geo()
         assert shrunk["ch"] <= base["ch"] + 1, f"did not shrink: {shrunk['ch']}"
+        assert pg.locator(".op-lp-placeholder").evaluate(
+            "el => getComputedStyle(el).display") == "none"
     finally:
         ctx.close()
