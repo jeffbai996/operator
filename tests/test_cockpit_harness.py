@@ -368,6 +368,99 @@ def test_narrow_wifi_keeps_the_normal_mobile_tier(browser, harness):
         ctx.close()
 
 
+def test_stream_quality_override_is_visible_persisted_and_beats_network(browser, harness):
+    """The hamburger control is a device preference, not a suggestion.
+
+    A user who pins Sharp on cellular must get hi frames immediately and after
+    reload; returning to Auto must expose the effective eco tier again.
+    """
+    harness.mode = "live"
+    ctx = _connection_context(
+        browser, width=390,
+        connection={"type": "cellular", "effectiveType": "4g"},
+    )
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps(_SEEDED_SESSION)) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'eco'",
+            timeout=5000, polling=50)
+        assert pg.locator("#op-ham-quality").input_value() == "auto"
+        assert pg.locator("#op-ham-quality-effective").inner_text() == "Auto · Eco"
+
+        pg.evaluate("""() => {
+          const op = document.getElementById('op');
+          op.dataset.sheet = 'half'; op.style.setProperty('--sheet-h', '50dvh');
+        }""")
+        pg.wait_for_timeout(350)
+        hit = pg.evaluate("""() => {
+          const b = document.getElementById('op-ham-btn');
+          const r = b.getBoundingClientRect();
+          const el = document.elementFromPoint((r.left + r.right) / 2,
+                                               (r.top + r.bottom) / 2);
+          return {box: [r.left, r.top, r.right, r.bottom],
+                  hit: el && (el.id || el.tagName)};
+        }""")
+        assert hit["hit"] in {"op-ham-btn", "svg", "path"}, hit
+        pg.locator("#op-ham-btn").click()
+        assert pg.locator("#op-ham-quality").is_visible()
+        assert pg.evaluate("""() => {
+          const s = document.getElementById('op-ham-quality');
+          const r = s.getBoundingClientRect();
+          return document.elementFromPoint((r.left + r.right) / 2,
+                                           (r.top + r.bottom) / 2) === s;
+        }"""), "stream quality must be tappable above the mobile sheet"
+        pg.locator("#op-ham-quality").select_option("sharp")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'hi'",
+            timeout=5000, polling=50)
+        assert pg.locator("#op-ham-quality-effective").inner_text() == "Sharp"
+        assert pg.evaluate(
+            "localStorage.getItem('operator-stream-quality-v1')") == "sharp"
+
+        pg.reload(wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'hi'",
+            timeout=5000, polling=50)
+        assert pg.locator("#op-ham-quality").input_value() == "sharp"
+
+        pg.evaluate("""() => {
+          const op = document.getElementById('op');
+          op.dataset.sheet = 'half'; op.style.setProperty('--sheet-h', '50dvh');
+        }""")
+        pg.wait_for_timeout(350)
+        pg.locator("#op-ham-btn").click()
+        assert pg.locator("#op-ham-quality").is_visible()
+        pg.locator("#op-ham-quality").select_option("auto")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'eco'",
+            timeout=5000, polling=50)
+        assert pg.locator("#op-ham-quality-effective").inner_text() == "Auto · Eco"
+    finally:
+        ctx.close()
+
+
+def test_stream_quality_data_saver_pins_eco_on_fast_desktop(browser, harness):
+    harness.mode = "live"
+    ctx = _connection_context(browser, width=1280)
+    ctx.add_init_script(
+        "localStorage.setItem('operator-stream-quality-v1', 'saver')")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op').dataset.feedTier === 'eco'",
+            timeout=5000, polling=50)
+        assert pg.locator("#op-ham-quality").input_value() == "saver"
+        assert pg.locator("#op-ham-quality-effective").inner_text() == "Data Saver"
+        assert "eco" in harness.frame_tiers
+    finally:
+        ctx.close()
+
+
 def test_slow_frame_delivery_falls_back_to_eco_and_recovers(browser, harness):
     harness.mode = "live"
     ctx = _connection_context(browser, connection={}, slow_body_ms=160)

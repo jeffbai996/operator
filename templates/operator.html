@@ -16,7 +16,7 @@
       href="{{ url_for('operator.static', filename='icons/operator-mark.svg') }}?v={{ FAVICON_V }}">
 {% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1197">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1198">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -176,6 +176,18 @@
           <button class="op-ham-item" data-kind="forward"><span>Forward</span><span class="k">→</span></button>
           <button class="op-ham-item" data-kind="reload"><span>Reload</span><span class="k">⌘R</span></button>
           <button class="op-ham-item" data-kind="hard_reload"><span>Hard reload</span><span class="k">⇧⌘R</span></button>
+          <div class="op-ham-sep"></div>
+          <div class="op-ham-quality">
+            <label for="op-ham-quality">
+              <span>Stream quality</span>
+              <span class="op-ham-quality-effective" id="op-ham-quality-effective">Auto</span>
+            </label>
+            <select id="op-ham-quality" aria-label="stream quality">
+              <option value="auto">Auto</option>
+              <option value="saver">Data Saver</option>
+              <option value="sharp">Sharp</option>
+            </select>
+          </div>
           <div class="op-ham-sep"></div>
           <button class="op-ham-item" data-kind="zoom" data-value="in"><span>Zoom in</span><span class="k">⌘+</span></button>
           <button class="op-ham-item" data-kind="zoom" data-value="out"><span>Zoom out</span><span class="k">⌘−</span></button>
@@ -554,5 +566,5 @@
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1197"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1198"></script>
 {% endblock %}

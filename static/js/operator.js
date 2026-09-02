@@ -962,17 +962,46 @@
   // stalled frame from flapping quality on every pull.
   const _mqNarrow = matchMedia('(max-width: 820px)');
   let _adaptiveEco = false, _slowBodies = 0, _fastBodies = 0;
+  const _feedQualityKey = 'operator-stream-quality-v1';
+  const _feedQualitySelect = document.getElementById('op-ham-quality');
+  const _feedQualityEffective = document.getElementById('op-ham-quality-effective');
+  let _feedQualityPref = 'auto';
+  try {
+    const saved = localStorage.getItem(_feedQualityKey);
+    if (saved === 'saver' || saved === 'sharp') _feedQualityPref = saved;
+  } catch {}
+  if (_feedQualitySelect) _feedQualitySelect.value = _feedQualityPref;
   function _meteredConnection(c) {
     return !!(c && (c.saveData || c.type === 'cellular' ||
       /(^|\b)(slow-)?2g|3g\b/.test(c.effectiveType || '')));
   }
+  function _showFeedQuality(tier) {
+    op.dataset.feedQuality = _feedQualityPref;
+    if (!_feedQualityEffective) return;
+    if (_feedQualityPref === 'saver') _feedQualityEffective.textContent = 'Data Saver';
+    else if (_feedQualityPref === 'sharp') _feedQualityEffective.textContent = 'Sharp';
+    else _feedQualityEffective.textContent = 'Auto · ' +
+      (tier === 'eco' ? 'Eco' : tier === 'lo' ? 'Standard' : 'Sharp');
+  }
   function _feedTier() {
     const c = navigator.connection || {};
-    const tier = (_meteredConnection(c) || _adaptiveEco) ? 'eco' :
+    const tier = _feedQualityPref === 'saver' ? 'eco' :
+      _feedQualityPref === 'sharp' ? 'hi' :
+      (_meteredConnection(c) || _adaptiveEco) ? 'eco' :
       (_mqNarrow.matches ? 'lo' : 'hi');
     op.dataset.feedTier = tier;
+    _showFeedQuality(tier);
     return tier;
   }
+  if (_feedQualitySelect) {
+    _feedQualitySelect.addEventListener('change', () => {
+      const next = _feedQualitySelect.value;
+      _feedQualityPref = (next === 'saver' || next === 'sharp') ? next : 'auto';
+      try { localStorage.setItem(_feedQualityKey, _feedQualityPref); } catch {}
+      _feedTier();
+    });
+  }
+  _feedTier();
   function _observeFrameBody(bytes, elapsedMs, placeholder) {
     if (placeholder || !bytes || !Number.isFinite(elapsedMs)) return;
     const bps = bytes / (Math.max(elapsedMs, 0.5) / 1000);
