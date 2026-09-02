@@ -371,8 +371,8 @@ def test_narrow_wifi_keeps_the_normal_mobile_tier(browser, harness):
 def test_stream_quality_override_is_visible_persisted_and_beats_network(browser, harness):
     """The hamburger control is a device preference, not a suggestion.
 
-    A user who pins Sharp on cellular must get hi frames immediately and after
-    reload; returning to Auto must expose the effective eco tier again.
+    A user who pins High on cellular must get hi frames immediately and after
+    reload; returning to Auto must expose the effective Low tier again.
     """
     harness.mode = "live"
     ctx = _connection_context(
@@ -389,7 +389,7 @@ def test_stream_quality_override_is_visible_persisted_and_beats_network(browser,
             "document.getElementById('op').dataset.feedTier === 'eco'",
             timeout=5000, polling=50)
         assert pg.locator("#op-ham-quality").input_value() == "auto"
-        assert pg.locator("#op-ham-quality-effective").inner_text() == "Auto · Eco"
+        assert pg.locator("#op-ham-quality-effective").inner_text() == "Auto · Low"
 
         pg.evaluate("""() => {
           const op = document.getElementById('op');
@@ -413,19 +413,19 @@ def test_stream_quality_override_is_visible_persisted_and_beats_network(browser,
           return document.elementFromPoint((r.left + r.right) / 2,
                                            (r.top + r.bottom) / 2) === s;
         }"""), "stream quality must be tappable above the mobile sheet"
-        pg.locator("#op-ham-quality").select_option("sharp")
+        pg.locator("#op-ham-quality").select_option("high")
         pg.wait_for_function(
             "document.getElementById('op').dataset.feedTier === 'hi'",
             timeout=5000, polling=50)
-        assert pg.locator("#op-ham-quality-effective").inner_text() == "Sharp"
+        assert pg.locator("#op-ham-quality-effective").inner_text() == "High"
         assert pg.evaluate(
-            "localStorage.getItem('operator-stream-quality-v1')") == "sharp"
+            "localStorage.getItem('operator-stream-quality-v1')") == "high"
 
         pg.reload(wait_until="domcontentloaded")
         pg.wait_for_function(
             "document.getElementById('op').dataset.feedTier === 'hi'",
             timeout=5000, polling=50)
-        assert pg.locator("#op-ham-quality").input_value() == "sharp"
+        assert pg.locator("#op-ham-quality").input_value() == "high"
 
         pg.evaluate("""() => {
           const op = document.getElementById('op');
@@ -438,25 +438,53 @@ def test_stream_quality_override_is_visible_persisted_and_beats_network(browser,
         pg.wait_for_function(
             "document.getElementById('op').dataset.feedTier === 'eco'",
             timeout=5000, polling=50)
-        assert pg.locator("#op-ham-quality-effective").inner_text() == "Auto · Eco"
+        assert pg.locator("#op-ham-quality-effective").inner_text() == "Auto · Low"
     finally:
         ctx.close()
 
 
-def test_stream_quality_data_saver_pins_eco_on_fast_desktop(browser, harness):
+@pytest.mark.parametrize(("preference", "tier"), [
+    ("low", "eco"),
+    ("medium", "lo"),
+    ("high", "hi"),
+])
+def test_stream_quality_manual_levels_pin_each_tier(
+        browser, harness, preference, tier):
     harness.mode = "live"
     ctx = _connection_context(browser, width=1280)
     ctx.add_init_script(
-        "localStorage.setItem('operator-stream-quality-v1', 'saver')")
+        f"localStorage.setItem('operator-stream-quality-v1', '{preference}')")
     pg = ctx.new_page()
     try:
         pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
         pg.wait_for_function(
-            "document.getElementById('op').dataset.feedTier === 'eco'",
+            f"document.getElementById('op').dataset.feedTier === '{tier}'",
             timeout=5000, polling=50)
-        assert pg.locator("#op-ham-quality").input_value() == "saver"
-        assert pg.locator("#op-ham-quality-effective").inner_text() == "Data Saver"
-        assert "eco" in harness.frame_tiers
+        assert pg.locator("#op-ham-quality").input_value() == preference
+        assert pg.locator("#op-ham-quality-effective").inner_text() == preference.title()
+        assert tier in harness.frame_tiers
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize(("legacy", "current"), [
+    ("saver", "low"),
+    ("sharp", "high"),
+])
+def test_stream_quality_migrates_legacy_saved_names(browser, harness, legacy, current):
+    harness.mode = "live"
+    ctx = _connection_context(browser, width=1280)
+    ctx.add_init_script(
+        f"localStorage.setItem('operator-stream-quality-v1', '{legacy}')")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            f"document.getElementById('op').dataset.feedQuality === '{current}'",
+            timeout=5000, polling=50)
+        assert pg.locator("#op-ham-quality").input_value() == current
+        assert pg.evaluate(
+            "localStorage.getItem('operator-stream-quality-v1')") == current
     finally:
         ctx.close()
 

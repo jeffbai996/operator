@@ -968,7 +968,11 @@
   let _feedQualityPref = 'auto';
   try {
     const saved = localStorage.getItem(_feedQualityKey);
-    if (saved === 'saver' || saved === 'sharp') _feedQualityPref = saved;
+    const migrated = saved === 'saver' ? 'low' : saved === 'sharp' ? 'high' : saved;
+    if (migrated === 'low' || migrated === 'medium' || migrated === 'high') {
+      _feedQualityPref = migrated;
+      if (migrated !== saved) localStorage.setItem(_feedQualityKey, migrated);
+    }
   } catch {}
   if (_feedQualitySelect) _feedQualitySelect.value = _feedQualityPref;
   function _meteredConnection(c) {
@@ -978,15 +982,15 @@
   function _showFeedQuality(tier) {
     op.dataset.feedQuality = _feedQualityPref;
     if (!_feedQualityEffective) return;
-    if (_feedQualityPref === 'saver') _feedQualityEffective.textContent = 'Data Saver';
-    else if (_feedQualityPref === 'sharp') _feedQualityEffective.textContent = 'Sharp';
-    else _feedQualityEffective.textContent = 'Auto · ' +
-      (tier === 'eco' ? 'Eco' : tier === 'lo' ? 'Standard' : 'Sharp');
+    const level = tier === 'eco' ? 'Low' : tier === 'lo' ? 'Medium' : 'High';
+    _feedQualityEffective.textContent = _feedQualityPref === 'auto'
+      ? 'Auto · ' + level : level;
   }
   function _feedTier() {
     const c = navigator.connection || {};
-    const tier = _feedQualityPref === 'saver' ? 'eco' :
-      _feedQualityPref === 'sharp' ? 'hi' :
+    const tier = _feedQualityPref === 'low' ? 'eco' :
+      _feedQualityPref === 'medium' ? 'lo' :
+      _feedQualityPref === 'high' ? 'hi' :
       (_meteredConnection(c) || _adaptiveEco) ? 'eco' :
       (_mqNarrow.matches ? 'lo' : 'hi');
     op.dataset.feedTier = tier;
@@ -996,7 +1000,8 @@
   if (_feedQualitySelect) {
     _feedQualitySelect.addEventListener('change', () => {
       const next = _feedQualitySelect.value;
-      _feedQualityPref = (next === 'saver' || next === 'sharp') ? next : 'auto';
+      _feedQualityPref = (next === 'low' || next === 'medium' || next === 'high')
+        ? next : 'auto';
       try { localStorage.setItem(_feedQualityKey, _feedQualityPref); } catch {}
       _feedTier();
     });

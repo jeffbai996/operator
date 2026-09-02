@@ -5706,8 +5706,9 @@ table.with-pin th.type-col { width: 7rem; }
             </label>
             <select id="op-ham-quality" aria-label="stream quality">
               <option value="auto">Auto</option>
-              <option value="saver">Data Saver</option>
-              <option value="sharp">Sharp</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
             </select>
           </div>
           <div class="op-ham-sep"></div>
@@ -6075,7 +6076,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1198"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1199"></script>
 
 </body>
 </html>
