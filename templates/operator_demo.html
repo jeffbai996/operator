@@ -3793,7 +3793,7 @@ table.with-pin th.type-col { width: 7rem; }
   .op-ham-menu { position: fixed; z-index: 200;
     background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 11px;
     box-shadow: 0 12px 34px -8px rgba(0,0,0,.7), 0 2px 8px rgba(0,0,0,.35);
-    padding: 5px; min-width: 168px;
+    padding: 5px; min-width: 214px;
     display: flex; flex-direction: column; gap: 1px;
     /* cap to the viewport so a tall menu (high zoom / small screen) scrolls
        inside itself instead of spilling its bottom items off-screen */
@@ -3823,6 +3823,19 @@ table.with-pin th.type-col { width: 7rem; }
   .op-ham-item:hover .k.k-icon { color: var(--fg); }
   .op-ham-item:hover .k { color: var(--fg-2); background: var(--bg-3); }
   .op-ham-sep { height: 1px; background: var(--border); margin: 4px 8px; }
+  .op-ham-quality { display: flex; align-items: center; justify-content: space-between;
+    gap: 0.8rem; padding: 0.34rem 0.6rem; color: var(--fg-2); }
+  .op-ham-quality label { display: grid; gap: 0.18rem; cursor: pointer;
+    font: 500 0.74rem/1 'Plus Jakarta Sans', sans-serif; }
+  .op-ham-quality-effective { color: var(--muted);
+    font: 500 0.56rem/1.2 'JetBrains Mono', monospace; }
+  .op-ham-quality select { min-height: 30px; max-width: 7.4rem; padding: 0.28rem 1.35rem 0.28rem 0.48rem;
+    color: var(--fg); background: var(--bg-4); border: 1px solid var(--border-2);
+    border-radius: 7px; cursor: pointer; color-scheme: dark;
+    font: 600 0.65rem/1.1 'Plus Jakarta Sans', sans-serif; }
+  [data-theme="light"] .op-ham-quality select { color-scheme: light; }
+  .op-ham-quality select:focus-visible { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 
   /* tabs — modern, compact, hidden until toggled */
   .op-tabs[hidden] { display: none; }
@@ -5686,6 +5699,18 @@ table.with-pin th.type-col { width: 7rem; }
           <button class="op-ham-item" data-kind="reload"><span>Reload</span><span class="k">⌘R</span></button>
           <button class="op-ham-item" data-kind="hard_reload"><span>Hard reload</span><span class="k">⇧⌘R</span></button>
           <div class="op-ham-sep"></div>
+          <div class="op-ham-quality">
+            <label for="op-ham-quality">
+              <span>Stream quality</span>
+              <span class="op-ham-quality-effective" id="op-ham-quality-effective">Auto</span>
+            </label>
+            <select id="op-ham-quality" aria-label="stream quality">
+              <option value="auto">Auto</option>
+              <option value="saver">Data Saver</option>
+              <option value="sharp">Sharp</option>
+            </select>
+          </div>
+          <div class="op-ham-sep"></div>
           <button class="op-ham-item" data-kind="zoom" data-value="in"><span>Zoom in</span><span class="k">⌘+</span></button>
           <button class="op-ham-item" data-kind="zoom" data-value="out"><span>Zoom out</span><span class="k">⌘−</span></button>
           <button class="op-ham-item" data-kind="zoom" data-value="reset"><span>Reset zoom</span><span class="k">⌘0</span></button>
@@ -6050,7 +6075,7 @@ table.with-pin th.type-col { width: 7rem; }
     tasks: "{{ url_for('operator.operator_tasks') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1197"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1198"></script>
 
 </body>
 </html>
