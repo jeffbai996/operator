@@ -2491,6 +2491,7 @@
   .op-lp-input:placeholder-shown { -webkit-user-select: none; user-select: none;
     height: 1.3em !important; }
   .op-lp-input:not(:placeholder-shown) { -webkit-user-select: text; user-select: text; }
+  .op-lp-placeholder { display: none; }
   /* DESKTOP, and the third try at this (2026-07-30). Raising ::placeholder
      font-size alone is a NO-OP by construction: the clamp above is 1.3em of
      the INPUT's 0.84rem font — an 18.3px box — and 0.96x1.14 already filled it
@@ -2694,6 +2695,19 @@
       .op-lp-input { font-size: 16px !important; width: 142.857%;
         transform: scale(.7); transform-origin: left top;
         margin-bottom: -0.39em; }
+      /* Safari lays out ::placeholder inside the transformed textarea using
+         its own baseline metrics. The textarea can be mathematically centered
+         while the visible placeholder still rides low. Keep the native
+         placeholder for semantics, make only its paint transparent, and let a
+         non-interactive sibling use the pill itself as the alignment box. */
+      .op-lp-input::placeholder { color: transparent; opacity: 0; }
+      .op-lp-placeholder { position: absolute; inset: 0 3rem 0 0.92rem;
+        display: none; align-items: center; pointer-events: none;
+        color: var(--muted); opacity: .88;
+        font: 500 calc(0.672rem * var(--chat-scale))/1.14 'DM Sans', var(--chat-font);
+        letter-spacing: -.01em; white-space: nowrap; }
+      .op-lp-composer:has(.op-lp-input:placeholder-shown) .op-lp-placeholder {
+        display: flex; }
     }
   }
   .op-lp-results { width: min(100%, var(--op-lp-w)); display: grid; grid-template-rows: 1fr;

@@ -1,7 +1,8 @@
 """1.0.8 F1/F2 — adaptive frame tier + eager post-action frames.
 
-F1: a ?tier=lo client (narrow viewport / Save-Data) gets downscaled,
-harder-compressed browser frames and a lower-rate sandbox stream. The
+F1: a ?tier=lo client (narrow viewport) gets downscaled and compressed;
+?tier=eco (cellular / Save-Data / measured-slow clients) goes smaller and
+slower again. The
 byte-ratio test against a real headless Chromium is the load-bearing proof
 of the bandwidth win; the fake-session tests pin the CDP capture params.
 
@@ -174,6 +175,14 @@ def test_grab_lo_downscales_and_compresses_harder():
     assert clip["scale"] == pytest.approx(OV.TIER_LO_MAX_W / (1400 * 1.1))
 
 
+def test_grab_eco_is_smaller_and_more_compressed_than_lo():
+    _, shot = _grab_with("eco", vw=1400, vh=900)
+    assert shot["quality"] == OV.TIER_ECO_QUALITY < OV.TIER_LO_QUALITY
+    clip = shot["clip"]
+    assert clip["scale"] == pytest.approx(OV.TIER_ECO_MAX_W / (1400 * 1.1))
+    assert OV.TIER_ECO_MAX_W < OV.TIER_LO_MAX_W
+
+
 def test_grab_skips_clip_when_metrics_unavailable():
     _, shot = _grab_with("lo", vw=0, vh=0, metrics=None)
     assert shot["quality"] == OV.TIER_LO_QUALITY
@@ -245,6 +254,36 @@ def test_lo_tier_frame_is_materially_smaller_than_hi():
         f"lo tier not materially smaller: hi={len(hi)}B lo={len(lo)}B"
 
 
+@pytest.mark.skipif(not _HAS_PLAYWRIGHT,
+                    reason="needs Playwright + its managed Chromium; run under "
+                           "the host-app venv")
+def test_eco_tier_frame_is_materially_smaller_than_lo():
+    from playwright.async_api import async_playwright
+
+    async def run():
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=["--disable-gpu", "--disable-software-rasterizer"])
+            page = await browser.new_page(
+                viewport={"width": 1400, "height": 900}, device_scale_factor=2)
+            await page.set_content(_BUSY_HTML)
+            st = OV._Streamer()
+            st.view_w, st.view_h = 1400, 900
+            st.vw, st.vh = 1400, 900
+            st.tier = "lo"
+            lo = await st._grab(page)
+            st.tier = "eco"
+            eco = await st._grab(page)
+            await browser.close()
+            return lo, eco
+
+    lo, eco = asyncio.run(run())
+    assert lo and eco and lo[:2] == b"\xff\xd8" and eco[:2] == b"\xff\xd8"
+    assert len(eco) < len(lo) * 0.75, \
+        f"eco tier not materially smaller: lo={len(lo)}B eco={len(eco)}B"
+
+
 # ── F1: routes propagate the tier to both feed sources ───────────────────────
 
 @pytest.fixture
@@ -262,7 +301,8 @@ def app(monkeypatch):
     ("/operator/stream", "operator_stream"),
 ])
 @pytest.mark.parametrize("qs,expect", [
-    ("?tier=lo", "lo"), ("?tier=hi", "hi"), ("?tier=bogus", "hi"), ("", "hi"),
+    ("?tier=eco", "eco"), ("?tier=lo", "lo"), ("?tier=hi", "hi"),
+    ("?tier=bogus", "hi"), ("", "hi"),
 ])
 def test_feed_routes_set_tier_on_both_sources(app, route, fn, qs, expect):
     OV._streamer.tier = "x"          # sentinel: the route must overwrite it
@@ -319,6 +359,21 @@ def test_sandbox_stream_spawns_with_lo_tier_params():
     assert feed._stream() is True
     assert sb.opened == [(OV.TIER_LO_SANDBOX_FPS, OV.TIER_LO_SANDBOX_Q)]
     assert sb.stopped == 1
+
+
+def test_sandbox_stream_spawns_with_eco_tier_params():
+    sb = _FakeSandbox([])
+    feed = _fresh_feed(sb)
+    feed.tier = "eco"
+    assert feed._stream() is True
+    assert sb.opened == [(OV.TIER_ECO_SANDBOX_FPS, OV.TIER_ECO_SANDBOX_Q)]
+    assert sb.stopped == 1
+
+
+def test_eco_sandbox_health_floor_tracks_its_lower_configured_rate():
+    feed = OV._DesktopFeed
+    assert feed._stream_decayed(15, 5.0, 60.0, min_fps=2.4) is False
+    assert feed._stream_decayed(8, 5.0, 60.0, min_fps=2.4) is True
 
 
 def test_sandbox_stream_spawns_with_hi_tier_defaults():
@@ -542,6 +597,16 @@ def test_desktop_steer_pokes_the_feed(monkeypatch):
 def test_a_lone_lo_viewer_still_gets_lean_frames():
     seen = {"ipad": ("lo", 100.0)}
     assert OV.effective_tier(seen, 100.5) == "lo"
+
+
+def test_a_lone_eco_viewer_gets_the_smallest_frames():
+    seen = {"phone": ("eco", 100.0)}
+    assert OV.effective_tier(seen, 100.5) == "eco"
+
+
+def test_a_lo_viewer_prevents_an_eco_viewer_downsizing_the_shared_feed():
+    seen = {"phone": ("eco", 100.0), "tablet": ("lo", 100.1)}
+    assert OV.effective_tier(seen, 100.2) == "lo"
 
 
 def test_a_hi_viewer_stops_a_lo_viewer_downgrading_the_stream():
