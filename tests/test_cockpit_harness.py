@@ -565,12 +565,12 @@ def test_gpt_picker_offers_supported_reasoning_ladders(page, harness):
         }
         return out;
     }""")
-    ladder_56 = ["none", "low", "medium", "high", "xhigh", "max"]
+    delegated = ["low", "medium", "high", "xhigh", "max", "ultra"]
     assert observed == {
-        "gpt-6-astra": ["low", "medium", "high", "xhigh", "max", "ultra"],
-        "gpt-5.6-sol": ladder_56,
-        "gpt-5.6-terra": ladder_56,
-        "gpt-5.6-luna": ladder_56,
+        "gpt-6-astra": delegated,
+        "gpt-5.6-sol": delegated,
+        "gpt-5.6-terra": delegated,
+        "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
     }
     assert page.locator('#op-model option[value="gpt-5.5"]').count() == 0
 
