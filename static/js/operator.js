@@ -3811,13 +3811,12 @@
     "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],   // claude-a-only roster entry
 
     haiku:  [],   // Haiku 4.5 has no effort support
-    // GPT-5.6: Sol, Terra, and Luna all accept the same six reasoning
-    // settings. Keep this in sync with the actual Codex runtime: old picker
-    // values such as "minimal" and "ultra" are not valid effort settings.
+    // Keep these in sync with the actual Codex runtime. Astra exposes ultra,
+    // which enables automatic subagent delegation; the 5.6 family does not.
+    "gpt-6-astra":   ["low", "medium", "high", "xhigh", "max", "ultra"],
     "gpt-5.6-sol":   ["none", "low", "medium", "high", "xhigh", "max"],
     "gpt-5.6-terra": ["none", "low", "medium", "high", "xhigh", "max"],
     "gpt-5.6-luna":  ["none", "low", "medium", "high", "xhigh", "max"],
-    "gpt-5.5": ["none", "low", "medium", "high", "xhigh"],
     // gemma/agy: pick the Gemini family in the model picker, the tier in the effort
     // picker; start() passes the slug as --model and the tier as --effort (agy
     // stopped accepting the folded "Gemini X (Tier)" form, 2026-07-24).

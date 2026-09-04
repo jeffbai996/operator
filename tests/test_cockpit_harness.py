@@ -557,8 +557,8 @@ def test_gpt_picker_offers_supported_reasoning_ladders(page, harness):
         const model = document.getElementById('op-model');
         const effort = document.getElementById('op-effort');
         const out = {};
-        for (const name of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-                            'gpt-5.5']) {
+        for (const name of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra',
+                            'gpt-5.6-luna']) {
           model.value = name;
           model.dispatchEvent(new Event('change'));
           out[name] = Array.from(effort.options, option => option.value);
@@ -567,11 +567,12 @@ def test_gpt_picker_offers_supported_reasoning_ladders(page, harness):
     }""")
     ladder_56 = ["none", "low", "medium", "high", "xhigh", "max"]
     assert observed == {
+        "gpt-6-astra": ["low", "medium", "high", "xhigh", "max", "ultra"],
         "gpt-5.6-sol": ladder_56,
         "gpt-5.6-terra": ladder_56,
         "gpt-5.6-luna": ladder_56,
-        "gpt-5.5": ["none", "low", "medium", "high", "xhigh"],
     }
+    assert page.locator('#op-model option[value="gpt-5.5"]').count() == 0
 
 
 def test_stale_default_model_response_cannot_overwrite_new_driver(page, harness):
