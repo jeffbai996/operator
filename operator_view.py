@@ -4500,15 +4500,14 @@ OPERATOR_MODELS = [
 OPERATOR_MODELS_CLAUDE_A = [
     {"value": "claude-fable-5", "label": "Fable 5"},
 ] + OPERATOR_MODELS
-# codex/gpt models (default gpt-5.6-sol low per the owner). The 5.6 family ships three
-# capability tiers (Sol flagship / Terra balanced / Luna fast) — each a distinct
-# -m id with its OWN effort ladder (see EFFORT_BY_MODEL in operator.html):
-# Sol adds max+ultra, Luna caps at minimal/low. Effort is the separate picker.
+# codex/gpt models (default gpt-5.6-sol low per the owner). Astra is the top
+# subscription tier; the 5.6 family remains as Sol / Terra / Luna. Each model
+# has its own effort ladder in EFFORT_BY_MODEL.
 OPERATOR_MODELS_GPT = [
+    {"value": "gpt-6-astra", "label": "GPT-6 Astra"},
     {"value": "gpt-5.6-sol", "label": "GPT-5.6 Sol"},
     {"value": "gpt-5.6-terra", "label": "GPT-5.6 Terra"},
     {"value": "gpt-5.6-luna", "label": "GPT-5.6 Luna"},
-    {"value": "gpt-5.5", "label": "GPT-5.5"},
 ]
 # gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner's
 # flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
