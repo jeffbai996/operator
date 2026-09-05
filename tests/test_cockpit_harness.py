@@ -192,8 +192,11 @@ def harness():
 def browser():
     with pw_sync.sync_playwright() as p:
         try:
-            b = p.chromium.launch(headless=True)
+            b = p.chromium.launch(headless=True,
+                executable_path=os.environ.get("OPERATOR_TEST_CHROMIUM") or None)
         except Exception as e:  # noqa: BLE001
+            if os.environ.get("OPERATOR_REQUIRE_BROWSER") == "1":
+                pytest.fail(f"required headless Chromium unavailable: {e}")
             pytest.skip(f"headless chromium unavailable: {e}")
         yield b
         b.close()
@@ -1782,19 +1785,14 @@ def test_launchpad_composer_grows_and_shrinks_for_multiline_drafts(browser, harn
 
 def test_chat_composer_expands_and_shrinks_for_multiline_drafts(browser, harness):
     """The rail composer fits a useful multiline draft before it starts scrolling."""
-    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
-    ctx.add_init_script(
-        "localStorage.setItem('operator-session-v2', "
-        + json.dumps(json.dumps({"log": "", "mode": "auto",
-                                 "bot": "", "model": "", "effort": ""})) + ");")
+    # The rail composer belongs to a conversation. A blank initial session
+    # remains on the launchpad and does not yet own an editing lease.
+    ctx = _restored_ctx(browser, viewport={"width": 1440, "height": 900})
     pg = ctx.new_page()
     try:
         pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
-        pg.wait_for_selector("#op-lp", state="visible", timeout=8000)
-        pg.wait_for_function(
-            "document.getElementById('op-lp-x')._wired === true",
-            timeout=8000, polling=50)
-        pg.dispatch_event("#op-lp-x", "click")
+        pg.wait_for_selector("#op-lp", state="hidden", timeout=8000)
+        pg.wait_for_function("!document.getElementById('op-input').disabled", timeout=8000)
         pg.fill("#op-input", "one line")
         pg.wait_for_timeout(80)
         baseline = pg.locator("#op-input").bounding_box()["height"]
@@ -2461,5 +2459,67 @@ def test_splash_composer_ios_scaled_geometry(browser, harness):
         assert shrunk["ch"] <= base["ch"] + 1, f"did not shrink: {shrunk['ch']}"
         assert pg.locator(".op-lp-placeholder").evaluate(
             "el => getComputedStyle(el).display") == "none"
+    finally:
+        ctx.close()
+
+
+def test_category_search_checks_examples_beyond_visible_cards(browser, harness):
+    """A category's six-card display cap must not truncate its search domain."""
+    import re
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "static/js/operator.js").read_text()
+    names = re.findall(r"name: '([^']+)'[^\n]+category: 'shopping'", source)
+    assert len(names) > 6
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        _expand_launchpad(pg)
+        pg.locator('.op-lp-cat[data-category="shopping"]').dispatch_event("click")
+        pg.wait_for_timeout(400)
+        visible = set(pg.locator('.op-lp-name').all_text_contents())
+        target = next(name for name in names if name not in visible)
+        pg.locator('#op-lp-search').dispatch_event('click')
+        pg.locator('#op-lp-searchinput').fill(target)
+        pg.wait_for_function("target => [...document.querySelectorAll('.op-lp-name')]"
+                             ".some(el => el.textContent === target)", arg=target, timeout=3000)
+    finally:
+        ctx.close()
+
+
+def test_deferred_viewport_beacon_retries_until_server_applies(browser, harness):
+    """Accepted-but-deferred is pending, not a successfully applied viewport."""
+    import time
+    ctx = _restored_ctx(browser, viewport={"width": 1440, "height": 900})
+    pg = ctx.new_page()
+    requests = []
+    def steer(route):
+        payload = route.request.post_data_json
+        if payload.get("kind") == "stage_size":
+            requests.append(payload)
+            result = {"ok": True, "applied": len(requests) > 1}
+        else:
+            result = {"ok": True}
+        route.fulfill(content_type="application/json", body=json.dumps(result))
+    pg.route("**/operator/steer", steer)
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        deadline = time.monotonic() + 5
+        while len(requests) < 2 and time.monotonic() < deadline:
+            pg.wait_for_timeout(50)
+        assert len(requests) >= 2, "deferred beacon was never retried"
+        # Bootstrap can settle the stage between sends. The retry must carry
+        # its latest desired dimensions, not stale initial fullscreen bounds.
+        expected = pg.locator("#op-stage").evaluate(
+            "el => {const r=el.getBoundingClientRect();return Math.round(r.width)+'x'+Math.round(r.height)}")
+        assert requests[-1]["value"] == expected
+        assert requests[-1]["force"] is True
+        settled = len(requests)
+        pg.wait_for_timeout(1800)
+        assert len(requests) == settled, "applied viewport should stop retrying"
     finally:
         ctx.close()
