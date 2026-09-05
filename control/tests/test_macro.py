@@ -284,3 +284,29 @@ def test_frame_change_frac_bad_region_returns_none():
     from macro import frame_change_frac
     a = np.zeros((40, 40, 3), dtype=np.uint8)
     assert frame_change_frac(a, a, region=[100, 100, 10, 10]) is None
+
+
+# ── typing into a field that already holds text (the owner 2026-08-31) ────────────
+def test_type_appends_by_default():
+    """Unchanged behaviour: plain type does not touch what is already there."""
+    s = FakeSurface()
+    r = controller(surface=s).run([{"op": "type", "text": "hello"}])
+    assert r["done"] is True
+    assert s.calls == [("type", "hello")]
+
+
+def test_type_with_clear_replaces_the_field():
+    """A retry must not land on the end of whatever failed last time.
+
+    Without this, a run typed its query into a Google box that already held
+    the query plus a half-pasted URL, read the resulting soup back, typed
+    again, and looped until it was stopped by hand.
+    """
+    s = FakeSurface()
+    r = controller(surface=s).run([{"op": "type", "text": "hello", "clear": True}])
+    assert r["done"] is True
+    assert s.calls == [("key", "ctrl+a"), ("key", "Delete"), ("type", "hello")]
+
+
+def test_clear_is_still_a_valid_macro_op():
+    assert M.validate_macro([{"op": "type", "text": "x", "clear": True}]) == []

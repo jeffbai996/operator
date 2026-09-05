@@ -1,0 +1,24 @@
+{
+  "files": {
+    "browse/cdp_metadata.py": "700915a2c79d21d06b4241e7879f3b6217729acf4595d6aee9493b783c1202a6",
+    "browse/chrome-attach.sh": "108b2e7dbd1be0a03f75d0cf523e36d256f2b0b5495ba44f6ace9f9e6a03918c",
+    "control/macro.py": "6ef29e6b46be85f826389d542077869c4fa0a4bb42241b7c63f028594eb101b1",
+    "control/mcp_server.py": "24d14d9a6a8ab198d844c5291abb7b4d625792deb5c7c5376d2380b162cc317c",
+    "control/tests/test_macro.py": "5321422ad7f1abbfb50a59ab90c471ded1116884ec6b7f7cc95b3cf4b64ee832",
+    "operator_view.py": "8d5b5d49518b1388a739bf3f53f5021567d090aea8985bb5587bdfda08c4f112",
+    "static/js/operator.js": "ed6a34f06d7dce2354d2ac42fdfab56373c61c9d6fbd0eaae81f26eda76a4b0e",
+    "tests/test_cdp_metadata.py": "f828043b9f1cd11e6e758be32239619a4b8a0436c6ee28a5f09ddd5d4477a594",
+    "tests/test_cockpit_harness.py": "1739a2f887a584a8e8ac9f7c0bda6cd5d842e0061cc3c10a74082f1909e5bca6",
+    "tests/test_streamer_lifecycle.py": "5513f8759cdc7d7e4affb4d658f835c9fdb61ed08b17fdd3e9d5380832e4b7b2"
+  },
+  "schema_version": 1,
+  "scope": "selected reliability batch; other mirror drift remains",
+  "source_sha": "e590c2f303f03db15a3ca8fcf07c5af09118a52d",
+  "standalone_adaptations": [
+    "browse/chrome-attach.sh",
+    "operator_view.py",
+    "static/js/operator.js",
+    "tests/test_cockpit_harness.py",
+    "tests/test_streamer_lifecycle.py"
+  ]
+}

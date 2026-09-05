@@ -374,13 +374,14 @@
   // ── smart viewport follow: report the stage's CSS size so the server can
   // match the remote viewport to it (frame fills the stage, no letterbox).
   // Server-side gated (demo always, prod via OPERATOR_VIEWPORT_FOLLOW) and
-  // frozen during live runs, so this beacon is fire-and-forget. Only touches
+  // deferred during live runs and retried until applied. Only touches
   // STEER (declared above) — no forward references (TDZ rule). ──
   (() => {
     const st = document.getElementById('op-stage');
     if (!st) return;
     let _t = null, _last = '', _tries = 0, _ownRetries = 0;
     const send = () => {
+      if (document.hidden) return;
       const r = st.getBoundingClientRect();
       const v = Math.round(r.width) + 'x' + Math.round(r.height);
       if (!r.width || !r.height || v === _last) return;
@@ -428,6 +429,11 @@
           if (j.applied === false && j.owned && _ownRetries < 6) {
             _ownRetries++; _last = '';
             clearTimeout(_t); _t = setTimeout(send, 700);
+          } else if (j.applied === false && !j.owned) {
+            // A running agent defers viewport changes. Keep the same desired
+            // size pending until the server actually applies it after the run.
+            _last = '';
+            clearTimeout(_t); _t = setTimeout(send, 1500);
           } else if (j.applied !== false) { _ownRetries = 0; }
         })
         .catch(() => { _last = ''; if (_tries++ < 8) { clearTimeout(_t); _t = setTimeout(send, 1500); } });
@@ -437,9 +443,8 @@
     // own layout — scrollbar toggles, rail animation, a frame swap — beaconed
     // as a "resize", reflowed the remote page, and could shift the layout
     // again: the resize strobe. window.resize (and the explicit rail-drag-end
-    // call via _stageFollow) can't loop — only the user fires them. _last is
-    // set optimistically: a dropped send just waits for the next real resize
-    // instead of re-firing forever.
+    // call via _stageFollow) can't loop — only the user fires them. Applied
+    // sizes are deduplicated; rejected/deferred requests remain pending.
     const queue = () => { clearTimeout(_t); _t = setTimeout(send, 600); };
     window.addEventListener('resize', queue);
     // RE-ENTRY (2026-07-29). Coming back to a cockpit tab that was in the
@@ -2899,22 +2904,25 @@
     // examples-only; 🔍 is always available whenever the launchpad is open.
     function renderGrid(showExamples){
       _lpExamples = showExamples;
-      let source = showExamples ? _pickExamples(exOffset) : window._opTasks;
+      // Filtering owns the full pool; only the rendered result is capped.
+      let source = showExamples
+        ? (searchQ ? _shuffledPool(_LP_EXAMPLE_POOL, exOffset) : _pickExamples(exOffset))
+        : window._opTasks;
       if (activeCat !== 'all') {
         // Category views search the full example pool, not only the current
         // rotation bucket, or a perfectly valid category could appear empty.
         // Examples get the bucket shuffle so ↻ rotates within the category.
         source = showExamples
           ? _shuffledPool(_LP_EXAMPLE_POOL.filter(t => _taskCategory(t) === activeCat),
-                          exOffset).slice(0, _LP_SHOW)
-          : window._opTasks.filter(t => _taskCategory(t) === activeCat).slice(0, _LP_SHOW);
+                          exOffset)
+          : window._opTasks.filter(t => _taskCategory(t) === activeCat);
       }
       let items, filtering = false;
       if (searchQ) {
         filtering = true;
         items = source.filter(t => _taskMatches(t, searchQ)).slice(0, _LP_PAGE);
       } else if (showExamples) {
-        items = source;                                          // examples: _pickExamples already caps at 6
+        items = source.slice(0, _LP_SHOW);
       } else {
         // saved tasks: show one two-row page; auto-cycle pages through the rest.
         const pages = Math.max(1, Math.ceil(source.length / _LP_PAGE));
