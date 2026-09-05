@@ -267,6 +267,14 @@ class MacroController:
             self._emit("Dragging",
                        f"({op['x1']}, {op['y1']}) → ({op['x2']}, {op['y2']})")
         elif kind == "type":
+            # `clear` replaces the field's contents instead of appending to
+            # them. Without it a retry types onto the end of whatever failed
+            # last time: a Google box ended up holding the query three times
+            # over, interleaved with a URL, and the run read that back, typed
+            # again, and looped until it was stopped by hand (2026-08-31).
+            if op.get("clear"):
+                self._surface.key("ctrl+a")
+                self._surface.key("Delete")
             self._surface.type_text(op["text"])
             self._emit("Typing", str(op["text"])[:60])
         elif kind == "key":

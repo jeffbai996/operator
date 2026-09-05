@@ -1,0 +1,10 @@
+{
+  "files": {
+    "control/macro.py": "6ef29e6b46be85f826389d542077869c4fa0a4bb42241b7c63f028594eb101b1",
+    "control/mcp_server.py": "24d14d9a6a8ab198d844c5291abb7b4d625792deb5c7c5376d2380b162cc317c",
+    "control/tests/test_macro.py": "5321422ad7f1abbfb50a59ab90c471ded1116884ec6b7f7cc95b3cf4b64ee832"
+  },
+  "schema_version": 1,
+  "scope": "selected reliability batch; other mirror drift remains",
+  "source_sha": "8084be7211d222bf5116dadfd6f1d8c51647cea0"
+}
