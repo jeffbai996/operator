@@ -8,7 +8,7 @@
     "operator_view.py": "8d5b5d49518b1388a739bf3f53f5021567d090aea8985bb5587bdfda08c4f112",
     "static/js/operator.js": "ed6a34f06d7dce2354d2ac42fdfab56373c61c9d6fbd0eaae81f26eda76a4b0e",
     "tests/test_cdp_metadata.py": "f828043b9f1cd11e6e758be32239619a4b8a0436c6ee28a5f09ddd5d4477a594",
-    "tests/test_cockpit_harness.py": "91f16ca0af4f472e0ab015fbe3b20067343804958d718d48a28fa5845ff4769b",
+    "tests/test_cockpit_harness.py": "1739a2f887a584a8e8ac9f7c0bda6cd5d842e0061cc3c10a74082f1909e5bca6",
     "tests/test_streamer_lifecycle.py": "5513f8759cdc7d7e4affb4d658f835c9fdb61ed08b17fdd3e9d5380832e4b7b2"
   },
   "schema_version": 1,
