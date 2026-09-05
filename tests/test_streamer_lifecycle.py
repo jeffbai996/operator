@@ -1098,3 +1098,17 @@ def test_run_action_ordinary_errors_do_not_force_reattach(streamer, monkeypatch)
     finally:
         loop.call_soon_threadsafe(loop.stop)
         t.join(timeout=2)
+
+
+def test_failed_cdp_session_rebuild_reapplies_viewport_metrics(streamer):
+    ctx = FakeCtx(n_pages=1)
+    page = ctx.pages[0]
+    streamer._page = page
+    streamer._cdp_for = page
+    streamer._cdp = None
+    stale = FakeSess()
+    streamer._metric_sessions[page] = stale
+    rebuilt = asyncio.run(streamer._cdp_session(page))
+    assert rebuilt is ctx.sess and rebuilt is not stale
+    assert any(method == "Emulation.setDeviceMetricsOverride"
+               for method, params in rebuilt.sent)

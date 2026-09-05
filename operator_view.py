@@ -1317,6 +1317,9 @@ class _Streamer:
                                 pass
                             if self._cdp is stale:
                                 self._cdp = None
+                                # Planned repair teardown owns its own retry
+                                # budget; do not classify it as a send failure.
+                                self._cdp_for = None
                         if self._repair_duds >= 3:
                             self._vp_log("repair-dormant",
                                          f"css {_cw:.0f}x{_ch:.0f} persists")
@@ -1943,9 +1946,14 @@ class _Streamer:
             # A send failure clears _cdp but leaves _cdp_for as the identity of
             # the failed target. Evict that one stale persistent session before
             # rebuilding; tab switches keep their already-healthy map entries.
-            if sess is None and bound is p:
+            rebuilding = sess is None and bound is p
+            if rebuilding:
                 self._metric_sessions.pop(p, None)
             sess = await self._metric_session(p)
+            if rebuilding:
+                # Emulation belongs to the old session; the new transport
+                # cannot inherit it merely by targeting the same page.
+                await self._apply_view_metrics(p, sess, force=True)
             self._cdp = sess
             self._cdp_for = p
         return sess
