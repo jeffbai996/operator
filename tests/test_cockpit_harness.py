@@ -1897,7 +1897,7 @@ def test_mobile_launchpad_uses_the_full_screen(browser, harness):
 
 def test_touch_stage_requires_explicit_keyboard_control(browser, harness):
     """A browser tap must steer without summoning iOS's keyboard; typing is explicit."""
-    ctx = browser.new_context(
+    ctx = _restored_ctx(browser,
         viewport={"width": 820, "height": 1180},
         has_touch=True,
         is_mobile=True,
@@ -1916,29 +1916,33 @@ def test_touch_stage_requires_explicit_keyboard_control(browser, harness):
         pg.wait_for_function(
             "document.getElementById('op-view').naturalWidth > 0",
             timeout=8000, polling=50)
-        pg.locator("#op-lp").evaluate("el => { el.hidden = true; }")
+        pg.wait_for_selector("#op-lp", state="hidden", timeout=8000)
         # The harness begins in the transitional idle state, whose connection
         # veil correctly sits above every stage control. This test owns the
         # live-browser interaction contract, so clear that unrelated veil.
         pg.locator("#op-overlay").evaluate("el => { el.style.display = 'none'; }")
-        stage = pg.locator("#op-stage").bounding_box()
-        assert stage is not None
 
         # Chromium can wait indefinitely for a compositor frame while
         # Playwright's touchscreen.tap drives a headless mobile context. Send
         # the same DOM touch sequence directly: this test owns the touch
         # handler/focus contract, not Chromium's input-device transport.
-        pg.evaluate("""([x, y]) => {
-          const el = document.getElementById('op-stage');
-          const touch = new Touch({identifier:1, target:el, clientX:x, clientY:y});
-          el.dispatchEvent(new TouchEvent('touchstart', {
-            bubbles:true, cancelable:true, touches:[touch], targetTouches:[touch],
-            changedTouches:[touch]}));
-          el.dispatchEvent(new TouchEvent('touchend', {
-            bubbles:true, cancelable:true, touches:[], targetTouches:[],
-            changedTouches:[touch]}));
-        }""", [stage["x"] + stage["width"] / 2,
-                 stage["y"] + stage["height"] / 2])
+        # Page restoration and font loading can reflow the stage. Sample its
+        # geometry in the same browser task as the touch, never a prior RPC.
+        with pg.expect_request(lambda req: req.url.endswith('/operator/steer')
+                               and req.method == 'POST'
+                               and req.post_data_json.get('kind') == 'click_at'):
+            pg.evaluate("""() => {
+              const el = document.getElementById('op-stage');
+              const r = el.getBoundingClientRect();
+              const x = r.left + r.width / 2, y = r.top + r.height / 2;
+              const touch = new Touch({identifier:1, target:el, clientX:x, clientY:y});
+              el.dispatchEvent(new TouchEvent('touchstart', {
+                bubbles:true, cancelable:true, touches:[touch], targetTouches:[touch],
+                changedTouches:[touch]}));
+              el.dispatchEvent(new TouchEvent('touchend', {
+                bubbles:true, cancelable:true, touches:[], targetTouches:[],
+                changedTouches:[touch]}));
+            }""")
         # A normal browser tap focuses the non-editable stage for hardware-key
         # handling, but must not focus the hidden textarea and make iOS raise
         # the software keyboard over the page the user just tapped.
