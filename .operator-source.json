@@ -1,10 +1,16 @@
 {
   "files": {
+    "browse/cdp_metadata.py": "700915a2c79d21d06b4241e7879f3b6217729acf4595d6aee9493b783c1202a6",
+    "browse/chrome-attach.sh": "108b2e7dbd1be0a03f75d0cf523e36d256f2b0b5495ba44f6ace9f9e6a03918c",
     "control/macro.py": "6ef29e6b46be85f826389d542077869c4fa0a4bb42241b7c63f028594eb101b1",
     "control/mcp_server.py": "24d14d9a6a8ab198d844c5291abb7b4d625792deb5c7c5376d2380b162cc317c",
-    "control/tests/test_macro.py": "5321422ad7f1abbfb50a59ab90c471ded1116884ec6b7f7cc95b3cf4b64ee832"
+    "control/tests/test_macro.py": "5321422ad7f1abbfb50a59ab90c471ded1116884ec6b7f7cc95b3cf4b64ee832",
+    "tests/test_cdp_metadata.py": "f828043b9f1cd11e6e758be32239619a4b8a0436c6ee28a5f09ddd5d4477a594"
   },
   "schema_version": 1,
   "scope": "selected reliability batch; other mirror drift remains",
-  "source_sha": "8084be7211d222bf5116dadfd6f1d8c51647cea0"
+  "source_sha": "2eeeea1dacd989ce30394e82aaacef7534b18e59",
+  "standalone_adaptations": [
+    "browse/chrome-attach.sh"
+  ]
 }

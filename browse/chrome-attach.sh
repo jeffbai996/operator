@@ -25,9 +25,9 @@ while [ $# -gt 0 ]; do
 done
 mkdir -p "$PROFILE"
 
-# already up? (curl or wget; succeed quietly if the CDP port answers)
-probe() { (command -v curl >/dev/null && curl -sf "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1) \
-       || (command -v wget >/dev/null && wget -qO- "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1); }
+# A generic HTTP 200 is not proof that a usable Chrome is listening.
+probe() { python3 "$(dirname "${BASH_SOURCE[0]}")/cdp_metadata.py" \
+  --url "http://127.0.0.1:${PORT}/json/version"; }
 if probe; then echo "chrome-attach: already running on :${PORT}"; exit 0; fi
 
 # resolve a Chrome/Chromium binary per-OS unless one was given
