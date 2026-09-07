@@ -188,6 +188,21 @@ bounded. The trace is the same event stream the runner consumed.
 
 Standalone: `./start.sh` (or `python app.py`) serves the cockpit at `http://127.0.0.1:5005`. It also still works as a Flask blueprint — register `operator_view.bp` on any host app and serve it behind a reverse proxy / tunnel.
 
+The zero-config standalone listener accepts only direct loopback requests.
+Browser mutations also require a matching `Origin` or `Referer`, which the
+cockpit sends automatically. To bind to a network interface or put the
+standalone app behind a reverse proxy/tunnel, configure a strong token first:
+
+```bash
+export OPERATOR_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python app.py
+```
+
+The browser uses HTTP Basic authentication with username `operator` and the
+token as its password. Non-browser clients may send
+`Authorization: Bearer <token>`. Proxied and non-loopback requests fail closed
+when the token is unset, and a non-loopback `OPERATOR_HOST` refuses to start.
+
 ---
 
 ## Roadmap
