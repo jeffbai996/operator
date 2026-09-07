@@ -774,7 +774,7 @@ class AgentRunner:
         self._runtime = b.get("runtime", "claude")
         self._cur_session = ""
         self._agy_buf = []
-        self._agy_mcp_dir = ""    # set when we wire agy's global MCP; finally strips it
+        self._agy_mcp_dir = ""    # isolated Gemini config for the active agy turn
         self._agy_live_traj = ""  # the run's locked trajectory (live-poll streaming)
         self._peak_in_tokens = 0   # highest single-turn input tokens (context size)
         self._tok_warned = False   # one-shot token-blowout warning per run
@@ -976,11 +976,7 @@ class AgentRunner:
         finally:
             try: _errf.close()
             except Exception: pass
-            # NOTE (2026-06-29, the owner): playwright now lives PERMANENTLY in ~/.gemini —
-            # the anti-archaeology behavioral directive made gemma well-behaved, so she
-            # keeps the browser tool and we DON'T strip it on teardown (the per-run
-            # write/strip dance was racy + caused gemma's "breaks after 1 step"
-            # flakiness). The unused _strip_agy_global_mcp was deleted in 1.0.8.
+            operator_runtimes.cleanup_launch_plan(plan)
             self._agy_mcp_dir = ""
             self.ended_ts = time.time()
             self._proc = None
