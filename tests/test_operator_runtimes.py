@@ -162,45 +162,130 @@ def _agy_cfg(tmp):
     return os.path.join(str(tmp), ".gemini", "config", "mcp_config.json")
 
 
-def test_agy_argv_and_global_mcp_write(fake_home):
+def _agy_plan_cfg(plan):
+    return os.path.join(plan.env["HOME"], ".gemini", "config", "mcp_config.json")
+
+
+def test_agy_argv_and_isolated_mcp_write(fake_home):
     plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
     assert plan.cmd[0] == "/fake/bin" and plan.cmd[1] == "-p"
     assert "--dangerously-skip-permissions" in plan.cmd
     prompt = plan.cmd[2]
     assert prompt.startswith("PERSONA") and prompt.endswith("Task: TASK TEXT")
     assert "ONE STEP AT A TIME" in prompt          # agy stepwise directive folded in
-    servers = json.load(open(_agy_cfg(fake_home)))["mcpServers"]
+    assert plan.env["HOME"] != str(fake_home)
+    servers = json.load(open(_agy_plan_cfg(plan)))["mcpServers"]
     assert "playwright" in servers
     assert "operator-control" not in servers       # browser run wires no desktop tools
     assert plan.agy_brain_dir.endswith("antigravity-cli/brain")
-    assert plan.mcp_config_path == _agy_cfg(fake_home)
+    assert plan.mcp_config_path == _agy_plan_cfg(plan)
+    assert not os.path.exists(_agy_cfg(fake_home))
 
 
 def test_agy_desktop_surface_wires_control_mcp(fake_home):
     plan = RT.build_cmd("agy", _spec(surface="desktop-sandbox",
                                      config_dir=os.path.expanduser("~/.gemini")))
-    servers = json.load(open(_agy_cfg(fake_home)))["mcpServers"]
-    assert "operator-control" in servers
+    servers = json.load(open(_agy_plan_cfg(plan)))["mcpServers"]
+    assert set(servers) == {"playwright", "operator-control"}
 
 
-def test_agy_browser_run_strips_stale_control_entry(fake_home):
+def test_agy_run_retires_legacy_operator_mcps_and_excludes_global_servers(fake_home):
     cfg = _agy_cfg(fake_home)
     os.makedirs(os.path.dirname(cfg), exist_ok=True)
-    json.dump({"mcpServers": {"operator-control": {"command": "x"},
-                              "user-server": {"command": "keep-me"}}}, open(cfg, "w"))
+    original = {"mcpServers": {
+        "playwright": {"command": "bash", "args": ["/old/browse/playwright-mcp.sh", "gemma"]},
+        "operator-control": {"command": "bash", "args": ["/old/control/operator-mcp.sh"]},
+        "user-server": {"command": "keep-me"},
+    }, "unrelatedSetting": True}
+    with open(cfg, "w") as f:
+        json.dump(original, f)
+    cache = fake_home / ".gemini" / "antigravity-cli" / "mcp"
+    (cache / "playwright").mkdir(parents=True)
+    (cache / "operator-control").mkdir()
+    (cache / "user-server").mkdir()
+
+    plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
+
+    isolated = json.load(open(_agy_plan_cfg(plan)))["mcpServers"]
+    assert set(isolated) == {"playwright"}
+    assert json.load(open(cfg)) == {
+        "mcpServers": {"user-server": {"command": "keep-me"}},
+        "unrelatedSetting": True,
+    }
+    assert not (cache / "playwright").exists()
+    assert not (cache / "operator-control").exists()
+    assert (cache / "user-server").is_dir()
+
+
+def test_agy_legacy_retirement_preserves_user_owned_same_name_servers(fake_home):
+    cfg = _agy_cfg(fake_home)
+    os.makedirs(os.path.dirname(cfg), exist_ok=True)
+    original = {"mcpServers": {
+        "playwright": {"command": "custom-playwright"},
+        "operator-control": {"command": "python3", "args": ["control/server.py"]},
+    }}
+    with open(cfg, "w") as f:
+        json.dump(original, f)
+
     RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
-    servers = json.load(open(cfg))["mcpServers"]
-    assert "operator-control" not in servers   # prior desktop run's leftover gone
-    assert servers["user-server"]["command"] == "keep-me"   # others preserved
+
+    assert json.load(open(cfg)) == original
+
+
+def test_agy_isolated_home_preserves_user_home_and_antigravity_state(fake_home):
+    marker = fake_home / "ordinary-user-file"
+    marker.write_text("available")
+    state = fake_home / ".gemini" / "antigravity-cli"
+    conversations = state / "conversations"
+    brain = state / "brain"
+    conversations.mkdir(parents=True)
+    brain.mkdir()
+    (state / "antigravity-oauth-token").write_text("test-token")
+    (conversations / "conv-3.db").write_text("resume-state")
+
+    plan = RT.build_cmd("agy", _spec(resume_id="conv-3",
+                                     config_dir=os.path.expanduser("~/.gemini")))
+
+    run_home = plan.env["HOME"]
+    assert open(os.path.join(run_home, "ordinary-user-file")).read() == "available"
+    run_state = os.path.join(run_home, ".gemini", "antigravity-cli")
+    assert os.path.samefile(os.path.join(run_state, "conversations"), conversations)
+    assert os.path.samefile(os.path.join(run_state, "brain"), brain)
+    assert os.path.samefile(os.path.join(run_state, "antigravity-oauth-token"),
+                            state / "antigravity-oauth-token")
+    assert not os.path.islink(os.path.join(run_state, "mcp"))
+    assert plan.agy_brain_dir == str(brain)
+
+    run_token = os.path.join(run_state, "antigravity-oauth-token")
+    os.unlink(run_token)
+    with open(run_token, "w") as f:
+        f.write("refreshed-test-token")
+    RT.cleanup_launch_plan(plan)
+    assert not os.path.exists(run_home)
+    assert (conversations / "conv-3.db").read_text() == "resume-state"
+    assert (state / "antigravity-oauth-token").read_text() == "refreshed-test-token"
+
+
+def test_concurrent_agy_plans_have_independent_surface_configs(fake_home):
+    browser = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
+    desktop = RT.build_cmd("agy", _spec(surface="desktop-real", real_ok=True,
+                                         config_dir=os.path.expanduser("~/.gemini")))
+
+    assert browser.env["HOME"] != desktop.env["HOME"]
+    browser_servers = json.load(open(_agy_plan_cfg(browser)))["mcpServers"]
+    desktop_servers = json.load(open(_agy_plan_cfg(desktop)))["mcpServers"]
+    assert set(browser_servers) == {"playwright"}
+    assert set(desktop_servers) == {"playwright", "operator-control"}
+    assert not os.path.exists(_agy_cfg(fake_home))
 
 
 def test_agy_cockpit_pins_the_operator_chrome(fake_home):
-    """agy inherits its process env into stdio MCPs without mutating shared config."""
+    """agy pins the cockpit while keeping MCP child home paths functional."""
     plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
     assert plan.env["BROWSE_CHROME_PORT"] == "9222"
     assert plan.env["OPERATOR_REQUIRE_CDP"] == "1"
-    servers = json.load(open(_agy_cfg(fake_home)))["mcpServers"]
-    assert "env" not in servers["playwright"]
+    servers = json.load(open(_agy_plan_cfg(plan)))["mcpServers"]
+    assert servers["playwright"]["env"]["HOME"] == str(fake_home)
 
 
 def test_agy_resume_and_model_flags():
