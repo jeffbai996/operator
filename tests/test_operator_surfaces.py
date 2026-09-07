@@ -358,6 +358,49 @@ def test_xfer_download_error_maps_to_400(live):
     assert r.status_code == 400
 
 
+def test_xfer_download_keeps_name_and_removes_unique_staging_dir(live, tmp_path):
+    c, mod, _ = live
+    rec = _wire_sb(mod)
+    staging = tmp_path / "unique-download"
+    staging.mkdir()
+    downloaded = staging / "report notes.txt"
+    downloaded.write_bytes(b"sandbox result")
+    rec.get_file = lambda rel, out_dir: str(downloaded)
+
+    response = c.get(
+        "/operator/sandbox/file/Downloads/report%20notes.txt",
+        buffered=False,
+    )
+
+    assert response.status_code == 200
+    assert b"".join(response.response) == b"sandbox result"
+    assert "report notes.txt" in response.headers["Content-Disposition"]
+    response.close()
+    assert not staging.exists()
+
+
+@pytest.mark.parametrize("method", ["head", "unread-get"])
+def test_xfer_download_cleans_up_when_body_never_starts(live, tmp_path, method):
+    c, mod, _ = live
+    rec = _wire_sb(mod)
+    staging = tmp_path / method
+    staging.mkdir()
+    downloaded = staging / "report.txt"
+    downloaded.write_bytes(b"sandbox result")
+    rec.get_file = lambda rel, out_dir: str(downloaded)
+
+    if method == "head":
+        response = c.head("/operator/sandbox/file/Downloads/report.txt")
+    else:
+        response = c.get(
+            "/operator/sandbox/file/Downloads/report.txt",
+            buffered=False,
+        )
+    response.close()
+
+    assert not staging.exists()
+
+
 def test_xfer_blocked_in_demo(demo):
     c, mod, _ = demo
     _wire_sb(mod)
