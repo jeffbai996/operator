@@ -1388,34 +1388,99 @@ def test_current_driver_masks_bot_name_in_demo(demo, monkeypatch):
     assert drv["bot"] == "assistant"        # never leak the real squad bot name
 
 
-def test_assistant_text_extracts_from_content_blocks(live):
-    _, mod = live
-    # string content
-    assert mod._assistant_text({"message": {"content": "hi there"}}) == "hi there"
-    # block-list content — only text blocks, joined
-    msg = {"message": {"content": [
-        {"type": "text", "text": "first"},
-        {"type": "tool_use", "name": "x"},
-        {"type": "text", "text": "second"}]}}
-    assert mod._assistant_text(msg) == "first second"
-    # no content → empty
-    assert mod._assistant_text({"message": {}}) == ""
+def test_driver_status_reads_only_the_requested_conversation_runner(
+        live, fake_runner, monkeypatch, tmp_path):
+    client, mod = live
+    leaked = tmp_path / "config" / "projects" / "unrelated" / "session.jsonl"
+    leaked.parent.mkdir(parents=True)
+    leaked.write_text(
+        '{"type":"assistant","timestamp":"2026-09-06T12:00:00+00:00",'
+        '"message":{"content":"unrelated transcript"}}\n',
+        encoding="utf-8",
+    )
+    # The vulnerable implementation reads this stale mapping and, because the
+    # expected cwd has no transcript, falls back to the unrelated project above.
+    monkeypatch.setattr(mod, "_BOT_PROJECT", {
+        "claude-a": (str(tmp_path / "config"), str(tmp_path / "missing-cwd")),
+    }, raising=False)
+
+    def snapshot(since_ts=0.0, conversation_id=None):
+        fake_runner.snapshot_conversation_id = conversation_id
+        return {
+            "bot": "claude-a",
+            "messages": [
+                {"role": "assistant", "text": "matching runner", "ts": 20.0},
+                {"role": "action", "text": "Clicked", "ts": 21.0},
+            ],
+        }
+
+    fake_runner.snapshot = snapshot
+    response = client.get(
+        "/operator/driver-status?bot=claude-a&since=10&conversation_id=conv-a"
+    )
+
+    assert response.status_code == 200
+    assert fake_runner.snapshot_conversation_id == "conv-a"
+    assert response.get_json()["reasoning"] == [
+        {"text": "matching runner", "ts": 20.0},
+    ]
 
 
-def test_iso_epoch_parses_and_defaults_zero(live):
-    _, mod = live
-    assert mod._iso_epoch("2026-07-02T06:15:00+00:00") > 0
-    assert mod._iso_epoch("") == 0.0
-    assert mod._iso_epoch("garbage") == 0.0
-    assert mod._iso_epoch(None) == 0.0
+def test_driver_status_rejects_a_bot_that_does_not_own_the_conversation(
+        live, fake_runner):
+    client, _ = live
+    fake_runner.snapshot = lambda since_ts=0.0, conversation_id=None: {
+        "bot": "claude-a",
+        "messages": [
+            {"role": "assistant", "text": "claude-a only", "ts": 20.0},
+        ],
+    }
+
+    response = client.get(
+        "/operator/driver-status?bot=claude-b&conversation_id=conv-a"
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["reasoning"] == []
 
 
-def test_slug_matches_claude_project_dir_convention(live):
-    _, mod = live
-    # abspath with / . _ all collapsed to '-'
-    s = mod._slug("/home/user/agents/claude-a")
-    assert s == "-home-user-agents-claude-a"
-    assert "_" not in mod._slug("/tmp/a_b/c.d")
+def test_driver_status_defaults_to_the_requested_conversation_bot(
+        live, fake_runner, monkeypatch):
+    client, mod = live
+    monkeypatch.setattr(mod, "_current_driver", lambda: {"bot": "claude-b"})
+    fake_runner.snapshot = lambda since_ts=0.0, conversation_id=None: {
+        "bot": "claude-a",
+        "messages": [
+            {"role": "assistant", "text": "selected conversation", "ts": 20.0},
+        ],
+    }
+
+    response = client.get("/operator/driver-status?conversation_id=conv-a")
+
+    assert response.status_code == 200
+    assert response.get_json()["reasoning"] == [
+        {"text": "selected conversation", "ts": 20.0},
+    ]
+
+
+def test_driver_status_keeps_only_the_recent_assistant_trail(live, fake_runner):
+    client, _ = live
+    fake_runner.snapshot = lambda since_ts=0.0, conversation_id=None: {
+        "bot": "claude-a",
+        "messages": [
+            {"role": "assistant", "text": f"step {i}", "ts": float(i)}
+            for i in range(10)
+        ],
+    }
+
+    response = client.get(
+        "/operator/driver-status?bot=claude-a&conversation_id=conv-a"
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["reasoning"] == [
+        {"text": f"step {i}", "ts": float(i)} for i in range(2, 10)
+    ]
 
 
 def test_shot_route_rejects_traversal_and_bad_ext(live, monkeypatch):
