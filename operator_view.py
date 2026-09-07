@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from flask import (Blueprint, Response, jsonify, render_template, request,
                    send_file, has_request_context)
+from werkzeug.wsgi import ClosingIterator as _ClosingIterator
 import operator_agent  # the headless-claude agent runner (option 1)
 import operator_prefs  # server-side cockpit settings (the landing page)
 import operator_tasks as operator_tasks_store  # saved-task store (#30)
@@ -3952,8 +3953,17 @@ def operator_sandbox_file(rel: str):
         out = sb.get_file(rel, _os.path.join(_SHOT_DIR, "sandbox-out"))
     except Exception as e:  # noqa: BLE001
         return jsonify(ok=False, error=str(e)), 400
-    return send_file(out, as_attachment=True,
-                     download_name=_os.path.basename(out))
+    try:
+        response = send_file(out, as_attachment=True,
+                             download_name=_os.path.basename(out))
+    except Exception:
+        _shutil.rmtree(_os.path.dirname(out), ignore_errors=True)
+        raise
+    response.response = _ClosingIterator(
+        response.response,
+        [lambda: _shutil.rmtree(_os.path.dirname(out), ignore_errors=True)],
+    )
+    return response
 
 
 def _desktop_real_preflight() -> str | None:
