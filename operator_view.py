@@ -4348,115 +4348,38 @@ def operator_agent_reset():
 @bp.route("/operator/driver-status")
 def operator_driver_status():
     """Who's driving + recent bot-action trail (tap log) + the driver's reasoning
-    (transcript tail) newer than the client's  epoch."""
+    newer than the client's epoch."""
     drv = _current_driver()
     try:
         since = float(request.args.get("since", "0") or 0)
     except (TypeError, ValueError):
         since = 0.0
     reasoning = []
-    bot = (request.args.get("bot") or (drv or {}).get("bot") or "").strip()
-    # in demo mode the agent has no squad transcript to tail (and we must not read
-    # any squad bot's transcript) -> the live trace comes from the agent runner only.
-    if bot and not DEMO:
-        reasoning = _tail_reasoning(bot, since)
+    if not DEMO:
+        snapshot = operator_agent.runner.snapshot(
+            since, conversation_id=_conversation_for(request.args))
+        bot = (request.args.get("bot") or snapshot.get("bot")
+               or (drv or {}).get("bot") or "").strip()
+        reasoning = _runner_reasoning(snapshot, bot)
     return jsonify(driver=drv, events=_recent_events(30), reasoning=reasoning)
 
 
-# ── Stage 2: reasoning relay (the owner 2026-06-26) ──────────────────────────────
-# Tail the driving bot's live session transcript JSONL → surface its assistant
-# text (its reasoning/replies) so the operator chat shows thinking, not just
-# clicks. Per-bot transcript dir = <config_dir>/projects/<cwd-slug>/; we take the
-# most-recently-modified .jsonl there (the live session).
-import glob as _glob
-
-# bot → (config_dir, cwd) used to locate its transcript project dir.
-_BOT_PROJECT = {
-    "claude-a":     ("~/.claude",            "~/agents/claude-a"),
-    "claude-c":  ("~/.claude",            "~/agents/claude-c"),
-    "claude-d": ("~/.claude",            "~/agents/claude-d"),
-    "claude-b":      ("~/.config/claude-b",        "~"),
-    "gpt":        (None, None),  # different arch; no claude transcript
-}
-
-
-def _slug(path: str) -> str:
-    """Claude's project-dir slug: the abspath with /._ → -."""
-    ap = _os.path.abspath(_os.path.expanduser(path))
-    return ap.replace("/", "-").replace("_", "-").replace(".", "-")
-
-
-def _transcript_file(bot: str) -> str | None:
-    """Newest .jsonl for this bot's live session, or None."""
-    cfg_cwd = _BOT_PROJECT.get(bot)
-    if not cfg_cwd or not cfg_cwd[0]:
-        return None
-    cfg, cwd = cfg_cwd
-    d = _os.path.join(_os.path.expanduser(cfg), "projects", _slug(cwd))
-    cands = _glob.glob(_os.path.join(d, "*.jsonl"))
-    if not cands:
-        # fallback: newest jsonl anywhere under this config's projects
-        cands = _glob.glob(_os.path.join(_os.path.expanduser(cfg), "projects", "*", "*.jsonl"))
-    if not cands:
-        return None
-    return max(cands, key=lambda f: _os.path.getmtime(f))
-
-
-def _assistant_text(msg: dict) -> str:
-    """Extract plain assistant text from a transcript line's message.content."""
-    m = msg.get("message") or {}
-    content = m.get("content")
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-        return " ".join(p for p in parts if p).strip()
-    return ""
-
-
-def _tail_reasoning(bot: str, since_ts: float, limit: int = 8) -> list:
-    """Return up to `limit` recent assistant messages (text) newer than since_ts,
-    as {text, ts}. Best-effort; never raises."""
-    f = _transcript_file(bot)
-    if not f:
+def _runner_reasoning(snapshot: dict, bot: str, limit: int = 8) -> list:
+    """Return assistant text already attributed to one conversation runner."""
+    if not bot or snapshot.get("bot") != bot:
         return []
     out = []
-    try:
-        # read only the tail for cheapness
-        with open(f, encoding="utf-8") as fh:
-            lines = fh.readlines()[-120:]
-        for ln in lines:
-            try:
-                d = _json.loads(ln)
-            except Exception:
-                continue
-            if d.get("type") != "assistant":
-                continue
-            ts = d.get("timestamp")
-            # timestamp is ISO; convert to epoch for comparison
-            ep = _iso_epoch(ts)
-            if ep <= since_ts:
-                continue
-            txt = _assistant_text(d)
-            if txt:
-                out.append({"text": txt[:400], "ts": ep})
-    except OSError:
-        return []
+    for message in snapshot.get("messages") or []:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        text = message.get("text")
+        timestamp = message.get("ts")
+        if not isinstance(text, str) or not isinstance(timestamp, (int, float)):
+            continue
+        text = text.strip()
+        if text:
+            out.append({"text": text[:400], "ts": timestamp})
     return out[-limit:]
-
-
-def _iso_epoch(ts) -> float:
-    """ISO-8601 string → epoch seconds; 0 on failure."""
-    if not ts:
-        return 0.0
-    try:
-        from datetime import datetime
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return 0.0
 
 
 import subprocess as _sp
