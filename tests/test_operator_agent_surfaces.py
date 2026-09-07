@@ -95,6 +95,32 @@ class _FakeProc:
         return 0
 
 
+@pytest.mark.parametrize("spawn_fails", [False, True])
+def test_agy_run_home_is_cleaned_after_exit_or_spawn_failure(
+        monkeypatch, tmp_path, spawn_fails):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(OA, "_resolve_agy", lambda: "/fake/agy")
+    monkeypatch.setattr(OA, "_squad_boot_context", lambda bot="gemma": "")
+    monkeypatch.setattr(OA.operator_agy, "conversation_ids", lambda: set())
+    runner = OA.AgentRunner()
+    launched = {}
+
+    def fake_popen(cmd, **kw):
+        launched["home"] = kw["env"]["HOME"]
+        assert os.path.isdir(launched["home"])
+        if spawn_fails:
+            raise OSError("launch failed")
+        return _FakeProc()
+
+    monkeypatch.setattr(OA.subprocess, "Popen", fake_popen)
+    assert runner.start("gemma", "hello")["ok"]
+    runner._thread.join(timeout=10)
+
+    assert "home" in launched
+    assert not os.path.exists(launched["home"])
+    assert runner.state == ("error" if spawn_fails else "done")
+
+
 def test_desktop_launch_path_builds_without_raising(monkeypatch, tmp_path):
     """Regression: the pre-spawn section (desktop persona swap, MCP config)
     once died on a .format() KeyError — the mandate text contains literal

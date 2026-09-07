@@ -1,9 +1,9 @@
 """Per-runtime launch adapters for the operator agent (1.0.9 R4).
 
 Each supported runtime (claude / codex / agy) assembles its own argv, folds
-the persona/boot-context into the prompt its own way, and owns its MCP-config
-side effect (claude: a per-run config file; codex: a static config.toml entry;
-agy: the fixed global ~/.gemini mcp_config.json). Everything a builder needs
+the persona/boot-context into the prompt its own way, and owns its MCP config
+(claude: a per-run config file; codex: a static config.toml entry; agy: an
+isolated per-run home). Everything a builder needs
 comes in through RunSpec; everything the runner must know comes back in
 LaunchPlan — no AgentRunner state is touched here.
 """
@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 
 from operator_prompts import AGY_STEPWISE_DIRECTIVE
@@ -67,6 +69,39 @@ class LaunchPlan:
     mcp_config_path: str = ""                 # MCP config this launch wrote
     agy_brain_dir: str = ""                   # agy: trajectory dir to snapshot
     agy_mcp_dir: str = ""                     # agy: config dir the MCP write touched
+    agy_run_home: str = ""                    # agy: isolated HOME removed after launch
+    agy_shared_state: str = ""                # agy: persistent auth/conversation state
+
+
+def cleanup_launch_plan(plan: LaunchPlan) -> None:
+    """Release per-run resources after the subprocess and trace readers stop."""
+    run_home = getattr(plan, "agy_run_home", "")
+    shared_state = getattr(plan, "agy_shared_state", "")
+    # Agy may refresh its root-level OAuth token by atomically replacing the
+    # projected symlink. Preserve that refresh before removing the run home.
+    if run_home and shared_state:
+        run_token = os.path.join(run_home, ".gemini", "antigravity-cli",
+                                 "antigravity-oauth-token")
+        if os.path.isfile(run_token) and not os.path.islink(run_token):
+            tmp = ""
+            try:
+                fd, tmp = tempfile.mkstemp(prefix=".oauth-refresh-",
+                                           dir=shared_state)
+                os.close(fd)
+                shutil.copyfile(run_token, tmp)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, os.path.join(shared_state,
+                                             "antigravity-oauth-token"))
+            except OSError:
+                pass
+            finally:
+                if tmp:
+                    try:
+                        os.unlink(tmp)
+                    except FileNotFoundError:
+                        pass
+    if run_home:
+        shutil.rmtree(run_home, ignore_errors=True)
 
 
 def _ensure_codex_control_mcp(config_dir: str) -> None:
@@ -192,14 +227,117 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     return LaunchPlan(cmd=cmd, env=env)
 
 
+def _prepare_agy_run_home(config_dir: str) -> tuple[str, str, str]:
+    """Create a HOME whose Gemini config belongs only to this Operator run.
+
+    Agy has no per-process MCP-config flag. It resolves the global config from
+    ``$HOME/.gemini/config`` instead, so each run needs a private HOME. Project
+    the user's other home entries and the persistent Antigravity state into it
+    to preserve ordinary paths, authentication, conversations, and trajectories.
+    """
+    real_home = os.path.abspath(os.path.expanduser("~"))
+    shared_gemini = os.path.abspath(os.path.expanduser(config_dir))
+    run_root = os.path.join(real_home, ".cache", "computer-use", "agy-runs")
+    os.makedirs(run_root, mode=0o700, exist_ok=True)
+    run_home = tempfile.mkdtemp(prefix="operator-agy-", dir=run_root)
+    try:
+        for entry in os.scandir(real_home):
+            if entry.name == ".gemini":
+                continue
+            os.symlink(entry.path, os.path.join(run_home, entry.name),
+                       target_is_directory=entry.is_dir(follow_symlinks=False))
+        run_gemini = os.path.join(run_home, ".gemini")
+        os.makedirs(run_gemini, mode=0o700)
+        os.chmod(run_gemini, 0o700)
+        shared_state = os.path.join(shared_gemini, "antigravity-cli")
+        os.makedirs(shared_state, mode=0o700, exist_ok=True)
+        for persistent_dir in ("brain", "conversations"):
+            os.makedirs(os.path.join(shared_state, persistent_dir),
+                        mode=0o700, exist_ok=True)
+        run_state = os.path.join(run_gemini, "antigravity-cli")
+        os.makedirs(run_state, mode=0o700)
+        for entry in os.scandir(shared_state):
+            if entry.name == "mcp":
+                continue
+            os.symlink(entry.path, os.path.join(run_state, entry.name),
+                       target_is_directory=entry.is_dir(follow_symlinks=False))
+        os.makedirs(os.path.join(run_state, "mcp"), mode=0o700)
+        config_dir = os.path.join(run_gemini, "config")
+        os.makedirs(config_dir, mode=0o700)
+        os.chmod(config_dir, 0o700)
+        return run_home, run_gemini, real_home
+    except Exception:
+        shutil.rmtree(run_home, ignore_errors=True)
+        raise
+
+
+def _is_legacy_operator_mcp(name: str, server: object) -> bool:
+    """Recognize entries written by older Operator releases."""
+    scripts = {"playwright": ("browse", "playwright-mcp.sh"),
+               "operator-control": ("control", "operator-mcp.sh")}
+    expected = scripts.get(name)
+    if expected is None or not isinstance(server, dict):
+        return False
+    args = server.get("args")
+    if server.get("command") != "bash" or not isinstance(args, list) or not args:
+        return False
+    script = os.path.normpath(str(args[0]))
+    return (os.path.basename(os.path.dirname(script)), os.path.basename(script)) == expected
+
+
+def _retire_legacy_agy_mcp(config_dir: str) -> None:
+    """Remove only Operator-owned servers left by pre-isolation releases.
+
+    The rewrite is atomic and preserves unrelated servers and top-level keys.
+    Malformed or concurrently unavailable user config is left untouched; the
+    current run still uses its isolated file and never inherits that content.
+    """
+    path = os.path.join(os.path.abspath(os.path.expanduser(config_dir)),
+                        "config", "mcp_config.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or not isinstance(data.get("mcpServers"), dict):
+            return
+        servers = data["mcpServers"]
+        removed = {name for name, value in servers.items()
+                   if _is_legacy_operator_mcp(name, value)}
+        kept = {name: value for name, value in servers.items()
+                if name not in removed}
+        if len(kept) == len(servers):
+            return
+        data["mcpServers"] = kept
+        fd, tmp = tempfile.mkstemp(prefix=".mcp-config-migrate-",
+                                   dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        finally:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+        cache_root = os.path.join(os.path.abspath(os.path.expanduser(config_dir)),
+                                  "antigravity-cli", "mcp")
+        for name in removed:
+            shutil.rmtree(os.path.join(cache_root, name), ignore_errors=True)
+    except (OSError, ValueError, TypeError):
+        return
+
+
 def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     """agy (Google Antigravity CLI): headless `-p` PRINT mode returns PLAIN
     TEXT — the final answer only, no JSON event stream (the live trace is
     reverse-engineered from the trajectory on disk; see operator_agent's agy
-    hooks). agy reads its MCP servers from the FIXED ~/.gemini config path —
-    there is no per-run --mcp-config flag — so we wire the playwright server
-    in there idempotently and non-destructively (preserve other servers)."""
-    env = {"GEMINI_CLI_CONFIG_DIR": spec.config_dir}  # informational; agy uses ~/.gemini
+    hooks). Agy has no per-run MCP flag, so this launch receives a private HOME
+    whose ~/.gemini/config contains only the servers required by its surface.
+    The shared authentication, conversation, and brain state remains mounted
+    into that home so multi-turn and live-trace behavior stays intact."""
+    _retire_legacy_agy_mcp(spec.config_dir)
+    run_home, run_gemini, real_home = _prepare_agy_run_home(spec.config_dir)
+    env = {"HOME": run_home, "GEMINI_CLI_CONFIG_DIR": run_gemini}
     if spec.conversation_id:
         env["OPERATOR_CONVERSATION_ID"] = spec.conversation_id
     if spec.stop_path:
@@ -210,26 +348,12 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
         # and stay OUT of the shared ~/.gemini mcp_config.json, which plain
         # gemma bot sessions also read (those must keep the :9224 default).
         env.update(_cockpit_pin_env())
-    mcp_path = os.path.join(spec.config_dir, "config", "mcp_config.json")
-    agy_mcp_dir = ""
+    mcp_path = os.path.join(run_gemini, "config", "mcp_config.json")
     try:
-        os.makedirs(os.path.dirname(mcp_path), exist_ok=True)
-        existing = {}
-        try:
-            with open(mcp_path) as f:
-                _raw = f.read().strip()
-            if _raw:
-                existing = json.loads(_raw)
-                if not isinstance(existing, dict):
-                    existing = {}
-        except (OSError, ValueError):
-            existing = {}
-        servers = existing.get("mcpServers")
-        if not isinstance(servers, dict):
-            servers = {}
-        # add/overwrite ONLY our entries; leave everything else as-is.
+        servers = {}
         servers["playwright"] = {"command": "bash",
-            "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}
+            "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot],
+            "env": {"HOME": real_home}}
         # driver parity: gemma gets the control MCP (computer/perceive/
         # game_macro) whenever a run actually drives a desktop surface. The
         # demo IS allowed the control MCP (the owner 2026-07-09) — its sandbox
@@ -237,21 +361,17 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
         # container, so the agent drives the container, never the host.
         if spec.surface != "browser":
             servers["operator-control"] = {"command": "bash",
-                "args": [os.path.join(_CONTROL, "operator-mcp.sh")]}
-        else:
-            # browser run: make sure a PRIOR desktop run's leftover control
-            # MCP is gone (teardown no longer strips — 2026-06-29), so the
-            # config always matches THIS run's surface and a plain gemma
-            # session never inherits desktop tools.
-            servers.pop("operator-control", None)
-        existing["mcpServers"] = servers
+                "args": [os.path.join(_CONTROL, "operator-mcp.sh")],
+                "env": {"HOME": real_home}}
+        existing = {"mcpServers": servers}
         tmp = mcp_path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(existing, f, indent=2)
         os.replace(tmp, mcp_path)
-        agy_mcp_dir = spec.config_dir
-    except OSError:
-        pass
+        os.chmod(mcp_path, 0o600)
+    except Exception:
+        shutil.rmtree(run_home, ignore_errors=True)
+        raise
     # agy has no --append-system-prompt (a claude flag) — FOLD persona +
     # squad self-context + task into the -p prompt (like the codex adapter),
     # plus the agy-only stepwise directive (Flash one-shots its whole plan
@@ -277,8 +397,10 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     if spec.effort:
         cmd += ["--effort", spec.effort]
     return LaunchPlan(
-        cmd=cmd, env=env, mcp_config_path=mcp_path, agy_mcp_dir=agy_mcp_dir,
-        agy_brain_dir=os.path.join(spec.config_dir, "antigravity-cli", "brain"))
+        cmd=cmd, env=env, mcp_config_path=mcp_path, agy_mcp_dir=run_gemini,
+        agy_brain_dir=os.path.join(spec.config_dir, "antigravity-cli", "brain"),
+        agy_run_home=run_home,
+        agy_shared_state=os.path.join(spec.config_dir, "antigravity-cli"))
 
 
 def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
