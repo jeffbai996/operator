@@ -29,7 +29,9 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import stat
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -403,9 +405,10 @@ def list_files() -> dict:
     ensure()
     script = (
         "for d in " + " ".join(FILE_DIRS) + "; do "
-        "  [ -d \"$HOME/$d\" ] || continue; "
+        "  [ -d \"$HOME/$d\" ] && [ ! -L \"$HOME/$d\" ] || continue; "
         "  for f in \"$HOME/$d\"/*; do "
-        "    [ -f \"$f\" ] && stat -c \"$d|%n|%s|%Y\" \"$f\"; "
+        "    [ -f \"$f\" ] && [ ! -L \"$f\" ] "
+        "      && stat -c \"$d|%n|%s|%Y\" \"$f\"; "
         "  done; "
         "done")
     r = _exec(["sh", "-c", script], timeout=15, check=False)
@@ -424,13 +427,20 @@ def get_file(rel: str, out_dir: str) -> str:
     """Copy '<dir>/<name>' out of the sandbox → a host path (size-capped)."""
     rel = safe_rel(rel)
     ensure()
-    r = _exec(["stat", "-c", "%s", f"/home/opuser/{rel}"], timeout=10)
-    if int(r.stdout.decode().strip() or 0) > MAX_FILE_BYTES:
-        raise SandboxError("file too large to download")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, os.path.basename(rel))
-    _run(["cp", f"{CONTAINER}:/home/opuser/{rel}", out_path], timeout=120)
-    return out_path
+    staging_dir = tempfile.mkdtemp(prefix=".sandbox-download-", dir=out_dir)
+    out_path = os.path.join(staging_dir, os.path.basename(rel))
+    try:
+        _run(["cp", f"{CONTAINER}:/home/opuser/{rel}", out_path], timeout=120)
+        info = os.lstat(out_path)
+        if not stat.S_ISREG(info.st_mode):
+            raise SandboxError("only regular files can be downloaded")
+        if info.st_size > MAX_FILE_BYTES:
+            raise SandboxError("file too large to download")
+        return out_path
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
 
 
 def launch(app: str) -> None:
