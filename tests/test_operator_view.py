@@ -1420,10 +1420,10 @@ def test_driver_status_reads_only_the_requested_conversation_runner(
     )
 
     assert response.status_code == 200
-    assert fake_runner.snapshot_conversation_id == "conv-a"
     assert response.get_json()["reasoning"] == [
         {"text": "matching runner", "ts": 20.0},
     ]
+    assert fake_runner.snapshot_conversation_id == "conv-a"
 
 
 def test_driver_status_rejects_a_bot_that_does_not_own_the_conversation(
