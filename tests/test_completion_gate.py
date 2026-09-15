@@ -45,6 +45,26 @@ def test_playwright_actions_are_self_evidencing(runner):
     assert runner._acts_since_visual == 0
 
 
+def test_shell_and_file_tools_do_not_arm_visual_gate(runner):
+    """Saving/inspecting an artifact is not an unverified screen action."""
+    for name in ("run_command", "write_file", "edit_file"):
+        runner._note_action(name, {"path": "/tmp/result.pdf"})
+    assert runner._consequential_acts == 0
+    assert runner._acts_since_visual == 0
+
+
+def test_file_work_after_browser_evidence_finishes_without_regrounding(runner):
+    """The live IRCC/PDF failure: a grounded browser result followed by shell
+    commands must not summon a final screenshot and replace the useful answer.
+    """
+    runner._note_action("mcp__playwright__browser_click", {"ref": "download"})
+    for i in range(4):
+        runner._note_action("run_command", {"command": f"inspect-pdf {i}"})
+    runner.messages.append({"ts": 0, "role": "assistant",
+                            "text": "Saved CIT 0001 and CIT 0014."})
+    assert runner._completion_gate_check() == ""
+
+
 def test_perceive_is_a_look_not_work(runner):
     runner._note_action("computer", {"action": "left_click", "coordinate": [1, 2]})
     runner._note_action("perceive", {})
@@ -138,8 +158,63 @@ def test_gate_fires_at_most_once_per_start(runner):
     assert runner._completion_gate_check() == ""   # second exit → accept done
 
 
+def test_verify_followup_preserves_the_substantive_answer(runner):
+    original = "Saved CIT 0001 and CIT 0014, with both file paths."
+    runner.messages.append({"ts": 0, "role": "assistant", "text": original})
+    runner._transcript.append({"role": "assistant", "text": original})
+    runner._gate_verify_active = True
+    runner._gate_original_final = original
+    runner._gate_message_start = len(runner.messages)
+
+    runner.messages.extend([
+        {"ts": 1, "role": "assistant",
+         "text": "I'm taking the required final visual check."},
+        {"ts": 2, "role": "action", "text": "Took screenshot"},
+        {"ts": 3, "role": "assistant",
+         "text": "confirmed: the package — the screen shows the paper route."},
+    ])
+    runner._transcript.append({"role": "assistant",
+                               "text": "confirmed: the package — the screen shows the paper route."})
+
+    runner._finish_verify_gate()
+
+    assistants = [m["text"] for m in runner.messages if m["role"] == "assistant"]
+    assert assistants == [original]
+    assert any(m["role"] == "action" for m in runner.messages)
+    assert runner._transcript[-1] == {"role": "assistant", "text": original}
+
+
 def test_read_only_turn_never_gates(runner):
     runner.messages.append({"ts": 0, "role": "assistant", "text": "It's $42."})
+    assert runner._completion_gate_check() == ""
+
+
+def test_browser_task_without_playwright_fails_without_a_retry_turn(runner):
+    runner.surface = "browser"
+    runner._browser_required = True
+    runner._browser_tool_calls = 0
+    runner.messages.append({"ts": 0, "role": "assistant",
+                            "text": "I found five wineries."})
+
+    gate = runner._completion_gate_check()
+
+    assert gate == ""
+    assert runner._gate_fired is False
+    assert runner._browser_contract_failed is True
+    assert runner._resolve_terminal(0) == (
+        "error", "browser contract: no Playwright tool call")
+    assert not any(m["role"] == "assistant" for m in runner.messages)
+    assert any("visible browser" in m["text"].lower()
+               for m in runner.messages if m["role"] == "error")
+
+
+def test_browser_task_with_playwright_satisfies_completion_contract(runner):
+    runner.surface = "browser"
+    runner._browser_required = True
+    runner._browser_tool_calls = 0
+    runner._note_action("mcp__playwright__browser_snapshot", {})
+    runner.messages.append({"ts": 0, "role": "assistant", "text": "Found it."})
+
     assert runner._completion_gate_check() == ""
 
 

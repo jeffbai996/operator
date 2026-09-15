@@ -24,5 +24,9 @@ try:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PostToolUse",
             "additionalContext": operator_steer.format_context(steers)}}))
+        import operator_workspace
+        for steer in steers:
+            if steer.get('id'):
+                operator_workspace.correction_status(steer['id'], 'delivered')
 except Exception:  # noqa: BLE001 — a broken hook must never break the run
     pass

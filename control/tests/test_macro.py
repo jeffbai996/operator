@@ -286,7 +286,7 @@ def test_frame_change_frac_bad_region_returns_none():
     assert frame_change_frac(a, a, region=[100, 100, 10, 10]) is None
 
 
-# ── typing into a field that already holds text (the owner 2026-08-31) ────────────
+# ── typing into a field that already holds text  ────────────
 def test_type_appends_by_default():
     """Unchanged behaviour: plain type does not touch what is already there."""
     s = FakeSurface()

@@ -2,7 +2,7 @@
 
 A saved task is a stored dispatch: a prompt + preferred sites + default
 bot/model/effort (+ optional start_url), re-runnable later without re-typing.
-This is the "OpenAI-Operator-style reusable task" ask (the owner 2026-06-29), v1:
+This is the "OpenAI-Operator-style reusable task" ask , v1:
 the prompt+sites+model bundle, no scheduling and no hard tool sandbox (both
 deferred to v2 — see the handoff spec).
 
@@ -140,6 +140,12 @@ def save_task(fields: dict) -> tuple[str | None, str | None]:
         return None, "empty name"
     if not prompt:
         return None, "empty prompt"
+    import operator_workspace
+    try:
+        authorization = operator_workspace.clean_authorization(fields.get('authorization') or {'mode': 'confirm'})
+        criteria = operator_workspace._text(fields.get('success_criteria') or '', 2000)
+    except ValueError as exc:
+        return None, str(exc)
     schedule = (fields.get("schedule") or "").strip()
     if schedule:
         # lazy import — operator_schedule imports this module at top level
@@ -166,6 +172,8 @@ def save_task(fields: dict) -> tuple[str | None, str | None]:
     tasks[slug] = {
         "name": name,
         "prompt": prompt,
+        'success_criteria': criteria,
+        'authorization': authorization,
         "sites": _clean_sites(fields.get("sites")),
         "bot": (fields.get("bot") or "").strip(),
         "model": (fields.get("model") or "").strip(),

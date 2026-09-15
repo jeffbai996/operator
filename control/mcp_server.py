@@ -31,6 +31,7 @@ import json
 import os
 import sys
 import time
+import operator_job_tools
 
 import numpy as np
 from PIL import Image
@@ -210,10 +211,11 @@ class OperatorMCP:
                  surface_factory=get_surface) -> None:
         self.surface_name = surface_name or os.environ.get(
             "OPERATOR_SURFACE", "browser")
-        self.bot = bot or os.environ.get("SQUAD_STORE_BOT", "") or "operator"
+        self.bot = bot or os.environ.get("OPERATOR_BOT", "") or "operator"
         self._factory = surface_factory
         self._surface = None
         self._emu = None            # lazy EmuInput (sandbox game harness)
+        self._emu_tunnel = None     # host-loopback tunnel owned by this MCP
 
     # -- surface / perception ------------------------------------------------
     def _get_surface(self):
@@ -528,13 +530,26 @@ class OperatorMCP:
         return {"content": content, "isError": False}
 
     def _get_emu(self):
-        """Lazy EmuInput bound to the sandbox chromium's CDP (via the container
-        bridge). Sandbox surface only."""
+        """Lazy EmuInput bound to sandbox Chromium through a host-only tunnel."""
         if self._emu is None:
             sb = _load_cu_module("sandbox_container.py")
-            sb.ensure()   # also arms the CDP bridge (idempotent)
-            self._emu = emu_input_mod.EmuInput(sb.sandbox_cdp_url())
+            sb.ensure()
+            tunnel = sb.open_cdp_tunnel()
+            try:
+                emu = emu_input_mod.EmuInput(tunnel.url)
+            except Exception:
+                tunnel.close()
+                raise
+            self._emu_tunnel = tunnel
+            self._emu = emu
         return self._emu
+
+    def close(self) -> None:
+        """Release per-run transport resources without stopping the sandbox."""
+        if self._emu_tunnel is not None:
+            self._emu_tunnel.close()
+            self._emu_tunnel = None
+        self._emu = None
 
     def _tool_emu_input(self, args: dict) -> dict:
         if self.surface_name != "desktop-sandbox":
@@ -558,6 +573,8 @@ class OperatorMCP:
     # -- protocol ---------------------------------------------------------------
     def _tools(self) -> list:
         tools = [_PERCEIVE_TOOL, _GAME_MACRO_TOOL]
+        if operator_job_tools.available():
+            tools.extend(operator_job_tools.TOOLS)
         if self.surface_name.startswith("desktop"):
             tools.append(_COMPUTER_TOOL)
         if self.surface_name == "desktop-sandbox":
@@ -585,6 +602,14 @@ class OperatorMCP:
         if method == "tools/call":
             name = params.get("name", "")
             args = params.get("arguments") or {}
+            if name.startswith('job_'):
+                try:
+                    result = operator_job_tools.call(name, args)
+                except (ValueError, KeyError, PermissionError, OSError) as exc:
+                    result = {'isError': True, 'content': [{'type': 'text', 'text': str(exc)}]}
+                except Exception:
+                    result = {'isError': True, 'content': [{'type': 'text', 'text': 'Job operation failed; inspect the current job before retrying.'}]}
+                return {'jsonrpc': '2.0', 'id': mid, 'result': result}
             handler = {"perceive": self._tool_perceive,
                        "game_macro": self._tool_game_macro,
                        "computer": self._tool_computer,
@@ -610,18 +635,21 @@ class OperatorMCP:
 def main() -> int:
     srv = OperatorMCP()
     out = sys.stdout
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except ValueError:
-            continue
-        resp = srv.handle(msg)
-        if resp is not None:
-            out.write(json.dumps(resp, ensure_ascii=False) + "\n")
-            out.flush()
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            resp = srv.handle(msg)
+            if resp is not None:
+                out.write(json.dumps(resp, ensure_ascii=False) + "\n")
+                out.flush()
+    finally:
+        srv.close()
     return 0
 
 

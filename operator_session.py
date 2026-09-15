@@ -5,7 +5,7 @@ localStorage, so every device had its own unrelated history. v1.0.11 moved it
 to one shared server-side session: whoever opens the cockpit, on whatever
 device, sees the same conversation.
 
-One was not enough (the owner 2026-08-06). Every task landed in the same
+One was not enough . Every task landed in the same
 transcript, an unrelated errand's context rode along inside it, and the only
 way to get a clean start was the trash can, which destroyed what was there.
 So this module now owns a MAP of conversations plus which one is active, and
@@ -162,13 +162,13 @@ def _clip_meta(value: object, limit: int) -> str:
 
 # ── the single-session contract the client already speaks ───────────────
 
-def load(conversation_id: str | None = None) -> dict:
+def load(conversation_id: str | None = None, *, require_exists: bool = False) -> dict:
     """Store revision, per-conversation revision and data for one thread."""
     with _LOCK:
         st = _read_unlocked()
         sid = conversation_id or st["active"]
         if (conversation_id and sid not in st["sessions"]
-                and sid != _LEGACY_ID):
+                and (require_exists or sid != _LEGACY_ID)):
             raise KeyError(sid)
         sess = st["sessions"].get(sid) or {}
         return {"rev": st["rev"], "conversation_rev": int(sess.get("rev") or 0),
@@ -243,6 +243,7 @@ def listing() -> dict:
                 "empty": _is_empty(sess),
                 "preview": _clip_meta(data.get("preview"), PREVIEW_LIMIT),
                 "bot": _clip_meta(data.get("bot"), META_LIMIT),
+                "model": _clip_meta(data.get("model"), META_LIMIT),
                 "surface": _clip_meta(data.get("surface"), META_LIMIT),
             })
         rows.sort(key=lambda r: r["updated_ts"], reverse=True)

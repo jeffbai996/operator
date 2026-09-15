@@ -23,7 +23,9 @@ def test_identical_actions_trip_the_guard(runner):
         runner._note_action("browser_click", {"x": 100, "y": 200})
     assert runner._repeat_nudge_pending is True
     warns = [m for m in runner.messages if m["role"] == "notice"]
-    assert len(warns) == 1 and "repeated" in warns[0]["text"]
+    assert len(warns) == 1 and warns[0]["text"] == (
+        "Operator is repeating an action without making progress. "
+        "If it continues, stop the run and try again.")
 
 
 def test_guard_warns_only_once_per_run(runner):
@@ -53,7 +55,7 @@ def test_varied_coordinates_still_read_as_flailing(runner):
         runner._note_action("browser_click", {"x": x, "y": 200})
     assert runner._repeat_nudge_pending is True
     warns = [m for m in runner.messages if m["role"] == "notice"]
-    assert len(warns) == 1 and "no page snapshot" in warns[0]["text"]
+    assert len(warns) == 1 and "browser_click" not in warns[0]["text"]
 
 
 def test_four_varied_browser_actions_are_not_yet_a_loop(runner):
@@ -93,7 +95,7 @@ def test_clicks_landing_on_the_same_dead_spot_trip_the_window(runner):
     runner._note_action("browser_click", {"x": 108, "y": 206})
     runner._note_action("browser_click", {"x": 118, "y": 212})
     assert runner._repeat_nudge_pending is True
-    assert "within 30px" in runner.messages[0]["text"]
+    assert runner.messages[0]["text"].startswith("Operator is repeating")
 
 
 def test_a_few_clicks_far_apart_are_not_a_loop(runner):
@@ -228,3 +230,75 @@ def test_stall_reason_turns_stop_into_error_not_interrupted(runner):
     if runner._stall_kill_reason:
         runner._set_state("error", runner._stall_kill_reason)
     assert runner.state == "error"
+
+
+# ── read/act loops on the DESKTOP surface  ──────────────────
+# The run that prompted these typed a query into a Google box that already held
+# text, read the screen, typed again onto the end of it, read again — fourteen
+# rounds, then a 123-step macro, until it was stopped by hand. Neither detector
+# fired: the exact-key streak saw different text every round, and the rolling
+# window was wiped by every `perceive` and only ever recognised tools with
+# "browser" in the name anyway.
+
+def _fresh(monkeypatch, tmp_path):
+    """A runner with only the loop-guard state initialised."""
+    import operator_agent
+    a = operator_agent.AgentRunner.__new__(operator_agent.AgentRunner)
+    a.messages = []
+    a._last_action_key = ""
+    a._action_repeat_streak = 0
+    a._repeat_warned = False
+    a._repeat_nudge_pending = False
+    a._recent_calls = []
+    a._shape_history = []
+    return a
+
+
+def _notices(agent):
+    return [m for m in agent.messages if m.get("kind") == "recovery"]
+
+
+def test_read_act_loop_on_the_desktop_surface_is_caught(monkeypatch, tmp_path):
+    """perceive / game_macro alternating — the exact shape that ran away."""
+    a = _fresh(monkeypatch, tmp_path)
+    for i in range(8):
+        a._note_window("perceive", {"map": "screen"})
+        # the payload differs every round; only the SHAPE repeats
+        a._note_window("game_macro", {"map": "search-box",
+                                      "ops": [{"kind": "type", "text": "x" * (i + 1)}]})
+    assert _notices(a), "a read/act loop must trip the guard"
+    notice = _notices(a)[0]["text"]
+    assert notice.startswith("Operator is repeating")
+    assert "game_macro" not in notice and "recovery" not in notice.lower()
+
+
+def test_a_read_does_not_wipe_the_memory_of_repeated_actions(monkeypatch, tmp_path):
+    a = _fresh(monkeypatch, tmp_path)
+    for i in range(6):
+        a._note_window("game_macro", {"map": "search-box", "ops": [{"text": str(i)}]})
+        a._note_window("perceive", {"map": "screen"})
+    assert _notices(a)
+
+
+def test_progress_through_different_targets_is_not_a_loop(monkeypatch, tmp_path):
+    """Six real steps across six different targets must stay silent."""
+    a = _fresh(monkeypatch, tmp_path)
+    for target in ("search", "results", "detail", "hours", "menu", "booking"):
+        a._note_window("perceive", {"map": "screen"})
+        a._note_window("game_macro", {"map": target, "ops": [{"kind": "click"}]})
+    assert not _notices(a), "distinct targets are progress, not a loop"
+
+
+def test_reads_alone_never_trip_it(monkeypatch, tmp_path):
+    a = _fresh(monkeypatch, tmp_path)
+    for _ in range(12):
+        a._note_window("perceive", {"map": "screen"})
+    assert not _notices(a)
+
+
+def test_the_guard_fires_once_per_run(monkeypatch, tmp_path):
+    a = _fresh(monkeypatch, tmp_path)
+    for _ in range(20):
+        a._note_window("perceive", {"map": "screen"})
+        a._note_window("game_macro", {"map": "search-box", "ops": []})
+    assert len(_notices(a)) == 1

@@ -75,7 +75,7 @@ def test_demo_sandbox_gets_desktop_mandate_without_squad_identity(runner):
     runner.surface = "desktop-sandbox"
     p = runner._persona_for_run(OA.AGENT_BOTS["claude-a"])
     assert "LIVE COMPUTER DESKTOP" in p and "ISOLATED Linux desktop" in p
-    assert "Claude-a" not in p and "{surface_flavor}" not in p
+    assert "claude-a" not in p and "{surface_flavor}" not in p
 
 
 def test_browser_default_and_snapshot_carries_surface(runner):
@@ -130,6 +130,10 @@ def test_desktop_launch_path_builds_without_raising(monkeypatch, tmp_path):
     # hermetic: don't depend on the real claude CLI being on PATH (absent in CI)
     monkeypatch.setattr(OA, "_resolve_claude", lambda: "/fake/claude")
     r = OA.AgentRunner()
+    # This test owns command construction, not the post-run process scavenger.
+    # subprocess.run implements itself through Popen and would otherwise make
+    # the cleanup `ps` call look like the launch command this fake records.
+    monkeypatch.setattr(r, "_reap_owned_browser_helpers", lambda: 0)
     launched = {}
 
     def fake_popen(cmd, **kw):
@@ -152,9 +156,10 @@ def _codex_cmd_for_surface(monkeypatch, tmp_path, surface):
     """Drive the codex launch path to a stubbed Popen and return the built cmd."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(OA, "_resolve_codex", lambda: "/fake/codex")
-    # boot context hits the squad store / network — stub it out for hermeticity
+    # boot context hits the host-app / network — stub it out for hermeticity
     monkeypatch.setattr(OA, "_squad_boot_context", lambda bot="gpt": "")
     r = OA.AgentRunner()
+    monkeypatch.setattr(r, "_reap_owned_browser_helpers", lambda: 0)
     launched = {}
 
     def fake_popen(cmd, **kw):
@@ -200,11 +205,10 @@ def test_stop_arms_kill_switch(runner, tmp_path):
 
 def test_dropping_a_stopped_session_also_clears_its_boot_delivery(runner):
     """A user stop pops the resume id so the NEXT turn starts a fresh thread —
-    but boot_sent stayed True, so that fresh thread never received the squad
-    context either. Result: no task memory AND no squad priors, i.e. gemma
-    asking "what would you like me to look up?" instead of searching squad
-    memory as its own prompt tells it to (the owner 2026-07-30: "doesn't seem to have
-    any context whatsoever").
+    but boot_sent stayed True, so that fresh thread never received the app
+    context either. Result: no task memory AND no the app priors, i.e. gemma
+    asking "what would you like me to look up?" instead of searching the app
+    memory as its own prompt tells it to .
 
     boot_sent is a claim about a THREAD. Throwing the thread away has to throw
     the claim away with it."""

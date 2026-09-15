@@ -1,10 +1,9 @@
 """Browser operator — live view + full remote control of the logged-in Chrome.
 
 One self-contained surface (full-screen on an iPad over Tailscale) that shows the
-real Chrome the squad's computer-use drives and lets you take the wheel live —
+real Chrome the app computer-use drives and lets you take the wheel live —
 click, type, navigate — interleaving freely with whatever a bot is doing in the
-same browser (shared mouse; last action wins). "See it, steer it." (the owner
-2026-06-25; refined for click/keyboard control + more controls 2026-06-26.)
+same browser (shared mouse; last action wins). "See it, steer it." 
 
 Zero new deps — playwright + aiohttp are already in the host-app venv:
   - VIEW: a background thread holds a Playwright connect_over_cdp() attach to the
@@ -29,7 +28,9 @@ from flask import (Blueprint, Response, jsonify, render_template, request,
                    send_file, has_request_context)
 from werkzeug.wsgi import ClosingIterator as _ClosingIterator
 import operator_agent  # the headless-claude agent runner (option 1)
+import operator_diagnostics as _diagnostics
 import operator_prefs  # server-side cockpit settings (the landing page)
+from operator_devices import device_label as _peer_device_label
 import operator_tasks as operator_tasks_store  # saved-task store (#30)
 
 import os as _os_cfg
@@ -41,10 +42,10 @@ import os as _os_cfg
 # the generated public demo, whose label appends " demo" to whatever it finds.
 # The README's version ladder must carry a row for this version; a test asserts
 # it, so the changelog cannot silently fall behind the number on screen.
-OP_VERSION = "1.1.0"
-# DEMO isolation (the public demo): a second instance runs with OPERATOR_DEMO=1 and
+OP_VERSION = "1.2.0"
+# DEMO isolation the public demo: a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
-# unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
+# unset for the owner live cockpit (-> no behavior change); set only by demo_server.py.
 DEMO = _os_cfg.environ.get("OPERATOR_DEMO") == "1"
 DEMO_INTERACTIVE = (
     DEMO
@@ -63,12 +64,14 @@ _VIEW_FOLLOW = _os_cfg.environ.get("OPERATOR_VIEWPORT_FOLLOW", "1") != "0"
 # Chrome), never :9222 (the logged-in browser). The unguessable path gate is the
 # WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
 CDP_URL = _os_cfg.environ.get("OPERATOR_DEMO_CDP") or "http://127.0.0.1:9222"
+_CHROME_START_TIMEOUT = 15.0
 if DEMO:
-    # the demo may view/drive the SANDBOX surface, but never the owner's container —
+    # the demo may view/drive the SANDBOX surface, but never the owner container —
     # scope it to its own (sandbox_container.py reads this at load).
     _os_cfg.environ.setdefault("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox-demo")
-FRAME_INTERVAL = 0.066     # ~15fps (the owner's pick)
+FRAME_INTERVAL = 0.066     # ~15fps 
 IDLE_FRAME_INTERVAL = 0.35  # ~3fps after the pixels have stayed quiet
+BUSY_FRAME_INTERVAL = 0.08  # capture itself backpressures; don't add another 450ms
 MOTION_HOLD_S = 1.4         # keep full cadence through short UI animations
 JPEG_QUALITY = 60
 IDLE_STOP_AFTER = 90.0
@@ -120,6 +123,11 @@ SCROLLBAR_CSS_ALLOW = 64
 # forever, so repair still lands within ~a second; a scrollbar-reflow transient
 # (the strobe fuel) lasts 1-2 frames and now never triggers the clear+apply.
 REPAIR_AFTER_MISSES = 4
+# The real scrollbar/compensation band is +/-15px around the requested layout.
+# 48px was wide enough to miss the live 1280->1250 foreign override, which then
+# changed capture regimes and looked like a small zoom pulse. Leave 9px of
+# noise above the observed gutter, not another whole gutter.
+DEVICE_METRICS_TOLERANCE = 24
 
 # Repairs (clear+apply, a REAL full-page reflow — the visible "zooms in then
 # back out" pulse) only fire below this: the collapsed-mobile-emulation band
@@ -136,8 +144,7 @@ REPAIR_HARD_FLOOR_W = 800
 # session, the layout viewport FLIPPING between healthy and collapsed rather
 # than walking down. Alternating reads reset the counter every other frame, so
 # the repair for the collapsed band never fired and the captured frame kept
-# changing size under the viewer (the owner: "the viewport went super narrow, like a
-# strip maybe 1/3 of the total viewport height"). Scoring instead of counting: a
+# changing size under the viewer . Scoring instead of counting: a
 # collapsed read outweighs a healthy one, so a flip-flop accumulates while a
 # lone navigation transient still decays to nothing.
 COLLAPSE_HIT = 2
@@ -158,6 +165,23 @@ def collapse_score(prev: int, *, gate_ok: bool, css_w: float,
     if not gate_ok and css_w and css_w < floor:
         return min(COLLAPSE_SCORE_CAP, prev + COLLAPSE_HIT)
     return max(0, prev - COLLAPSE_DECAY)
+
+
+def device_metrics_drifted(actual: float, expected: float,
+                           tolerance: float = DEVICE_METRICS_TOLERANCE) -> bool:
+    """Whether another CDP client replaced Operator's viewport override.
+
+    A real scrollbar can shave roughly 15 device pixels and the compensation
+    pass can overshoot by the same amount. Compare against Operator's effective
+    layout target (not the raw overshoot width) so both sides of that band are
+    admitted while a measured 30px foreign drift is not.
+    """
+    try:
+        actual, expected = float(actual), float(expected)
+    except (TypeError, ValueError):
+        return False
+    return bool(actual > 0 and expected > 0
+                and abs(actual - expected) > tolerance)
 
 
 def _fit_clip_to_view_aspect(width: float, height: float,
@@ -238,9 +262,9 @@ def _emu_clip_box(*, css_w: float, css_h: float, dev_w: float, dev_h: float,
         bw, bh = _fit_clip_to_view_aspect(bw, bh, view_w, view_h)
     return bw, bh
 # Frames after a run starts during which we re-assert view metrics if the
-# agent's CDP attach knocked them off. The loop paces 0.45s while busy, so 5
-# covers roughly the first ~2.2s — long enough for a slow attach, short enough
-# that a run which resizes on purpose is left alone.
+# agent's CDP attach knocked them off. Capture latency itself determines the
+# wall-clock span; five samples cover a slow attach without making routine
+# metrics writes a permanent background fight.
 RUN_START_FIXUPS = 5
 
 # Viewport ownership (2026-07-22, the "random zoom" fix). The stage_size beacon
@@ -259,7 +283,7 @@ RUN_START_FIXUPS = 5
 # cleanly separates "watching" from "gone". At 15s, re-entering the cockpit
 # left the DEAD previous tab owning the aspect — the fresh tab's load beacon
 # was refused and the stage sat letterboxed until a manual rail drag re-fired
-# it (the owner: "letterboxed until I move the resize bar").
+# it .
 VP_OWNER_IDLE_S = 2.5
 
 bp = Blueprint("operator", __name__,
@@ -370,13 +394,12 @@ import base64 as _b64ph
 # custom NTP (templates/newtab.html) gone in favor of google.com; chrome://new-tab-page
 # renders blank under headless+no-GPU (see comment above), so google.com is the
 # option that actually paints. Still navigated via raw CDP Page.navigate.
-# google.com is now only the FALLBACK: the landing page is a setting (the owner
-# 2026-08-07, "add that to the hamburger menu settings"). operator_prefs owns
+# google.com is now only the FALLBACK: the landing page is a setting . operator_prefs owns
 # the stored value and the scheme guard; this constant is what you get when
 # nothing is stored.
 _NEWTAB_DATA_URL = operator_prefs.DEFAULT_HOMEPAGE
 _ONEPASSWORD_EXTENSION_ID = _os_cfg.environ.get(
-    "OPERATOR_1PASSWORD_EXTENSION_ID", "aeblfdkhhhdcdjpifhhbdiojplfjncoa")
+    "OPERATOR_a password manager's_EXTENSION_ID", "aeblfdkhhhdcdjpifhhbdiojplfjncoa")
 _ONEPASSWORD_POPUP_PREFIX = (
     f"chrome-extension://{_ONEPASSWORD_EXTENSION_ID}/popup/")
 
@@ -444,9 +467,9 @@ class _Streamer:
     # zoom is CSS document zoom — fine-tuning ON TOP of the layout width below.
     # It does NOT change innerWidth (proven live 2026-07-16), so it can never
     # make a desktop-width layout fit a phone; view_w is the lever that reflows.
-    # 0.8 = two 0.1 notches under neutral (the owner 2026-07-19). The old 0.5 was a
-    # band-aid that shrank content INSIDE the giant pre-view_w canvas.
-    zoom: float = 0.8
+    # The launcher normalizes the Chrome profile itself to 100%, so neutral is
+    # genuinely one scale layer. User zoom controls may still fine-tune this.
+    zoom: float = 1.0
     # view_w — the CSS layout width Operator forces via CDP. Keep it at or above
     # a desktop responsive breakpoint; narrower values make surviving tabs
     # silently flip into a site's mobile layout after tab/viewport changes.
@@ -466,11 +489,12 @@ class _Streamer:
     _browser = None
     _cdp = None
     _metric_sessions: dict = field(default_factory=dict)
+    _zoom_scripts: dict = field(default_factory=dict)     # page -> (zoom, CDP script id)
     _target_ids: dict = field(default_factory=dict)   # page -> CDP target id (stable per page)
     _crashed_pages: set = field(default_factory=set)
     _onepassword_seen: set = field(default_factory=set)
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
-    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch (the owner)
+    _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch 
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
     # F1: frame tier, set by the feed routes (last-viewer-wins on the shared
     # frame buffer — single-user cockpit; per-viewer buffers are a 1.0.10 idea)
@@ -508,7 +532,7 @@ class _Streamer:
         owner = self._vp_owner
         if not owner or cid == owner:
             return True
-        ts = self._vp_seen.get(owner)
+        ts = self._vp_seen.get
         return ts is None or time.monotonic() - ts > VP_OWNER_IDLE_S
 
     def seed_view_from_stage(self, w: float, h: float) -> bool:
@@ -518,8 +542,7 @@ class _Streamer:
         and its layout settled, so every session opened on whatever the last
         viewer left — or on the WIDTHx0 default, whose auto height object-fit
         renders as a letterbox — until a real resize fired a beacon. That is
-        the "wrong size until I drag it, then it snaps" report (the owner
-        2026-08-15). The stage is knowable earlier than that: the browser
+        the "wrong size until I drag it, then it snaps" report . The stage is knowable earlier than that: the browser
         sends it on the document request, so the target can be in place before
         the streamer has attached, and the FIRST captured frame is already
         right.
@@ -544,6 +567,8 @@ class _Streamer:
         trace (the strobe/zoom hunts took 5 rounds because nothing recorded the
         writers). Read via /operator/debug/viewport."""
         self._vp_events.append({"t": time.time(), "kind": kind, "detail": detail})
+        if kind in ('apply', 'apply-pdf-window', 'apply-sb-comp'):
+            _diagnostics.record('viewport_corrections')
 
     def _publish_frame(self, data: bytes) -> bool:
         """Publish captured pixels and return whether they actually changed.
@@ -555,6 +580,8 @@ class _Streamer:
         """
         now = time.monotonic()
         changed = data != self.frame
+        if not changed:
+            _diagnostics.record('frames_unchanged')
         if changed:
             self.frame = data
             self.frame_id += 1
@@ -565,7 +592,7 @@ class _Streamer:
     def _capture_interval(self, *, now: float, busy: bool) -> float:
         """Preserve the agent-sharing limit; otherwise idle at roughly 3fps."""
         if busy:
-            return 0.45
+            return BUSY_FRAME_INTERVAL
         if now < self._motion_until:
             return FRAME_INTERVAL
         return IDLE_FRAME_INTERVAL
@@ -689,10 +716,10 @@ class _Streamer:
         headless Chrome under DEMO, the Windows Chrome otherwise.
 
         OPERATOR_CHROME_LAUNCHER overrides both: operator-fam's CDP lives on
-        :9333 (a dedicated persistent-profile Windows Chrome launched by
+        :9336 (a dedicated persistent-profile Windows Chrome launched by
         opfam-chrome.sh), but generic
         chrome-attach.sh defaults to :9222/browse-automation-chrome with no way
-        to know it should target :9333 instead. Each standalone instance points
+        to know it should target :9336 instead. Each standalone instance points
         this at its own launcher via env; unset falls back to the primary
         Windows launcher."""
         import os
@@ -700,8 +727,8 @@ class _Streamer:
         if override:
             return os.path.expanduser(override)
         if DEMO:
-            return os.path.expanduser("~/local-projects/operator-demo/op-demo-chrome.sh")
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse", "chrome-attach.sh")
+            return os.path.expanduser(os.environ.get("OPERATOR_DEMO_CHROME_SCRIPT", "~/.operator-sandbox/op-demo-chrome.sh"))
+        return os.path.expanduser("~/agents/browse/chrome-attach.sh")
 
     def _cdp_alive(self) -> bool:
         """True when Chrome can serve its target list, not merely the cheap
@@ -742,7 +769,7 @@ class _Streamer:
             return None
 
     def _onepassword_popup_targets(self) -> set[str]:
-        """CDP ids for 1Password unlock popups Playwright does not expose.
+        """CDP ids for a password manager's unlock popups Playwright does not expose.
 
         Chrome's extension popup is a page target in /json/list, but it is not
         included in context.pages, so the MJPEG streamer cannot follow it.
@@ -796,17 +823,38 @@ class _Streamer:
         it, so simultaneous first-viewer requests cannot stampede Chrome."""
         import os
         import subprocess
+        import urllib.parse
         attach = self._chrome_attach_script()
         if not os.path.exists(attach):
             raise FileNotFoundError(f"browser launcher not found: {attach}")
-        subprocess.run(
+        env = dict(os.environ)
+        try:
+            port = urllib.parse.urlsplit(CDP_URL).port
+        except ValueError:
+            port = None
+        if port:
+            # chrome-attach.sh is shared infrastructure and deliberately
+            # defaults to the bots' :9224 browser. A healthy :9224 used to make
+            # Operator's demand-start return successfully while its own :9222
+            # stayed dead. Pin the launcher to the exact endpoint this streamer
+            # will attach to.
+            env["BROWSE_CHROME_PORT"] = str(port)
+        result = subprocess.run(
             ["bash", attach],
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
             timeout=45,
             check=False,
         )
+        if result.returncode:
+            detail = (result.stderr or result.stdout or "").strip()
+            if detail:
+                detail = detail.splitlines()[-1][:240]
+            raise RuntimeError(detail or
+                               f"browser launcher exited {result.returncode}")
 
     def _ensure_chrome_alive(self) -> None:
         """Demand-start Chrome when an Operator viewer actually needs it.
@@ -824,7 +872,15 @@ class _Streamer:
             self._user_closed = True
             self.status, self.detail = "error", f"browser could not start: {e}"
             raise ConnectionError(self.detail) from e
-        if not self._cdp_alive():
+        # Windows `cmd /c start` is asynchronous. Give Chrome time to acquire
+        # the profile and bind CDP instead of immediately checking once and
+        # declaring a perfectly normal cold start dead.
+        deadline = time.monotonic() + _CHROME_START_TIMEOUT
+        ready = self._cdp_alive()
+        while not ready and time.monotonic() < deadline:
+            time.sleep(0.1)
+            ready = self._cdp_alive()
+        if not ready:
             self._user_closed = True
             self.status, self.detail = "error", "browser could not start"
             raise ConnectionError(self.detail)
@@ -835,6 +891,10 @@ class _Streamer:
         self._ensure_chrome_alive()
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.connect_over_cdp(CDP_URL)
+        _diagnostics.record('reconnects')
+        if not DEMO and _os_cfg.environ.get('OPERATOR_FILE_BRIDGE', '1') != '0':
+            import operator_file_bridge
+            operator_file_bridge.ensure_running(reset=True)
         ctx = self._browser.contexts[0] if self._browser.contexts else \
             await self._browser.new_context()
         self._crashed_pages.clear()
@@ -860,8 +920,7 @@ class _Streamer:
             # new-tab page — so `pages` is never actually empty on a cold
             # start, and the no-pages fallback below never fires. That
             # existing page sat on about:blank forever with nothing to
-            # navigate it (the owner 2026-08-04, reproduced live after auto-heal
-            # relaunched Chrome: "right now it lands in about:blank"). Treat
+            # navigate it . Treat
             # a blank EXISTING page exactly like having no page: land it on
             # the same URL the true no-pages case already used below. Only
             # the selected page, and only when it's genuinely blank — a real
@@ -905,23 +964,6 @@ class _Streamer:
                   window.addEventListener('click', rec, true);
                 })();
             """)
-        except Exception:
-            pass
-        # re-apply the chosen zoom on every navigation
-        try:
-            if self.zoom and self.zoom != 1.0:
-                await ctx.add_init_script(
-                    f"document.addEventListener('DOMContentLoaded',()=>{{document.documentElement.style.zoom='{self.zoom}';}});")
-        except Exception:
-            pass
-        # Init scripts only cover future documents, so apply the persisted zoom
-        # to the currently open target as well.
-        try:
-            if self.zoom and self.zoom != 1.0:
-                await asyncio.wait_for(self._page.evaluate(
-                    "zoom => { document.documentElement.style.zoom = String(zoom); }",
-                    self.zoom,
-                ), timeout=2.5)
         except Exception:
             pass
         # Also install click tracking on the CURRENTLY-open page.
@@ -976,7 +1018,7 @@ class _Streamer:
         plausible read sails through that floor and then silently rescales
         every click: the flight recorder caught `vp-walk 1024->651` twice on
         2026-07-31, which lands a pointer at 64% of where it was aimed —
-        "clicks arent landing in the right place" (the owner, same evening).
+        "clicks arent landing in the right place" .
 
         The frame path already refuses to trust a width under
         REPAIR_HARD_FLOOR_W. The click path has to agree with it, or the
@@ -1004,12 +1046,10 @@ class _Streamer:
             return False
         if width < MIN_VIEWPORT_W or height < MIN_VIEWPORT_H:
             return False
-        # Chrome's 125% host display scale turns a 1280 device-metrics width
-        # into 1024 CSS px. Responsive layout follows CSS pixels, so compare
-        # the observed viewport to the desktop CSS floor, not to view_w — and
-        # give a scrollbar allowance: cssLayoutViewport excludes the ~15px
-        # scrollbar, so scrollable pages legitimately read a few px under the
-        # floor. A hard floor here strobed the real window (see SCROLLBAR_CSS_ALLOW).
+        # Responsive layout follows CSS pixels. Keep the historical lower bound
+        # as a collapsed-layout signal and give scrollbars their gutter; exact
+        # viewport ownership is checked separately in DEVICE pixels, where a
+        # foreign 1024 override cannot masquerade as a valid desktop width.
         if width < DESKTOP_CSS_MIN_W - SCROLLBAR_CSS_ALLOW:
             return False
         return True
@@ -1040,7 +1080,9 @@ class _Streamer:
                 await self._refresh_active_page()
                 await self._follow_active_tab()
                 async with self._iolock():
+                    _capture_start = time.monotonic()
                     png = await self._grab(self._page)
+                    _diagnostics.record('capture_ms', (time.monotonic() - _capture_start) * 1000)
                 if png:
                     self._publish_frame(png)
                     if self.status == "connecting":
@@ -1131,8 +1173,7 @@ class _Streamer:
                 # SAME Chrome over CDP, and that attach pushes Playwright's own
                 # emulation defaults — dropping our setDeviceMetricsOverride,
                 # so the canvas snaps from view_w back to the window's native
-                # width the moment a task begins (the owner 2026-07-29 "the Operator
-                # browser suddenly resizes"). Same mechanism as the
+                # width the moment a task begins . Same mechanism as the
                 # prefers-color-scheme flip handled in _force_desktop_page.
                 #
                 # The repair loop does NOT cover this: its gate only fires when
@@ -1152,7 +1193,8 @@ class _Streamer:
                 # doubles as "the attach clobbered us". Only re-assert then —
                 # a matching viewport needs nothing, and staying quiet keeps us
                 # off the back of a run that resizes deliberately.
-                if getattr(self, "_gate_misses", 0) > 0:
+                if (getattr(self, "_gate_misses", 0) > 0
+                        or getattr(self, "_foreign_metric_misses", 0) > 0):
                     try:
                         self._vp_log("run-start-reassert",
                                      f"{self._run_start_fixups} left")
@@ -1160,11 +1202,13 @@ class _Streamer:
                     except Exception:  # noqa: BLE001
                         pass
             if self._was_busy and not busy:
-                # run just ended → sweep the emulation it may have left on the
-                # shared browser (never mid-run: a run may emulate deliberately)
+                # Run just ended: restore our viewport by OVERWRITING the
+                # visible target. Clearing it first paints a native-width frame
+                # between clear/apply — the user-visible zoom pulse. Background
+                # targets can still be scrubbed because they are not on screen.
                 try:
-                    self._vp_log("run-end-sweep")
-                    await self._clear_emulation()
+                    self._vp_log("run-end-restore")
+                    await self._restore_operator_view()
                 except Exception:  # noqa: BLE001
                     pass
             self._was_busy = busy
@@ -1193,7 +1237,7 @@ class _Streamer:
             # whose device scale ≠ 1 (Windows display scaling — here 1.25),
             # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
             # the FULL device viewport so coverage is complete (no right/bottom
-            # crop — the owner's "right edge cut off").
+            # crop — the owner "right edge cut off").
             #
             # OUTPUT AT DEVICE RESOLUTION (scale=1.0), not CSS width. Click
             # accuracy does NOT depend on frame size — the frontend sends
@@ -1219,6 +1263,8 @@ class _Streamer:
                         or (_m or {}).get("cssLayoutViewport") or {})
                 _cw = float(_css.get("clientWidth") or 0)
                 _ch = float(_css.get("clientHeight") or 0)
+                _dw = float(_dev.get("clientWidth") or 0)
+                _dh = float(_dev.get("clientHeight") or 0)
                 _gate_ok = (self._accept_viewport(_cw, _ch)
                             and self._matches_view_metrics(_cw, _ch))
                 self._gate_misses = 0 if _gate_ok else (
@@ -1237,7 +1283,29 @@ class _Streamer:
                     _u = page.url or ""
                 except Exception:  # noqa: BLE001
                     _u = ""
-                if _gate_ok or _u != getattr(self, "_gate_url", _u):
+                # layoutViewport should settle at the requested effective
+                # width. _applied_view_w may be 15px wider solely to pay for a
+                # scrollbar gutter; using that raw override as the centre of a
+                # 48px deadband is how the live 1250px drift escaped detection.
+                _expected_dw = float(self.view_w or 0)
+                _metrics_owned = not _u.lower().startswith(
+                    ("chrome://", "devtools://"))
+                _foreign_metrics = bool(
+                    self.view_w
+                    and _metrics_owned
+                    and not _u.split("?", 1)[0].lower().endswith(".pdf")
+                    and device_metrics_drifted(_dw, _expected_dw))
+                self._foreign_metric_misses = (
+                    getattr(self, "_foreign_metric_misses", 0) + 1
+                    if _foreign_metrics else 0)
+                # A CSS-desktop-sized page can STILL have a foreign device
+                # override. Do not call that recovery and erase _repair_duds:
+                # that made an ineffective repair repeat forever. Chrome's own
+                # privileged pages are excluded above because they ignore the
+                # override entirely; retrying those was the recorder's 30s
+                # New Tab pulse.
+                if ((_gate_ok and not _foreign_metrics)
+                        or _u != getattr(self, "_gate_url", _u)):
                     if getattr(self, "_repair_dormant", False):
                         self._vp_log("repair-rearm",
                                      "gate ok" if _gate_ok else "nav")
@@ -1251,10 +1319,13 @@ class _Streamer:
                 if not _gate_ok and _cw and _pw_ and _cw < _pw_:
                     self._vp_log("vp-walk", f"{_pw_:.0f}->{_cw:.0f}")
                 self._gate_prev_w = _cw
-                if (not _gate_ok
+                _collapsed_due = (not _gate_ok
                         and _cw < REPAIR_HARD_FLOOR_W
+                        and self._collapse_score >= COLLAPSE_REPAIR_AT)
+                _foreign_due = (
+                    self._foreign_metric_misses >= REPAIR_AFTER_MISSES)
+                if ((_collapsed_due or _foreign_due)
                         and not getattr(self, "_repair_dormant", False)
-                        and self._collapse_score >= COLLAPSE_REPAIR_AT
                         and time.monotonic() - getattr(self, "_repair_ts", 0.0)
                         > getattr(self, "_repair_backoff", 5.0)):
                     # A switched target can inherit a collapsed/stale emulation
@@ -1276,8 +1347,14 @@ class _Streamer:
                     # (one-shot events).
                     self._gate_misses = 0
                     self._collapse_score = 0   # a fired repair re-earns its score
+                    self._foreign_metric_misses = 0
                     self._repair_ts = time.monotonic()
-                    self._vp_log("repair", f"css {_cw:.0f}x{_ch:.0f} under floor")
+                    if _foreign_due:
+                        self._vp_log(
+                            "repair-foreign-viewport",
+                            f"device {_dw:.0f}px, expected {_expected_dw:.0f}px")
+                    else:
+                        self._vp_log("repair", f"css {_cw:.0f}x{_ch:.0f} under floor")
                     await self._force_desktop_page(page, force=True)
                     _m = await asyncio.wait_for(
                         sess.send("Page.getLayoutMetrics"), timeout=1.0)
@@ -1287,8 +1364,12 @@ class _Streamer:
                             or (_m or {}).get("cssLayoutViewport") or {})
                     _cw = float(_css.get("clientWidth") or 0)
                     _ch = float(_css.get("clientHeight") or 0)
+                    _dw = float(_dev.get("clientWidth") or 0)
+                    _expected_dw = float(self.view_w or 0)
                     if (self._accept_viewport(_cw, _ch)
-                            and self._matches_view_metrics(_cw, _ch)):
+                            and self._matches_view_metrics(_cw, _ch)
+                            and not device_metrics_drifted(
+                                _dw, _expected_dw)):
                         self._repair_backoff = 5.0
                         self._repair_duds = 0
                     else:
@@ -1300,9 +1381,7 @@ class _Streamer:
                         # and its overrides never reach the live page — clear+
                         # apply then just perturbs the real page visibly every
                         # backoff period: the "zooms in then back out, viewport
-                        # static" pulse (the owner 2026-07-23, live-diagnosed: the
-                        # streamer's session read 708x634 while a fresh session
-                        # on the same target read the true 1012x891). Drop the
+                        # static" pulse . Drop the
                         # session so the next attempt rebuilds against the
                         # CURRENT target; after 3 dud repairs go DORMANT until
                         # a nav/tab-switch/attach resets the gate — a forever
@@ -1327,7 +1406,7 @@ class _Streamer:
                             self._repair_dormant = True
                 # REGIME-AWARE CLIP (2026-07-26 rev 2 — the "chin", then the
                 # reset-view crop). Two capture regimes coexist on a
-                # display-scaled Chrome (host WSLg 125%):
+                # display-scaled Chrome (the host WSLg 125%):
                 #  * OUR OVERRIDE ACTIVE — the page lays out at
                 #    cssLayoutViewport (override/1.25) and captureScreenshot
                 #    renders it 1:1 CSS onto an override-sized canvas. The
@@ -1338,7 +1417,7 @@ class _Streamer:
                 #  * NATIVE (no override — a PDF tab, or a page "Fix stuck
                 #    zoom" swept and the live-page re-apply missed) — capture
                 #    renders at device scale, so the CSS clip zooms+crops
-                #    (the owner's google.com "urgh browser issues") and the device
+                #     and the device
                 #    clip is the correct one.
                 # Which regime? Our override is active exactly when the DEVICE
                 # layout viewport equals the view target (that is what
@@ -1346,8 +1425,6 @@ class _Streamer:
                 # window size instead. Height only gates when view_h is
                 # explicit. Click mapping is safe either way — the frontend
                 # sends normalized (0..1) coords mapped to CSS px.
-                _dw = float(_dev.get("clientWidth") or 0)
-                _dh = float(_dev.get("clientHeight") or 0)
                 # compare against what _apply_view_metrics ACTUALLY applied —
                 # the scrollbar-deficit compensation can overshoot view_w
                 _aw = float(getattr(self, "_applied_view_w", 0) or self.view_w)
@@ -1404,9 +1481,11 @@ class _Streamer:
                                     "width": _bw, "height": _bh, "scale": _scale}
             except Exception:
                 pass   # metrics unavailable → unclipped frame (full coverage on stock scale)
+            _capture_encode_start = time.monotonic()
             res = await asyncio.wait_for(
                 sess.send("Page.captureScreenshot", args),
                 timeout=2.5)
+            _diagnostics.record('capture_encode_ms', (time.monotonic() - _capture_encode_start) * 1000)
             try:
                 cr = await asyncio.wait_for(sess.send("Runtime.evaluate", {
                     "expression": "JSON.stringify(window.__opClick||null)",
@@ -1478,7 +1557,7 @@ class _Streamer:
         not just the newest one. _refresh_active_page only switches when the tab COUNT
         changes (and always to the last tab), so an agent that flips between already-
         open tabs (clicks a link that activates an existing tab, or switches back to
-        tab 1) left the view frozen on the stale tab (the owner 2026-06-30).
+        tab 1) left the view frozen on the stale tab .
 
         Foreground is decided by the CDP target list (_active_target_id), NOT by
         document.visibilityState: this docstring used to claim "only the
@@ -1498,7 +1577,7 @@ class _Streamer:
             ctx = self._browser.contexts[0]
             live = self._live_pages(ctx)
             # Extension popups are real Chrome targets but absent from
-            # Playwright's context.pages. Follow a fresh 1Password unlock
+            # Playwright's context.pages. Follow a fresh a password manager's unlock
             # prompt into a normal tab before the single-page early return.
             popups = self._onepassword_popup_targets()
             fresh_popups = popups - self._onepassword_seen
@@ -1511,7 +1590,7 @@ class _Streamer:
                 _busy = operator_agent.runner.is_running()
             except Exception:  # noqa: BLE001
                 _busy = False
-            # AUTO-mode focus enforcement (the owner 2026-07-22): while a run is
+            # AUTO-mode focus enforcement : while a run is
             # live, the bot browser must SHOW the streamed (= agent's) tab at
             # all times. bring_to_front of an already-front tab is a cheap
             # activation no-op (no emulation, no reflow), so re-asserting it
@@ -1528,8 +1607,7 @@ class _Streamer:
                         pass
             if len(live) < 2:
                 return  # single tab → nothing to follow
-            # ACTIVITY BEATS VISIBILITY (the owner 2026-07-08: "the view doesn't track
-            # the tab the bot is using — some bots, not others"): agents drive
+            # ACTIVITY BEATS VISIBILITY : agents drive
             # pages over CDP, which never foregrounds them — the MCP picks its
             # current tab at connect independent of Chrome's focus, and navigate/
             # click never activate a target (only the explicit tab tools do). So
@@ -1539,7 +1617,7 @@ class _Streamer:
             # ONLY while an agent run is live: outside a run, "URL activity" is
             # SPA churn in idle tabs (Google Travel pushStates on its own), and
             # yanking focus then kills in-page popups the USER is working with
-            # (1Password's inline menu dies on blur) — and in manual mode a view
+            # (a password manager's inline menu dies on blur) — and in manual mode a view
             # switch would re-aim the user's steer clicks at the wrong page.
             urls = {pg: pg.url for pg in live}
             prev = getattr(self, "_tab_urls", {})
@@ -1552,9 +1630,7 @@ class _Streamer:
                     self._target_ids.pop(_dead, None)
             # A tab CREATED AND NAVIGATED between two polls has no prev entry,
             # so the url-diff never saw it — the agent's fresh MCP tab could
-            # stream-shadow behind a stale one indefinitely (the owner 2026-07-27
-            # "isn't displaying the tab the agent is working on at ALL
-            # times"). While busy, a brand-new non-blank tab counts as a
+            # stream-shadow behind a stale one indefinitely . While busy, a brand-new non-blank tab counts as a
             # mover too.
             moved = ([pg for pg in live
                       if (pg in prev and prev[pg] != urls[pg])
@@ -1603,9 +1679,7 @@ class _Streamer:
                                 await sess.detach()
                             except Exception:  # noqa: BLE001
                                 pass
-            # AUTHORITATIVE foreground check (the owner 2026-07-29: "the operator
-            # browser doesn't focus on the tab the bot is working on is STILL
-            # present"). The visibilityState probes below cannot answer this on
+            # AUTHORITATIVE foreground check . The visibilityState probes below cannot answer this on
             # our Chrome — every tab reports 'visible' (see _active_target_id),
             # so the old `cur_vis == "visible"` early-return matched ALWAYS and
             # froze the view on whatever tab it happened to hold. That left the
@@ -1676,6 +1750,7 @@ class _Streamer:
         self._page = self._browser = self._pw = None
         self._crashed_pages.clear()
         self._metric_sessions.clear()
+        self._zoom_scripts.clear()
         self._target_ids.clear()   # ids are per-browser — never reuse across attach
         # an error status (wedge, attach failure) must SURVIVE teardown — it
         # carries the user-facing message and keys the relaunch backoff
@@ -1721,11 +1796,51 @@ class _Streamer:
                 failed += 1
         return {"ok": True, "cleared": cleared, "failed": failed}
 
+    async def _restore_operator_view(self) -> dict:
+        """Restore Operator's viewport after a run without flashing the page.
+
+        `clearDeviceMetricsOverride` is useful for an explicit repair, but on
+        the visible target it briefly exposes Chrome's native canvas before
+        Operator re-applies its own width. A routine run boundary must replace
+        the override in one shot. Hidden tabs are still cleared so stale agent
+        emulation cannot survive until their next activation.
+        """
+        restored, cleared, failed = 0, 0, 0
+        try:
+            ctx = self._browser.contexts[0]
+            pages = self._live_pages(ctx)
+        except Exception as e:  # noqa: BLE001 — browser gone/never attached
+            return {"ok": False, "error": str(e), "restored": 0,
+                    "cleared": 0, "failed": 0}
+        for pg in pages:
+            try:
+                sess = await self._metric_session(pg)
+                if pg is self._page:
+                    await self._force_desktop_page(pg, force=True)
+                    restored += 1
+                else:
+                    await asyncio.wait_for(
+                        sess.send("Emulation.clearDeviceMetricsOverride"),
+                        timeout=1.5)
+                    try:
+                        await asyncio.wait_for(sess.send(
+                            "Emulation.setScrollbarsHidden", {"hidden": False}),
+                            timeout=1.5)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await asyncio.wait_for(sess.send(
+                        "Emulation.setTouchEmulationEnabled", {"enabled": False}),
+                        timeout=1.5)
+                    cleared += 1
+            except Exception:  # noqa: BLE001 — dead/privileged page, keep sweeping
+                failed += 1
+        return {"ok": True, "restored": restored, "cleared": cleared,
+                "failed": failed}
+
     # ---- tabs ------------------------------------------------------------
     def list_tabs(self) -> list:
         """Snapshot of open tabs (title/url/active). Runs on the loop thread."""
         if not self._running or self._loop is None:
-            self.ensure_running()
             return []
         try:
             fut = asyncio.run_coroutine_threadsafe(self._list_tabs(), self._loop)
@@ -1906,7 +2021,7 @@ class _Streamer:
         # nulls it), so actions used to be posted onto a stopped loop — the
         # future never resolved, every click burned the full 30s timeout, and
         # the cockpit read "browser disconnected" until a manual refresh
-        # (the owner 2026-08-10). Refuse fast and relaunch instead.
+        # . Refuse fast and relaunch instead.
         if loop is None or not loop.is_running():
             self._force_reattach()
             return {"ok": False, "error": "browser link lost — reconnecting"}
@@ -1938,7 +2053,7 @@ class _Streamer:
         session is bound to one target, so after a page swap a stale cache
         dispatched clicks/keys into the old (background/closed) tab while the
         capture showed the new one — taps rippled, steers returned ok, and the
-        visible page never reacted (the owner 2026-07-12, after a tab close). Most
+        visible page never reacted . Most
         _page-swap sites null the cache manually; this identity check is the
         backstop so no future swap site can reintroduce the class."""
         sess = getattr(self, "_cdp", None)
@@ -1989,6 +2104,10 @@ class _Streamer:
                 pass
             self._vp_log("force-desktop", _u)
             sess = await self._metric_session(p)
+            # CSS zoom is page-target state. Install the selected value before
+            # page scripts so a deliberate menu zoom survives navigation
+            # without a one-frame neutral-scale flash.
+            await self._pin_page_zoom(p, sess)
             # Overwrite any STALE metrics an agent run / stray browser_resize
             # left with OUR deliberate phone-legible width (view_w).
             # setDeviceMetricsOverride REPLACES a prior override wholesale, so
@@ -2020,6 +2139,49 @@ class _Streamer:
                 "features": [{"name": "prefers-color-scheme",
                               "value": _COLOR_SCHEME}]}), timeout=3)
         except Exception:
+            pass
+
+    async def _pin_page_zoom(self, p, sess=None) -> None:
+        """Apply the selected CSS zoom now and before every future document.
+
+        A DOMContentLoaded listener is one lifecycle phase too late: Chromium
+        can paint the unzoomed document first. CDP's new-document hook runs
+        before page script and `runImmediately` covers the already-open page.
+        Replacing the hook when the menu changes zoom also prevents stale init
+        scripts from racing in an unspecified order on the next navigation.
+        """
+        try:
+            zoom = float(self.zoom or 1.0)
+            prior = self._zoom_scripts.get(p)
+            if prior and abs(float(prior[0]) - zoom) < 0.0001:
+                return
+            sess = sess or await self._metric_session(p)
+            if prior and prior[1]:
+                try:
+                    await asyncio.wait_for(sess.send(
+                        "Page.removeScriptToEvaluateOnNewDocument",
+                        {"identifier": prior[1]}), timeout=2)
+                except Exception:  # noqa: BLE001 — replace remains best-effort
+                    pass
+            source = """(() => {
+              const apply = () => {
+                const root = document.documentElement;
+                if (!root) return false;
+                root.style.setProperty('zoom', '%s', 'important');
+                return true;
+              };
+              if (!apply()) {
+                const observer = new MutationObserver(() => {
+                  if (apply()) observer.disconnect();
+                });
+                observer.observe(document, {childList: true});
+              }
+            })();""" % zoom
+            result = await asyncio.wait_for(sess.send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": source, "runImmediately": True}), timeout=2)
+            self._zoom_scripts[p] = (zoom, (result or {}).get("identifier"))
+        except Exception:  # noqa: BLE001 — privileged pages may reject scripts
             pass
 
     async def _apply_view_metrics(self, p, sess=None, force=False) -> None:
@@ -2061,8 +2223,7 @@ class _Streamer:
                 self._vp_log("apply-pdf-window",
                              f"{int(self.view_w)}x{int(self.view_h or 0)}")
                 return
-            # APPLY STORM GUARD (the owner 2026-07-27 "window still randomly
-            # resizes, esp when I navigate away"): SPA-heavy pages fire
+            # APPLY STORM GUARD : SPA-heavy pages fire
             # several frameNavigated events per nav, and each force-desktop
             # re-applied the override — with the scrollbar compensation's
             # second apply on top, one navigation produced a visible burst of
@@ -2088,16 +2249,16 @@ class _Streamer:
                 "screenHeight": int(self.view_h or 1400),
             }), timeout=3)
             self._applied_view_w = _w_apply
-            # SCROLLBAR DEFICIT (the owner 2026-07-27 "black bars left/right"): a
+            # SCROLLBAR DEFICIT : a
             # visible vertical scrollbar shaves ~15px off cssLayoutViewport, so
             # frames came back a sliver narrower than the beaconed stage and
             # object-fit pillarboxed them. setScrollbarsHidden is a no-op on a
             # GUI Chrome (live-tested — the classic scrollbar keeps its layout
             # gutter), so instead: measure the shave and OVERSHOOT the override
             # proportionally so the css viewport nets the full target. The
-            # adjusted width is remembered in _applied_view_w — _grab's regime
-            # detection must compare the device viewport against what we
-            # actually applied, not the stage target.
+            # adjusted width is remembered in _applied_view_w for capture-regime
+            # detection. Ownership drift is centred on view_w instead: the
+            # overshoot exists only to net that effective width after gutters.
             try:
                 # first contact for this view target only — once the deficit is
                 # cached, navs skip the measure entirely (no second apply)
@@ -2130,7 +2291,7 @@ class _Streamer:
                         self._sb_comp = {}
                     self._sb_comp[int(self.view_w)] = _w2
                     self._vp_log("apply-sb-comp",
-                                 f"css {_cw:.0f} deficit {_deficit:.0f} -> {_w2}")
+                                 f"device {_dw:.0f} deficit {_deficit:.0f} -> {_w2}")
             except Exception:  # noqa: BLE001 — compensation is best-effort
                 pass
             # logged AFTER the send: the recorder previously logged intent
@@ -2371,7 +2532,7 @@ class _Streamer:
         return None
 
     async def _open_onepassword_tab(self):
-        """Open 1Password's unlock UI as a streamable, foreground tab."""
+        """Open a password manager's unlock UI as a streamable, foreground tab."""
         pg = await self._cdp_open_tab(_onepassword_visible_page())
         if pg is None:
             try:
@@ -2487,7 +2648,7 @@ class _Streamer:
                 # 2 double, 3 triple → sentence/paragraph select). Sent per physical
                 # click, so dispatch it incrementally (ramp=False). The agent's
                 # dblclick_at carries no count and keeps the full ramped sequence.
-                # NATIVE <select> shim (the owner 2026-07-21): a real click on a
+                # NATIVE <select> shim : a real click on a
                 # <select> opens an OS-drawn popup that raw CDP mouse events
                 # can't reach — the option list isn't in the page, so the
                 # follow-up option-click hits nothing and the value never
@@ -2571,7 +2732,7 @@ class _Streamer:
                 # wait_until="commit" returns as soon as the navigation COMMITS (not
                 # full load), so we don't hold the io-lock for up to 15s while the page
                 # loads — that lock starves the grab loop and froze/broke the feed on
-                # back/forward (the owner). The feed then streams the new page as it loads.
+                # back/forward . The feed then streams the new page as it loads.
                 await p.go_back(wait_until="commit", timeout=8000)
             elif kind == "forward":
                 await p.go_forward(wait_until="commit", timeout=8000)
@@ -2616,10 +2777,7 @@ class _Streamer:
                     self.zoom = max(0.3, round(self.zoom - 0.1, 2))
                 else:
                     self.zoom = 1.0
-                try:
-                    await p.evaluate(f"document.documentElement.style.zoom = '{self.zoom}'")
-                except Exception:
-                    pass
+                await self._pin_page_zoom(p, await self._metric_session(p))
             elif kind == "stage_size":
                 # Smart viewport follow: the viewer's stage size (CSS px, sent as
                 # "WxH" in value) becomes the remote layout viewport, clamped —
@@ -2696,7 +2854,7 @@ class _Streamer:
             elif kind == "onepassword":
                 pg = await self._open_onepassword_tab()
                 if pg is None:
-                    return {"ok": False, "error": "1Password unlock page unavailable"}
+                    return {"ok": False, "error": "a password manager's unlock page unavailable"}
                 return {"ok": True, "url": _onepassword_visible_page()}
             elif kind == "hard_reload":
                 await p.reload(timeout=20000)
@@ -2767,7 +2925,7 @@ _streamer = _Streamer()
 # /operator/status reports the STREAMER's state, which on the launchpad rests at
 # 'idle' whether Chrome is healthy or stone dead — nothing has tried to connect
 # yet. So the launchpad mark settled into its "connected" pose over a browser
-# that wasn't there (the owner 2026-08-02, after an evening of exactly that).
+# that wasn't there .
 #
 # Probed OFF the request path on purpose: _cdp_alive() is a blocking urllib call
 # and a WEDGED Chrome is precisely the case where it burns its full timeout —
@@ -2811,7 +2969,7 @@ def _cdp_up_cached() -> "bool | None":
 import shutil as _shutil
 import subprocess as _fsp
 
-_CU_DIR = str(Path(__file__).resolve().parent / "computer-use")
+_CU_DIR = str(Path(__file__).resolve().parent.parent / "computer-use")
 
 _SURFACE_DEFS = [
     {"key": "browser", "label": "Browser",
@@ -3056,9 +3214,9 @@ def _inject_version():
 @bp.route("/operator")
 def operator_page():
     from flask import make_response
-    # demo: serve the standalone, de-PII'd template (no squad chrome/nav, no owner
+    # demo: serve the standalone, de-PII'd template (no the app chrome/nav, no owner
     # refs, bot picker collapsed). Regenerate with gen_demo_template.py.
-    _tmpl = "operator_demo.html" if DEMO else "operator.html"
+    _tmpl = "operator.html"   # public build: no demo template fork
     # Seed the viewport BEFORE the page paints. The cockpit writes its stage
     # size to op_stage, so a returning viewer's geometry rides up on the
     # document request and the streamer's first attach already targets it —
@@ -3067,6 +3225,11 @@ def operator_page():
     if "x" in _stage:
         _w, _, _h = _stage.partition("x")
         _streamer.seed_view_from_stage(_w, _h)
+    # Rendering the private Operator cockpit is explicit browser demand.  Keep
+    # the polling endpoints passive so a stale tab cannot relaunch Chrome after
+    # the user has left, but make a fresh page visit wake it for real use.
+    if not DEMO:
+        _streamer.ensure_running()
     resp = make_response(render_template(
         _tmpl, standalone=STANDALONE, demo_interactive=DEMO_INTERACTIVE))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -3128,10 +3291,9 @@ def _apply_feed_tier() -> None:
 
 
 def _frame_source():
-    """Return (surface, source, mime), starting only the selected feed."""
+    """Return (surface, source, mime) without waking an idle browser."""
     surface = _active_surface["name"]
     if surface == "browser":
-        _streamer.ensure_running()
         return surface, _streamer, "image/jpeg"
     _desktop_feed.ensure_running(surface)
     return surface, _desktop_feed, _desktop_feed.mime
@@ -3149,14 +3311,14 @@ def operator_stream():
     _Streamer; desktop surfaces → the _DesktopFeed. Switching surfaces mid-
     stream just swaps the source, no reconnect needed."""
     _apply_feed_tier()
-    if _active_surface["name"] == "browser":
-        _streamer.ensure_running()
-    else:
+    if _active_surface["name"] != "browser":
         _desktop_feed.ensure_running(_active_surface["name"])
     # captured OUTSIDE gen() — no request context inside a streaming generator
     _cid = request.args.get("cid") or ""
 
     def _part(data, mime=b"image/jpeg"):
+        _diagnostics.record('frames_sent')
+        _diagnostics.record('frame_bytes', len(data))
         return (b"--frame\r\n"
                 b"Content-Type: " + mime + b"\r\n"
                 b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n"
@@ -3177,7 +3339,6 @@ def operator_stream():
         while True:
             if _active_surface["name"] == "browser":
                 src = _streamer
-                _streamer.ensure_running()
                 mime = b"image/jpeg"
             else:
                 src = _desktop_feed
@@ -3246,6 +3407,9 @@ def operator_frame():
     else:
         resp = Response(f or _PLACEHOLDER_JPEG,
                         mimetype=mime if f else "image/jpeg")
+        if f:
+            _diagnostics.record('frames_sent')
+            _diagnostics.record('frame_bytes', len(f))
     resp.headers["Cache-Control"] = "no-store"
     resp.headers["X-Operator-Frame"] = "live" if f else "placeholder"
     resp.headers["X-Operator-Frame-ID"] = token
@@ -3272,7 +3436,7 @@ def operator_homepage():
     """The landing page for new tabs and the last-tab reset.
 
     Server-side because Python is what opens those tabs — a localStorage
-    preference could never reach it (the owner 2026-08-07).
+    preference could never reach it .
     """
     if request.method == "GET":
         return jsonify(ok=True, homepage=operator_prefs.homepage(),
@@ -3327,9 +3491,18 @@ def operator_shot(name):
     return resp
 
 
+@bp.route("/operator/tab-cleanup")
+def operator_tab_cleanup_status():
+    """Read-only housekeeping counters; no browser probe or page contents."""
+    import operator_tab_cleanup
+    return jsonify(operator_tab_cleanup.status())
+
+
 @bp.route("/operator/status")
 def operator_status():
-    _streamer.last_view = time.monotonic()
+    # Status observers are not frame consumers. Renewing capture here kept
+    # background cockpits alive after their actual frame pump had paused.
+    # /frame and /stream retain ownership of the capture idle deadline.
     # cockpit is open and polling → any finished-run badge is "seen"
     if not DEMO:
         try:
@@ -3341,7 +3514,6 @@ def operator_status():
     if surface != "browser":
         # desktop feed: freshness from ITS buffer; no viewport/url/click mapping
         # (manual control is browser-only — the UI disables it on desktop).
-        _desktop_feed.last_view = time.monotonic()
         fresh = (_desktop_feed.frame is not None
                  and (time.monotonic() - _desktop_feed.frame_ts) < 8.0)
         return jsonify(status=("live" if fresh else "connecting"),
@@ -3388,6 +3560,18 @@ def operator_history_list():
     if DEMO:
         return jsonify(ok=False, error="history is live-cockpit only"), 403
     import operator_history as _hist
+    cid = request.args.get('conversation_id')
+    if cid:
+        import operator_session as _sessions
+        try:
+            _sessions.load(conversation_id=cid, require_exists=True)
+            return jsonify(ok=True, **_hist.conversation_turns(cid,
+                before=max(0, int(request.args.get('before', 0))),
+                after=max(0, int(request.args.get('after', 0)))))
+        except KeyError:
+            return jsonify(ok=False, error='no such conversation'), 404
+        except (ValueError, TypeError):
+            return jsonify(ok=False, error='invalid history cursor'), 400
     try:
         limit = min(max(int(request.args.get("limit", 30)), 1), 200)
     except (TypeError, ValueError):
@@ -3439,7 +3623,7 @@ def operator_session():
         client_id = str(body.get("client_id") or "").strip()
         if client_id:
             control = _sess_store.touch_presence(
-                cid, client_id, str(body.get("device_label") or ""))
+                cid, client_id, _peer_device_label(request.remote_addr, body.get("device_label")))
             if not control["can_control"]:
                 current = _sess_store.load(conversation_id=cid)
                 return jsonify(
@@ -3498,11 +3682,14 @@ def operator_session_one(sid: str):
     if DEMO:
         return jsonify(ok=False, error="demo sessions are per-visitor"), 403
     import operator_session as _sess_store
+    import operator_workspace
     try:
         if request.method == "DELETE":
+            _sess_store.load(sid)
             status = operator_agent.runner.conversation_summaries().get(sid, {})
             if status.get("alive"):
                 return jsonify(ok=False, error="stop this conversation before deleting it"), 409
+            operator_workspace.delete_conversation(sid)
             out = _sess_store.delete(sid)
             _browser_tab_command("release", sid, close=True)
             return jsonify(ok=True, **out)
@@ -3518,6 +3705,8 @@ def operator_session_one(sid: str):
         return jsonify(ok=True, **_sess_store.activate(sid))
     except KeyError:
         return jsonify(ok=False, error="no such conversation"), 404
+    except operator_workspace.Conflict as exc:
+        return jsonify(ok=False, error=str(exc)), 409
 
 
 def _browser_tab_command(action: str, sid: str, *, close: bool = False) -> bool:
@@ -3567,7 +3756,7 @@ def operator_session_presence(sid: str):
     try:
         out = _sess_store.touch_presence(
             sid, str(body.get("client_id") or ""),
-            str(body.get("label") or body.get("device_label") or ""),
+            _peer_device_label(request.remote_addr, body.get("label") or body.get("device_label")),
             take_over=bool(body.get("take_over")))
         return jsonify(ok=True, conversation_id=sid, **out)
     except ValueError as e:
@@ -3695,6 +3884,7 @@ def _desktop_steer(action: dict) -> dict:
 
 @bp.route("/operator/steer", methods=["POST"])
 def operator_steer():
+    input_started = time.monotonic()
     data = request.get_json(silent=True) or request.form
     if DEMO and data.get("kind") in ("extensions", "onepassword"):
         return jsonify(ok=False, error="extensions are unavailable in demo mode"), 403
@@ -3708,7 +3898,7 @@ def operator_steer():
               # _do_action always fell through to the keyword branch with val=="" (the
               # wheel handler never sends `value`) → amt defaulted to 600 (down) no
               # matter which way the wheel actually moved. That's why wheel-up did
-              # nothing while wheel-down "worked" (the owner 2026-06-30).
+              # nothing while wheel-down "worked" .
               "dx": data.get("dx"), "dy": data.get("dy"),
               # drag endpoints (kind=="drag") — were silently dropped by this
               # whitelist (same class as the dx/dy bug above), so a user drag
@@ -3729,12 +3919,15 @@ def operator_steer():
     # desktop surfaces: same gestures, injected via the surface backend instead
     # of CDP — manual steer works everywhere the feed does.
     if _active_surface["name"] != "browser":
-        return jsonify(_desktop_steer(action))
-    return jsonify(_streamer.run_action(action))
+        result = _desktop_steer(action)
+    else:
+        result = _streamer.run_action(action)
+    _diagnostics.record('input_ms', (time.monotonic() - input_started) * 1000)
+    return jsonify(result)
 
 
-# ── Live-session driving (the owner 2026-06-26) ──────────────────────────────────
-# Dispatch a task to one of the host bots' real Discord sessions; the bot
+# ── Live-session driving  ──────────────────────────────────
+# Dispatch a task to one of the the host bots' real Discord sessions; the bot
 # runs it on the SAME shared Chrome the operator views. The browser actions are
 # surfaced via the MCP action-tap (operator-events.ndjson) which every bot's
 # playwright-mcp wrapper writes to — so the operator shows "🤖 <bot> · Clicking…"
@@ -3742,7 +3935,7 @@ def operator_steer():
 import json as _json
 import os as _os
 
-# The 5 drivers: host bots that can take the wheel. home_channel = where the
+# The 5 drivers: the host bots that can take the wheel. home_channel = where the
 # operator posts the task (the running bot picks it up as a prompt). `key` is the
 # bot name the action-tap stamps events with (must match detect_bot()).
 DRIVERS = [
@@ -3783,7 +3976,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
         return None
     last = evs[-1]
     if time.time() - last.get("ts", 0) <= window_s:
-        # demo: never leak squad bot names to a public visitor -> generic label.
+        # demo: never leak the app bot names to a public visitor -> generic label.
         _b = "assistant" if DEMO else last.get("bot")
         return {"bot": _b, "action": last.get("action"),
                 "detail": last.get("detail", "")}
@@ -3793,7 +3986,7 @@ def _current_driver(window_s: float = 12.0) -> dict | None:
 @bp.route("/operator/drivers")
 def operator_drivers():
     """The pickable drivers — the operator runs them headless. In demo mode this is
-    a single generic 'gpt' driver (never leak squad bot names to a public visitor)."""
+    a single generic 'gpt' driver (never leak the app bot names to a public visitor)."""
     if DEMO:
         return jsonify(drivers=[{"key": "bot", "label": "bot"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
@@ -4021,7 +4214,7 @@ def _thread_control_guard(data, conversation_id: str):
     try:
         control = _sess_store.touch_presence(
             conversation_id, client_id,
-            str((data or {}).get("device_label") or ""))
+            _peer_device_label(request.remote_addr, (data or {}).get("device_label")))
     except (KeyError, ValueError) as exc:
         return jsonify(ok=False, error=str(exc)), 409
     if control["can_control"]:
@@ -4030,6 +4223,35 @@ def _thread_control_guard(data, conversation_id: str):
         ok=False,
         error=f"thread is open on {control['controller_label']}; take over to continue",
         controller_label=control["controller_label"]), 409
+
+
+def dispatch_for_machine(data: dict) -> tuple[dict, int]:
+    """Dispatch for the signed internal MCP capability (operator-mcp).
+
+    The same transaction as /operator/dispatch on the browser surface, minus
+    the cockpit trappings: no client_id lease (the envelope is the caller's
+    identity), no surface flip (machine delegations are browser-surface only,
+    desktop stays a cockpit decision), no demo branch (the internal
+    capability does not exist on the demo instance). The feed-readiness gate
+    stays: an agent starting behind a dead CDP attach burns a run clicking a
+    void, headless caller or not.
+    """
+    task = str(data.get("task") or "").strip()
+    if not task:
+        return {"ok": False, "error": "empty task"}, 400
+    cid = str(data.get("conversation_id") or "").strip() or None
+    browser_error = _streamer.require_ready()
+    if browser_error:
+        return {"ok": False, "error": browser_error}, 503
+    r = operator_agent.runner.start(
+        str(data.get("bot") or ""), task,
+        model=str(data.get("model") or ""),
+        effort=str(data.get("effort") or ""),
+        surface="browser", conversation_id=cid)
+    if r.get("ok"):
+        import operator_session as _sess_store
+        _sess_store.title_if_unset(task, conversation_id=cid)
+    return r, (200 if r.get("ok") else 409)
 
 
 @bp.route("/operator/dispatch", methods=["POST"])
@@ -4057,6 +4279,11 @@ def operator_dispatch():
         if surface not in ("browser", "desktop-sandbox"):
             surface = "browser"
         real_ok = False
+    if surface == "desktop-real" and not real_ok:
+        return jsonify(
+            ok=False,
+            error="desktop-real needs explicit confirmation (real_ok)",
+        ), 409
     if surface == "desktop-real":
         # pre-flight the capture BEFORE any side effect (surface flip, run
         # start): with the Windows console locked, win_capture returns a
@@ -4078,14 +4305,14 @@ def operator_dispatch():
             return jsonify(ok=False, error=browser_error), 503
     if DEMO:
         # public demo: gemma/agy runtime, model locked to the 2-entry demo list
-        # (off-list → Flash 3.7 Low default). The tier lives in the model string
+        # (off-list → Flash 3.8 Low default). The tier lives in the model string
         # ("(Thinking)"/"(Low)"), so client-sent effort is discarded — the lock
-        # owns effort. demo=True strips squad context/identity/tools.
+        # owns effort. demo=True strips the app context/identity/tools.
         bot = "gemma"
         if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
             model = OPERATOR_MODELS_DEMO[0]["value"]
         if surface == "desktop-sandbox":
-            # Flash has no computer-use tools (the owner 2026-07-09) — a sandbox run
+            # Flash has no computer-use tools  — a sandbox run
             # would just shell around. Desktop runs force Sonnet.
             model = "Claude Sonnet 4.6 (Thinking)"
         effort = ""
@@ -4111,8 +4338,8 @@ def operator_dispatch():
 # preferred-sites is a prompt HINT not a hard sandbox (both deferred — see the
 # handoff spec). Persistence + slug logic live in operator_tasks.py; these routes
 # are thin wrappers that, on /run, do exactly what /operator/dispatch does.
-# DEMO (the owner 2026-07-09): available, but against a demo-scoped store — the demo
-# instance MUST set OPERATOR_TASKS_PATH so visitors never see the squad's tasks.
+# DEMO : available, but against a demo-scoped store — the demo
+# instance MUST set OPERATOR_TASKS_PATH so visitors never see the app tasks.
 # Demo saves strip bot/schedule (forced at run / scheduler never runs in demo),
 # the store is capped, and /run applies the same lock as /operator/dispatch.
 
@@ -4177,6 +4404,8 @@ def operator_tasks():
         "effort": data.get("effort"),
         "start_url": data.get("start_url"),
         "schedule": "" if DEMO else data.get("schedule"),
+        'success_criteria': data.get('success_criteria', ''),
+        'authorization': {'mode': 'confirm'} if DEMO else data.get('authorization'),
     })
     if err:
         return jsonify(ok=False, error=err), 400
@@ -4242,11 +4471,13 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None,
     # v1 preferred-sites = prompt hint (not a hard sandbox).
     preamble = operator_tasks_store.sites_preamble(t.get("sites", []))
     task_prompt = f"{preamble}{prompt}" if preamble else prompt
+    if not DEMO and t.get('success_criteria'):
+        task_prompt += '\n\nSuccess criteria: ' + t['success_criteria']
 
     if DEMO:
         # same lock as /operator/dispatch: forced runtime, model allowlist,
         # no client effort. Saved-task runs are browser-surface, so no
-        # sandbox model force needed here. demo=True strips squad identity.
+        # sandbox model force needed here. demo=True strips the app identity.
         bot = "gemma"
         if model not in {m["value"] for m in OPERATOR_MODELS_DEMO}:
             model = OPERATOR_MODELS_DEMO[0]["value"]
@@ -4256,7 +4487,7 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None,
     else:
         r = operator_agent.runner.start(
             bot, task_prompt, model=model, effort=effort,
-            conversation_id=conversation_id)
+            conversation_id=conversation_id, authorization=t.get('authorization', {'mode': 'confirm'}))
     if r.get("ok"):
         operator_tasks_store.mark_run(slug)
         return r, 200
@@ -4328,7 +4559,8 @@ def operator_agent_say():
     if control_error:
         return control_error
     r = operator_agent.runner.steer(
-        text, conversation_id=conversation_id)
+        text, conversation_id=conversation_id,
+        message_id=str(data.get('message_id', '')), run_id=str(data.get('run_id', '')))
     return (jsonify(r), 200) if r.get("ok") else (jsonify(r), 409)
 
 
@@ -4341,8 +4573,11 @@ def operator_agent_reset():
     control_error = _thread_control_guard(data, conversation_id)
     if control_error:
         return control_error
-    return jsonify(operator_agent.runner.reset_session(
-        bot, conversation_id=conversation_id))
+    result = operator_agent.runner.reset_session(bot, conversation_id=conversation_id)
+    if result.get('ok'):
+        import operator_history as _history
+        _history.clear_conversation_history(conversation_id)
+    return jsonify(result)
 
 
 @bp.route("/operator/driver-status")
@@ -4388,10 +4623,10 @@ import subprocess as _sp
 # claude-b runs from ~ so match its CLAUDE_CONFIG_DIR in the environ instead.
 _BOT_LIVE_CWD = {
     "claude-a": "/claude-agents/claude-a",
-    "claude-c": "/claude-agents/claude-c",
-    "claude-d": "/claude-agents/claude-d",
+    "claude-a": "/claude-agents/claude-a",
+    "claude-a": "/claude-agents/claude-a",
 }
-_BOT_LIVE_ENV = {"claude-b": ".claude-alt"}
+_BOT_LIVE_ENV = {"claude-b": ".config/claude-b"}
 
 
 def _live_bots() -> set:
@@ -4422,7 +4657,7 @@ def _live_bots() -> set:
     except Exception:
         pass
     # gpt is a service bot (always-on if its unit is active) — but it can't drive
-    # reliably (one MCP slot, IBKR), so we don't mark it live for driving.
+    # reliably (one MCP slot, a broker), so we don't mark it live for driving.
     return live
 
 
@@ -4435,11 +4670,13 @@ OPERATOR_MODELS = [
     {"value": "claude-sonnet-5", "label": "Sonnet 5"},
     {"value": "haiku", "label": "Haiku 4.5"},
 ]
-# claude-a-only roster (the owner 2026-07-22): adds Fable 5 (Mythos-class, above Opus)
+# claude-a-only roster : adds Fable (Mythos-class, above Opus)
 # on top of the base Claude list. claude-b keeps the base roster — the models
 # endpoint branches on the driver key, so scope stays per-bot.
+# Bumped to 5.1 on 2026-09-01; the old 5 id is gone rather than kept alongside,
+# because a picker offering a superseded model is how bots quietly stay stale.
 OPERATOR_MODELS_CLAUDE_A = [
-    {"value": "claude-fable-5", "label": "Fable 5"},
+    {"value": "claude-fable-5-1", "label": "Fable 5.1"},
 ] + OPERATOR_MODELS
 # codex/gpt models (default gpt-5.6-sol low per the owner). Astra is the top
 # subscription tier; the 5.6 family remains as Sol / Terra / Luna. Each model
@@ -4450,7 +4687,7 @@ OPERATOR_MODELS_GPT = [
     {"value": "gpt-5.6-terra", "label": "GPT-5.6 Terra"},
     {"value": "gpt-5.6-luna", "label": "GPT-5.6 Luna"},
 ]
-# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner's
+# gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner
 # flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
 # ones have a fixed tier baked in (no effort). start() folds family+effort into the
 # agy --model string. Gemini families take a bare slug (agy applies --effort
@@ -4459,20 +4696,20 @@ OPERATOR_MODELS_GPT = [
 # "Gemini 3.5 Flash (High)" display form together with --effort — it now errors
 # "--effort is not supported for model …". Gemini values must be slugs.
 OPERATOR_MODELS_GEMMA = [
-    {"value": "gemini-3.7-flash", "label": "3.7 Flash"},
+    {"value": "gemini-3.8-flash", "label": "3.8 Flash"},
     {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
     {"value": "Claude Opus 4.6 (Thinking)", "label": "Opus 4.6"},
     {"value": "GPT-OSS 120B (Medium)", "label": "GPT-OSS 120B"},
 ]
 
 
-# public demo: LOCKED 2-model choice on the gemma/agy runtime (the owner 2026-07-09):
-# Flash 3.7 Low default (first = picker default + server fallback), Sonnet 4.6
+# public demo: LOCKED 2-model choice on the gemma/agy runtime :
+# Flash 3.8 Low default (first = picker default + server fallback), Sonnet 4.6
 # as the heavier alt. Tier is baked into each value — the effort control is
 # hidden in the demo UI, the lock owns effort (dispatch sends effort="", so the
 # baked-tier form is what agy gets).
 OPERATOR_MODELS_DEMO = [
-    {"value": "gemini-3.7-flash-low", "label": "3.7 Flash"},
+    {"value": "gemini-3.8-flash-low", "label": "3.8 Flash"},
     {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
 ]
 
@@ -4491,12 +4728,20 @@ def operator_models():
     return jsonify(models=OPERATOR_MODELS)
 
 
+import operator_workspace_routes as _workspace_routes
+_workspace_routes.register(bp, demo=DEMO, conversation=_conversation_for,
+    control_guard=_thread_control_guard, runner=lambda: operator_agent.runner)
+
 # ── background housekeeping (#2 scheduled tasks + #3 completion pings) ────────
 # Started at import (the server imports this module once); the thread is a
 # daemon and a no-op when OPERATOR_SCHEDULER=0. Never in the demo — a public
 # instance must not fire stored prompts on a clock.
 if not DEMO:
     try:
+        if _os_cfg.environ.get('OPERATOR_TESTING') != '1':
+            import operator_workspace
+            operator_workspace.recover_runs()
+            _diagnostics.start()
         import operator_schedule as _op_sched
         _op_sched.start(run_fn=lambda slug: _dispatch_saved_task(
                             slug, scheduled=True)[0],

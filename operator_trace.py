@@ -29,7 +29,7 @@ def shot_dirs() -> list[str]:
         or os.environ.get("PLAYWRIGHT_OUTPUT_DIR")
         or "~/.cache/computer-use"))] + [
         os.path.realpath(os.path.expanduser("~/.operator-sessions/" + b))
-        for b in ("claude-a", "jiabanya", "gpt", "gemma")]
+        for b in ("claude-a", "claude-b", "gpt", "gemma")]
 
 
 # Map a Playwright MCP tool call -> ("present-tense action label", "short detail")
@@ -50,7 +50,8 @@ _ACTION_LABELS = {
     "browser_tab_new": "Opening tab", "browser_tab_close": "Closing tab",
     "browser_fill_form": "Filling form", "browser_fill": "Filling",
     "browser_drag": "Dragging", "browser_drag_and_drop": "Dragging",
-    "browser_evaluate": "Reading", "browser_run_code_unsafe": "Reading",
+    "browser_evaluate": "Reading", "browser_run_code_unsafe": "Using browser",
+    "browser_run_code": "Using browser",
     "browser_handle_dialog": "Handling dialog", "browser_dialog": "Handling dialog",
     "browser_close": "Closing", "browser_resize": "Resizing",
     "browser_console_messages": "Reading console", "browser_network_requests": "Inspecting network",
@@ -110,14 +111,14 @@ _NONBROWSER_LABELS = {
     "glob": "Finding files", "write": "Writing file", "edit": "Editing file",
     "multiedit": "Editing file", "notebookedit": "Editing notebook",
     "ls": "Listing files", "cat": "Reading file",
-    # memory / recall (host-app, vecgrep)
-    "recall": "Recalling", "memory": "Checking memory", "vecgrep": "Searching memory",
-    "get_corpus": "Searching memory", "list_corpora": "Checking memory",
-    # markets (ibkr)
-    "get_quote": "Checking quote", "quote": "Checking quote",
-    "get_positions": "Checking portfolio", "ibkr_quote": "Checking quote",
-    "ibkr_get_positions": "Checking portfolio", "ibkr_get_account_summary": "Checking account",
-    "ibkr_margin": "Checking margin", "ibkr_get_historical_bars": "Pulling chart data",
+    # memory / recall (host-app, search)
+    "recall": "Recalling", "memory": "Checking data", "search": "Searching",
+    "get_corpus": "Searching", "list_corpora": "Checking data",
+    # markets (tool)
+    "get_quote": "Checking data", "quote": "Checking data",
+    "get_positions": "Checking data", "tool_quote": "Checking data",
+    "tool_get_positions": "Checking data", "tool_get_account_summary": "Checking data",
+    "tool_margin": "Checking data", "tool_get_historical_bars": "Pulling data",
     # docs / misc
     "query-docs": "Reading docs", "resolve-library-id": "Looking up library",
     "task": "Delegating", "todowrite": "Updating todos", "webfetch_url": "Fetching",
@@ -167,6 +168,7 @@ _CONNECTOR_NAMES = {
     "figma": "Figma", "github": "GitHub", "github_com": "GitHub",
     "google_drive": "Google Drive", "linear": "Linear", "notion": "Notion",
     "slack": "Slack", "todoist": "Todoist", "trello": "Trello",
+    "search_mcp": "search MCP", "search-mcp": "search MCP",
 }
 
 _CONNECTOR_VERBS = {
@@ -230,8 +232,7 @@ _SKIP_TOOLS = {"toolsearch", "tooldispatch"}
 
 
 def mcp_resource_label(name: str) -> str:
-    """Map generic MCP resource/listing ops to a clean verb (the owner: 'Listing
-    resources' etc. is fine; map when we can). Returns '' if nothing fits."""
+    """Map generic MCP resource/listing ops to a clean verb . Returns '' if nothing fits."""
     n = (name or "").lower().rsplit("__", 1)[-1]
     if any(k in n for k in ("list_resources", "listresources", "resources/list", "list_dir",
                             "listdir", "list_directory", "readdir")):
@@ -273,6 +274,12 @@ def action_label(tool: str, args: dict) -> tuple[str, str]:
     if "__" in bare:
         bare = bare.rsplit("__", 1)[-1]   # mcp__playwright__browser_navigate -> browser_navigate
     low = bare.lower()
+    if low in ('job_state', 'job_update', 'job_result'):
+        return '', ''  # represented in the durable job/result surface
+    if low == 'job_approval':
+        return 'Preparing for approval', ''
+    if low == 'job_file':
+        return {'upload': 'Attaching file', 'publish': 'Saving file'}.get((args or {}).get('action'), 'Reading file'), ''
     if not bare.startswith("browser_"):
         if low in _SKIP_TOOLS:
             return "", ""
@@ -478,7 +485,7 @@ def clean_gemma_text(text: str) -> str:
     t = _re.sub(r'!\[[^\]]*\]\((?!https?://|/?operator/shot/)[^)]*\)', '', t)
     # [label](file:///...) plain (non-image) link -> a browser can't load file:// either;
     # keep just the label text so a self-narrated checklist ("see [trace.json](file:///...)")
-    # doesn't leave a dead link in the reply (the owner 2026-06-30, #37: agy work-summary leak).
+    # doesn't leave a dead link in the reply .
     t = _re.sub(r'(?<!!)\[([^\]]*)\]\(file://[^)]*\)', lambda m: m.group(1) or '', t)
     # strip a trailing files=[...] literal (single or multi-line)
     t = _re.sub(r'(?ms)^\s*files\s*=\s*\[.*?\]\s*$', '', t)
@@ -505,23 +512,25 @@ def clean_gemma_text(text: str) -> str:
 
 
 _SCAFFOLD_HEAD_RE = _re.compile(
-    r'^\s*[*_]{0,2}(?:Plan|Status|Current Plan|Updated Plan|Revised Plan)'
+    r'^\s*[*_]{0,2}(?:Plan|Status|Progress|Current Plan|Updated Plan|Revised Plan)'
     r'[*_]{0,2}\s*[::]')
 _SCAFFOLD_ITEM_RE = _re.compile(r'^\s*(?:\d+[.)]|[-*•])\s+')
 
 
-def strip_plan_scaffold(text: str) -> str:
+def strip_plan_scaffold(text: str, *, reject_running_plan: bool = False) -> str:
     """Shed a LEADING Plan:/Status: scratchpad from a final answer.
 
     Gemini Flash 3.6 (agy) sometimes dumps its whole running plan into the
     final `content` step — "Plan: 1..2..3 / Status: step 1 in progress / ..."
-    — followed by the real answer (the owner 2026-07-28). The per-step narration
+    — followed by the real answer . The per-step narration
     already lands in the trace as role="thinking"; repeating it in the reply
     bubble buries the answer. Only ANSWER-LEADING scaffold is dropped: blocks
     are consumed from the top while they look like plan headers or their list
     items; the first ordinary paragraph ends the scaffold. If nothing would
     remain, the text is returned unchanged (a scaffold-only turn should still
-    show SOMETHING rather than an empty bubble)."""
+    show SOMETHING rather than an empty bubble). With reject_running_plan,
+    execution-marked scaffold-only output returns empty instead: callers keep
+    it in the trace. An ordinary requested plan without progress markers stays."""
     if not isinstance(text, str) or not text.strip():
         return text or ""
     lines = text.splitlines()
@@ -538,6 +547,9 @@ def strip_plan_scaffold(text: str) -> str:
             break                         # first real paragraph — answer starts
         i += 1
     rest = "\n".join(lines[i:]).strip()
+    if consumed and not rest and reject_running_plan and _re.search(
+            r'(?im)^\s*\*{0,2}(?:Status|Progress)\b|\((?:Now|in progress)\)', text):
+        return ''  # keep a running checklist in the trace, never call it the answer
     return rest if (consumed and rest) else text
 
 

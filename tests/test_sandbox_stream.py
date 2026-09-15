@@ -7,6 +7,8 @@ import os
 import pathlib
 import subprocess
 
+import pytest
+
 _here = pathlib.Path(__file__).resolve()
 for _cand in (_here.parents[1] / "computer-use" / "sandbox_container.py",
               _here.parents[2] / "computer-use" / "sandbox_container.py"):
@@ -23,6 +25,54 @@ SOI, EOI = b"\xff\xd8", b"\xff\xd9"
 def test_sandbox_geometry_is_compact_five_by_four():
     assert (sb.SCREEN_W, sb.SCREEN_H) == (960, 768)
     assert sb.GEOMETRY == "960x768x24"
+
+
+def test_running_legacy_cdp_bridge_is_killed_and_verified_gone(monkeypatch):
+    calls = []
+    results = iter((subprocess.CompletedProcess([], 0),
+                    subprocess.CompletedProcess([], 1)))
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return next(results)
+
+    monkeypatch.setattr(sb, "_run", fake_run)
+    monkeypatch.setattr(sb, "_legacy_cdp_retired", False)
+
+    sb._retire_legacy_cdp_bridge()
+
+    assert calls[0][:4] == ["exec", "-u", "opuser", sb.CONTAINER]
+    assert calls[0][4:7] == ["pkill", "-9", "-f"]
+    assert calls[1][4:6] == ["pgrep", "-f"]
+    assert sb._legacy_cdp_retired is True
+
+
+def test_unverifiable_legacy_cdp_cleanup_fails_closed(monkeypatch):
+    results = iter((subprocess.CompletedProcess([], 2),
+                    subprocess.CompletedProcess([], 2)))
+    monkeypatch.setattr(sb, "_run", lambda *args, **kwargs: next(results))
+    monkeypatch.setattr(sb, "_legacy_cdp_retired", False)
+
+    with pytest.raises(sb.SandboxError, match="could not verify"):
+        sb._retire_legacy_cdp_bridge()
+
+
+def test_host_bridge_starts_only_the_fraggames_leg(monkeypatch):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if any("pgrep" in arg for arg in args):
+            return subprocess.CompletedProcess(args, 1)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(sb, "_run", fake_run)
+    sb._ensure_host_bridge()
+
+    starts = [args for args in calls if args[:2] == ["exec", "-d"]]
+    assert len(starts) == 1
+    assert starts[0][-4:] == ["8091", "8091", "127.0.0.1", "172.17.0.1"]
+    assert all("9224" not in args for args in starts)
 
 
 def jpg(body: bytes = b"x") -> bytes:
@@ -83,10 +133,21 @@ def test_safe_rel_rejects_escapes(bad):
         sb.safe_rel(bad)
 
 
+def _allow_download_preflight(monkeypatch):
+    monkeypatch.setattr(
+        sb,
+        "_exec",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, stdout=b"0\n"
+        ),
+    )
+
+
 @pytest.mark.parametrize("directory", sb.FILE_DIRS)
 def test_get_file_copies_regular_exchange_files(tmp_path, monkeypatch, directory):
     name = "résumé notes.txt"
     monkeypatch.setattr(sb, "ensure", lambda: None)
+    _allow_download_preflight(monkeypatch)
 
     def copy_regular(args, **_kwargs):
         pathlib.Path(args[-1]).write_bytes(b"ordinary sandbox file")
@@ -107,6 +168,7 @@ def test_get_file_rejects_a_copied_symlink_without_touching_its_target(
     secret.write_bytes(b"host secret")
     out_dir = tmp_path / "downloads"
     monkeypatch.setattr(sb, "ensure", lambda: None)
+    _allow_download_preflight(monkeypatch)
 
     def copy_symlink(args, **_kwargs):
         os.symlink(secret, args[-1])
@@ -124,6 +186,7 @@ def test_get_file_rejects_a_copied_symlink_without_touching_its_target(
 @pytest.mark.parametrize("kind", ["directory", "fifo"])
 def test_get_file_rejects_copied_non_regular_files(tmp_path, monkeypatch, kind):
     monkeypatch.setattr(sb, "ensure", lambda: None)
+    _allow_download_preflight(monkeypatch)
 
     def copy_special(args, **_kwargs):
         candidate = pathlib.Path(args[-1])
@@ -148,6 +211,7 @@ def test_get_file_enforces_final_copied_size(
 ):
     monkeypatch.setattr(sb, "MAX_FILE_BYTES", 8)
     monkeypatch.setattr(sb, "ensure", lambda: None)
+    _allow_download_preflight(monkeypatch)
 
     def copy_regular(args, **_kwargs):
         pathlib.Path(args[-1]).write_bytes(content)
@@ -163,10 +227,54 @@ def test_get_file_enforces_final_copied_size(
             sb.get_file("Documents/report.bin", str(tmp_path))
 
 
+def test_get_file_rejects_known_oversize_before_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sb, "MAX_FILE_BYTES", 8)
+    monkeypatch.setattr(sb, "ensure", lambda: None)
+    monkeypatch.setattr(
+        sb,
+        "_exec",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, stdout=b"9\n"
+        ),
+    )
+    monkeypatch.setattr(
+        sb,
+        "_run",
+        lambda *args, **kwargs: pytest.fail("oversize file reached docker cp"),
+    )
+
+    with pytest.raises(sb.SandboxError, match="file too large to download"):
+        sb.get_file("Documents/report.bin", str(tmp_path))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_get_file_rejects_non_regular_source_before_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(sb, "ensure", lambda: None)
+    monkeypatch.setattr(
+        sb,
+        "_exec",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 64, stdout=b""
+        ),
+    )
+    monkeypatch.setattr(
+        sb,
+        "_run",
+        lambda *args, **kwargs: pytest.fail("unsafe source reached docker cp"),
+    )
+
+    with pytest.raises(sb.SandboxError, match="regular files"):
+        sb.get_file("Downloads/report.bin", str(tmp_path))
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_get_file_uses_a_unique_host_output_and_cleans_up_on_error(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(sb, "ensure", lambda: None)
+    _allow_download_preflight(monkeypatch)
 
     def copy_regular(args, **_kwargs):
         pathlib.Path(args[-1]).write_bytes(b"safe bytes")

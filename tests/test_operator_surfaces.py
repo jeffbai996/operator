@@ -308,6 +308,31 @@ def test_dispatch_passes_surface_and_real_ok(live):
     mod._active_surface["name"] = "browser"
 
 
+def test_dispatch_without_real_ok_cannot_switch_to_real_desktop(
+    live, monkeypatch
+):
+    c, mod, rec = live
+    mod._active_surface["name"] = "desktop-sandbox"
+    monkeypatch.setattr(
+        mod,
+        "_desktop_real_preflight",
+        lambda: pytest.fail("unconfirmed dispatch probed the real desktop"),
+    )
+
+    response = c.post("/operator/dispatch", json={
+        "bot": "alice", "task": "look at the desktop",
+        "surface": "desktop-real",
+    })
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "ok": False,
+        "error": "desktop-real needs explicit confirmation (real_ok)",
+    }
+    assert mod._active_surface["name"] == "desktop-sandbox"
+    assert rec.calls == []
+
+
 def test_dispatch_unsafe_local_demo_never_reaches_real_desktop(unsafe_demo):
     # #27: a crafted desktop-real ask (even with real_ok) coerces to browser
     c, mod, rec = unsafe_demo

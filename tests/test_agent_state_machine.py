@@ -357,6 +357,44 @@ def test_stop_kills_group_after_leader_exits_but_descendant_holds_stdout(
                 pass
 
 
+def test_operator_helper_matcher_includes_scoped_bridge_and_governor(runner):
+    assert runner._is_operator_browser_helper(
+        "node /release/modules/browse/operator_playwright_mcp.js")
+    assert runner._is_operator_browser_helper(
+        "node /release/modules/browse/mcp_image_governor.js")
+    assert runner._is_operator_browser_helper(
+        "bash /release/modules/browse/playwright-mcp.sh")
+    assert runner._is_operator_browser_helper(
+        "node @playwright/mcp/cli.js --caps vision --cdp-endpoint http://x")
+    assert not runner._is_operator_browser_helper(
+        "node @playwright/mcp/cli.js --port 8772 --cdp-endpoint http://x")
+    assert not runner._is_operator_browser_helper(
+        "claude -p inspect /release/modules/browse/operator_playwright_mcp.js")
+    assert not runner._is_operator_browser_helper(
+        "bash -lc 'echo /release/modules/browse/mcp_image_governor.js'")
+
+
+def test_operator_helper_ownership_is_exact_per_conversation(runner):
+    runner.conversation_id = "chat-a"
+    assert runner._helper_env_belongs(
+        b"X=1\0OPERATOR_CONVERSATION_ID=chat-a\0Y=2\0")
+    assert not runner._helper_env_belongs(
+        b"OPERATOR_CONVERSATION_ID=chat-ab\0")
+    assert not runner._helper_env_belongs(
+        b"OPERATOR_CONVERSATION_ID=chat-b\0")
+
+
+def test_natural_run_completion_reaps_owned_browser_helpers(runner, monkeypatch):
+    reaped = []
+    monkeypatch.setattr(runner, "_run_inner", lambda *args: None)
+    monkeypatch.setattr(runner, "_reap_owned_browser_helpers",
+                        lambda: reaped.append(runner.conversation_id))
+
+    runner._run("/fake", {"runtime": "claude"}, "task")
+
+    assert reaped == [runner.conversation_id]
+
+
 # ── 2026-07-12: `alive` must not lie at birth or wrap-up ─────────────────────
 # The client's dead-run watchdog kills any run whose poll reads alive:false
 # past its grace window. is_running() returning False in the PRE-SPAWN window
@@ -448,15 +486,15 @@ def _agy_start(runner, monkeypatch, **kw):
 
 
 def test_agy_bare_slug_keeps_separate_effort(runner, monkeypatch):
-    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.7-flash", effort="medium")
-    assert model == "gemini-3.7-flash"   # no "(Medium)" folded in
+    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.8-flash", effort="medium")
+    assert model == "gemini-3.8-flash"   # no "(Medium)" folded in
     assert effort == "medium"            # rides its own --effort flag
 
 
 def test_agy_baked_tier_slug_drops_effort(runner, monkeypatch):
     # tier already in the slug → sending --effort too would 400 in agy
-    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.7-flash-low", effort="high")
-    assert model == "gemini-3.7-flash-low"
+    model, effort = _agy_start(runner, monkeypatch, model="gemini-3.8-flash-low", effort="high")
+    assert model == "gemini-3.8-flash-low"
     assert effort == ""
 
 
@@ -471,5 +509,5 @@ def test_agy_display_name_entry_drops_effort(runner, monkeypatch):
 
 def test_agy_defaults_to_current_flash_slug(runner, monkeypatch):
     model, effort = _agy_start(runner, monkeypatch, model="", effort="")
-    assert model == "gemini-3.7-flash"
+    assert model == "gemini-3.8-flash"
     assert effort == "high"

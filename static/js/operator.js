@@ -26,7 +26,7 @@
     return;
   }
   // Double-tap/click on the chat rail was selecting the last word of the nearest
-  // message bubble (the owner: "double-tap highlights the last word in the chat box").
+  // message bubble .
   // Swallow the native word-select EXCEPT inside a real input/textarea, where
   // double-click-to-select-word is expected. Drag-select (mousedown+drag) for
   // copying an agent reply is unaffected — this only cancels the dblclick gesture.
@@ -160,7 +160,11 @@
     }
   } catch { _deviceId = 'tab-' + Math.random().toString(36).slice(2); }
   const _ua = (navigator.userAgent || '').toLowerCase();
-  const _deviceLabel = /ipad/.test(_ua) ? 'iPad'
+  // iPadOS "Request Desktop Website" deliberately identifies as Macintosh.
+  // A real Mac has no multi-touch navigator surface; that is the stable split.
+  const _touchMac = /macintosh|mac os/.test(_ua)
+    && Number(navigator.maxTouchPoints || 0) > 1;
+  const _deviceLabel = (/ipad/.test(_ua) || _touchMac) ? 'iPad'
     : /iphone|ipod/.test(_ua) ? 'iPhone'
     : /android/.test(_ua) ? 'Android'
     : /windows/.test(_ua) ? 'Windows'
@@ -170,6 +174,9 @@
   function _setConversationId(id){
     _conversationId = String(id || '').trim();
     try { if (_conversationId) sessionStorage.setItem(CONVERSATION_KEY, _conversationId); } catch {}
+    // the switched-to conversation may have a parked draft (declared later —
+    // boot order puts the composer block far below this helper)
+    setTimeout(() => { try { window._restoreDraft && window._restoreDraft(); } catch(_){} }, 0);
   }
   function _conversationPayload(extra){
     return Object.assign({conversation_id: _conversationId || undefined,
@@ -179,13 +186,24 @@
     return {method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify(_conversationPayload(extra))};
   }
+  window.OperatorWorkbenchBridge = {
+    context: () => _conversationPayload({can_control: _canControl, demo: demoReadOnly}),
+    renderMarkdown: element => { element.innerHTML = _mdToHtml(element.textContent); _addCopyButtons(element); },
+    send: text => { if (!_canControl || MODE !== 'auto' || _inFlight) return false;
+      logUser(text); dispatchTask(text); return true; }
+  };
   let _sessPushT = null;
   function _sessionPayload() {
+    const presentation = log.cloneNode(true);
+    presentation.querySelectorAll('[data-workbench-card]').forEach(e => e.remove());
+    presentation.querySelectorAll('.op-load-earlier').forEach(e => e.remove());
+    // The HTML is a small fast-paint cache, not the durable transcript.
+    while (presentation.children.length > 60) presentation.firstElementChild.remove();
     const userMessages = log.querySelectorAll('.op-msg.user .bubble');
     const latestUser = userMessages.length
       ? (userMessages[userMessages.length - 1].textContent || '').trim() : '';
     return {
-      log: log.innerHTML,
+      log: presentation.innerHTML,
       mode: (typeof MODE !== 'undefined' ? MODE : 'man'),
       bot: (document.getElementById('op-action-caret')||{}).value || '',
       model: (document.getElementById('op-model')||{}).value || '',
@@ -300,6 +318,9 @@
   // ALL page JS (poll/agent/steer dead, feed stuck 'Connecting'). Declare them up top.
   let _inFlight = false;
   let _agentSince = Date.now()/1000;
+  let _lastAgentRun = '', _clearedAgentRun = '';
+  const _historyPages = new Map();
+  let _historyEpoch = 0;
   var _queue = [];
   // launchpad controller singleton — built once by wireLaunchpadControls().
   // Declared in this early-hoist zone so any early caller sees a defined
@@ -313,19 +334,26 @@
     if (demoReadOnly) { _canControl = true; op.dataset.threadControl='controller'; return; }
     _canControl = !!(state && state.can_control);
     op.dataset.threadControl = _canControl ? 'controller' : 'observer';
-    if (!_canControl) {
+    if (!_canControl && op.classList.contains('op-booting')) {
       // An observer can arrive in a background tab where animation frames and
       // even short timers are suspended. Presence is authoritative enough to
       // finish the splash immediately; otherwise the takeover control can be
       // trapped forever inside a rail hidden by .op-booting.
+      // This is boot recovery, not navigation: routine presence/focus updates
+      // must preserve a launchpad the user explicitly opened or dismissed.
       op.classList.remove('op-booting'); op.classList.add('op-ready');
       try { if (_lpCtl) _lpCtl.syncVisibility(); } catch(_){}
     }
     if (threadObserver) threadObserver.hidden = _canControl;
     if (threadObserverText && !_canControl) {
-      threadObserverText.textContent = 'Open on '
-        + ((state && state.controller_label) || 'another device');
+      threadObserverText.textContent = ((state && state.controller_label)
+        || 'Another device') + ' has control';
     }
+    if (threadTakeover) {
+      threadTakeover.disabled = false;
+      threadTakeover.textContent = 'Take over';
+    }
+    if (threadObserver) delete threadObserver.dataset.pending;
     if (MODE === 'auto') {
       input.disabled = !_canControl;
       input.placeholder = _canControl ? (_inFlight ? 'Follow up' : 'Message Operator')
@@ -344,8 +372,22 @@
     // A fast observer can tap Take over while the boot heartbeat is still in
     // flight. Never discard that explicit intent behind routine presence I/O.
     if (_presenceBusy) {
-      if (takeOver) _presenceTakeoverQueued = true;
+      if (takeOver) {
+        _presenceTakeoverQueued = true;
+        if (threadObserver) threadObserver.dataset.pending = '1';
+        if (threadTakeover) {
+          threadTakeover.disabled = true;
+          threadTakeover.textContent = 'Taking over…';
+        }
+      }
       return;
+    }
+    if (takeOver) {
+      if (threadObserver) threadObserver.dataset.pending = '1';
+      if (threadTakeover) {
+        threadTakeover.disabled = true;
+        threadTakeover.textContent = 'Taking over…';
+      }
     }
     _presenceBusy = true;
     try {
@@ -355,7 +397,13 @@
           take_over:!!takeOver})});
       const j = await r.json();
       if (j && j.ok) _setThreadControl(j);
-    } catch(_){}
+    } catch(_) {
+      if (takeOver && threadTakeover) {
+        threadTakeover.disabled = false;
+        threadTakeover.textContent = 'Try again';
+      }
+      if (takeOver && threadObserver) delete threadObserver.dataset.pending;
+    }
     finally {
       _presenceBusy = false;
       if (_presenceTakeoverQueued) {
@@ -390,7 +438,7 @@
       // streamer/page may still be attaching, so the steer comes back
       // ok:false ("streamer not running" / page not ready) — and setting
       // _last optimistically then swallowed the failure: the viewport stayed
-      // wrong until the user manually drag-resized (the owner 2026-07-26). A
+      // wrong until the user manually drag-resized . A
       // rejected send now clears _last and re-fires on a capped backoff.
       // ok:true with owned:true (another live viewer holds the aspect) is a
       // real answer, not a failure — no retry, exactly as before.
@@ -407,8 +455,7 @@
           // Persist for the NEXT page load. The server reads this on the
           // document request and pre-loads the viewport target, so the first
           // captured frame of a session already has the right aspect instead
-          // of opening at whatever the last viewer left (the owner 2026-08-15,
-          // "wrong size until I resize it myself, then it snaps"). Written on
+          // of opening at whatever the last viewer left . Written on
           // ok:true whatever the ownership answer — the stage is this
           // browser's own property, not the server's to grant.
           try {
@@ -526,7 +573,7 @@
     const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
     function vh(){ return window.innerHeight; }
     // Snap targets: peek / the FIT notch / full. The middle stop is computed,
-    // not fixed (the owner 2026-07-12): it's the height where the sheet's top edge
+    // not fixed : it's the height where the sheet's top edge
     // sits exactly at the bottom of the full-width feed — .op-browser is
     // (100dvh - sheet - header) tall and the contain-fit frame fills the phone's
     // width when that equals vw × frame aspect. Release there = whole page
@@ -539,13 +586,12 @@
       return Math.min(0.78, Math.max(0.3, f));        // clamp: odd frames stay usable
     }
     function SNAPSNOW(){ return [0.22, fitFrac(), 0.9]; }
-    // header height (mobile, non-full) — the sheet must not grow past it (the owner: maximize
-    // was colliding with the host-app header).
+    // header height (mobile, non-full) — the sheet must not grow past it .
     function hdrH(){ const v = parseFloat(getComputedStyle(opEl).getPropertyValue('--op-hdr-h')); return v||0; }
     function setH(px){
       const maxH = vh() - hdrH() - 10;     // leave the header + a small gap clear
       // floor 0.16 (was 0.12): free-resize let the sheet collapse to a sliver
-      // (the owner 2026-07-22 "able to drag a bit too far") — keep handle + input row
+      //  — keep handle + input row
       const h = Math.max(vh()*0.16, Math.min(maxH, px));
       opEl.style.setProperty('--sheet-h', h + 'px');
       // tag nearest snap so CSS can switch the sheet into a compact 'peek' layout
@@ -567,12 +613,11 @@
       // viewport follow at drag end, exactly like the desktop rail-drag. This
       // is what broke iOS resize when the stage ResizeObserver was removed
       // (user-driven-only policy): sheet drags stopped reporting the new stage
-      // size, so the remote viewport never re-aspected (the owner 2026-07-22). The
+      // size, so the remote viewport never re-aspected . The
       // 600ms queue debounce also folds the tap-cycle's snapTo into one beacon.
       if (_stageFollow) _stageFollow(); }
       // NO snap on release — the sheet is freely resizable and keeps the dragged
-      // height (the owner 2026-07-22, superseding the peek/fit/full detents from
-      // 07-12: the browser pane auto-resizes now, so any height is valid).
+      // height .
       // Tapping the handle still cycles peek → fit → full for quick jumps.
     handle.addEventListener('pointerdown', e => { e.preventDefault();
       handle.setPointerCapture(e.pointerId); down(e.clientY); });
@@ -714,8 +759,8 @@
   // Two buttons, ONE cycle: #op-flat (the half-circle) in the chat brow and
   // the splash's sun/moon (#op-lp-theme) both step the same three stops —
   // the splash used to be a plain dark↔light flip that skipped OLED black
-  // (the owner 2026-07-28: "splash is missing the third theme"). Two persisted axes:
-  // squad_theme (dark/light, shared with the rest of host-app) and the
+  // . Two persisted axes:
+  // op_theme (dark/light, shared with the rest of host-app) and the
   // existing operator-flat-v1 — restored independently at boot, so historical
   // combos (e.g. light+flat) still render; clicking normalizes to the 3 stops.
   (function(){
@@ -724,7 +769,7 @@
     const flatBtn = document.getElementById('op-flat');
     const setTheme = (t)=>{
       document.documentElement.setAttribute('data-theme', t);
-      try { localStorage.setItem('squad_theme', t); } catch {}
+      try { localStorage.setItem('op_theme', t); } catch {}
     };
     const setFlat = (on)=>{
       if (opEl) opEl.classList.toggle('op-flat', on);
@@ -739,8 +784,7 @@
       else            { setFlat(true); }                       // default → flat
     };
     if (flatBtn) flatBtn.addEventListener('click', cycleTheme);
-    // MOBILE: the status ring doubles as the splash's menu button (the owner
-    // 2026-07-26). A phone has no hover, so the ring's status card was
+    // MOBILE: the status ring doubles as the splash's menu button . A phone has no hover, so the ring's status card was
     // unreachable and there was nowhere sane to put theme/X. Tapping the ring
     // toggles .op-menu-open, which reveals the card and slides theme + X out
     // beneath it (all CSS — see the mobile block). Desktop keeps plain hover
@@ -748,7 +792,7 @@
     const lpMark = document.getElementById('op-lp-mark');
     if (lpMark) {
       const isPhone = () => window.matchMedia('(max-width: 820px)').matches;
-      // desktop click = About card (the owner 2026-07-26); phone click = the menu
+      // desktop click = About card ; phone click = the menu
       const about = document.getElementById('op-about');
       const aboutBg = document.getElementById('op-about-backdrop');
       const aboutSet = (open) => {
@@ -804,8 +848,7 @@
       });
 
       // home button (chat brow): same complete-the-spin contract as the splash
-      // greet — the spin is class-gated so mouse-off can't reset it (the owner
-      // 2026-07-26); the class drops only when the double turn lands.
+      // greet — the spin is class-gated so mouse-off can't reset it ; the class drops only when the double turn lands.
       const homeBtn = document.getElementById('op-lp-open');
       if (homeBtn) {
         homeBtn.addEventListener('pointerenter', () => {
@@ -864,14 +907,28 @@
   function setCardSub(bot, verb, emoji){
     const sub = document.getElementById('op-action-sub');
     if (!sub) return;
-    const html = (bot ? '<span class="sub-bot">'+bot+'</span>' : '')
-               + (bot && verb ? ' · ' : '') + (verb ? verb : '')
-               + (emoji ? ' <span class="sub-emo">'+emoji+'</span>' : '');
+    const next = document.createElement('span');
+    if (bot) {
+      const botEl = document.createElement('span');
+      botEl.className = 'sub-bot'; botEl.textContent = bot;
+      next.appendChild(botEl);
+    }
+    if (bot && verb) next.appendChild(document.createTextNode(' · '));
+    if (verb) next.appendChild(document.createTextNode(verb));
+    if (emoji) {
+      next.appendChild(document.createTextNode(' '));
+      const emojiEl = document.createElement('span');
+      emojiEl.className = 'sub-emo'; emojiEl.textContent = emoji;
+      next.appendChild(emojiEl);
+    }
     // mirror the live action emoji onto the minimized-pill glyph (shown by CSS
     // only when the card is collapsed) — same swap animation as the sub's emoji
     setMinEmoji(emoji);
-    if (sub.innerHTML === html) return;
-    sub.innerHTML = html;
+    const current = Array.from(sub.childNodes);
+    const desired = Array.from(next.childNodes);
+    if (current.length === desired.length
+        && current.every((node, i) => node.isEqualNode(desired[i]))) return;
+    sub.replaceChildren(...desired);
     sub.classList.remove('op-card-swap'); void sub.offsetWidth; sub.classList.add('op-card-swap');
   }
   function setMinEmoji(emoji){
@@ -894,7 +951,7 @@
     if (sub !== undefined) setCardText(actSub, sub || '');
   }
   let _failRingT = null;
-  // idle status-card label: NEVER "Manual" (the owner) — it reflects the BROWSER state.
+  // idle status-card label: NEVER "Manual"  — it reflects the BROWSER state.
   // live feed → "Ready"; otherwise (connecting / signal lost / not yet attached) →
   // "Connecting". Independent of MAN/AUTO mode.
   function idleCardText() {
@@ -1033,8 +1090,24 @@
   // /frame route serves when the streamer has no real capture). Placeholder ≠
   // signal: letting its 'load' events call signalOk() had the pump clearing
   // SIGNAL LOST ~11×/s while the status poll re-asserted it every 1.5s — the
-  // Connecting↔Reconnecting word flap + class strobing (the owner 2026-07-10).
+  // Connecting↔Reconnecting word flap + class strobing .
   let _phFrame = false;
+  function _afterNextPaint() {
+    // Two animation frames put us on the far side of the first compositor
+    // opportunity after a src swap. Backgrounding mid-decode can suspend rAF,
+    // so retain a short timer floor rather than wedging the self-clocking pump.
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(fallback);
+        resolve();
+      };
+      const fallback = setTimeout(finish, 140);
+      requestAnimationFrame(() => requestAnimationFrame(finish));
+    });
+  }
   async function _pump() {
     if (_pumpOn) return;   // one pump per page, ever
     _pumpOn = true;
@@ -1060,8 +1133,33 @@
         const b = await r.blob();
         _observeFrameBody(b.size, performance.now() - bodyStarted, isPlaceholder);
         const u = URL.createObjectURL(b);
+        // A short capture detach returns the dark filler with a new surface
+        // token. Once real pixels are on stage, transport state must not replace
+        // them — preserve the last good frame until another real one arrives.
+        if (isPlaceholder && _hasFrame) {
+          URL.revokeObjectURL(u);
+          _pumpFails = 0; backoff = 600;
+          continue;
+        }
+        // Decode OFF stage. Assigning view.src first asks Chromium to replace
+        // the currently painted candidate immediately; on a large JPEG it can
+        // clear the old pixels before decode finishes even when the old blob URL
+        // remains alive. A detached image warms the decoded resource, so the
+        // visible src swap is atomic from the user's point of view.
+        const preload = new Image();
+        preload.decoding = 'async';
+        preload.src = u;
+        try { await preload.decode(); }
+        catch (e) { URL.revokeObjectURL(u); throw e; }
         _phFrame = isPlaceholder;
         view.src = u;                    // fires 'load' → signalOk (real frames only)
+        try { await view.decode(); }
+        catch (e) {
+          if (_prevBlobUrl) { _phFrame = false; view.src = _prevBlobUrl; }
+          URL.revokeObjectURL(u);
+          throw e;
+        }
+        await _afterNextPaint();
         if (_prevBlobUrl) URL.revokeObjectURL(_prevBlobUrl);
         _prevBlobUrl = u;
         _pumpFails = 0; backoff = 600;
@@ -1105,7 +1203,7 @@
       // We HAVE a last good frame → freeze it (dimmed, small "reconnecting" chip)
       // instead of blanking to the SIGNAL LOST screen. Flapping between a live
       // frame and a full-screen overlay every few seconds read as the feed
-      // "flickering in and out" (the owner 2026-07-10); a static stale frame is calm.
+      // "flickering in and out" ; a static stale frame is calm.
       op.classList.add('op-signal-stale');
       op.classList.remove('op-signal-lost');   // overlay stays hidden — frame owns the stage
     } else {
@@ -1171,8 +1269,7 @@
   // the finished logo. Gated on the first `live` state — NOT on op-ready, which
   // flips two rAFs after parse (~32ms) and would make the animation invisible.
   // MIN_SPIN keeps a fast connect from reading as a flicker.
-  // Settle ON THE ANIMATION'S OWN LAP BOUNDARY (the owner 2026-07-27 "there's a
-  // halt in the middle"): a timer-computed boundary drifts against the CSS
+  // Settle ON THE ANIMATION'S OWN LAP BOUNDARY : a timer-computed boundary drifts against the CSS
   // animation clock (the animation starts on style apply, not script eval),
   // so the settle's one-shot turn restarted visibly mid-lap. The
   // animationiteration event IS the boundary — rotation is exactly 0deg when
@@ -1255,7 +1352,7 @@
       lockEl.className = 'op-lock' + (https ? ' secure' : (http ? ' insecure' : ''));
       lockEl.title = '';   // suppress native tooltip; we render a styled one
       lockEl.dataset.tip = (host ? host + ' — ' : '') + (https ? 'Secured with HTTPS' : (http ? 'Not secure' : ''));
-      // The page-status dot doubles as the HTTPS lock (the owner 2026-07-02).
+      // The page-status dot doubles as the HTTPS lock .
       setLockDot(https, http);
     }
     // urlEl is an editable input; don't clobber it while the user is typing in it
@@ -1266,7 +1363,7 @@
   // it (closed shackle = https, open = http). Colour rides on the .loading/.err
   // classes act() toggles, so it still shows nav status. No scheme (blank/search)
   // → clear the glyph and the dot reverts to the plain filled status dot via
-  // .op-dotstat:empty. (the owner 2026-07-02.)
+  // .op-dotstat:empty. 
   const dotEl = document.getElementById('op-dotstat');
   function setLockDot(https, http) {
     if (!dotEl) return;
@@ -1307,10 +1404,15 @@
   });
 
   // ── conversation log ──
-  function logUser(text) {
+  function logUser(text, held) {
     const m = document.createElement('div'); m.className = 'op-msg user';
+    // held = a mid-run steer, parked like other AI chat UIs park a message
+    // until the model reaches a boundary: dimmed at the bottom, promoted to a
+    // normal bubble when the delivery seam consumes it .
+    if (held) m.classList.add('op-held');
     const b = document.createElement('span'); b.className='bubble'; b.textContent=text;
     m.appendChild(b); log.appendChild(m); _trimOnly(); scrollToBottom(true);
+    return m;
   }
   function _msgTime(){
     const d = new Date();
@@ -1364,8 +1466,7 @@
         code = code.replace(/^\n/,'').replace(/\n$/,'');
         // TABULAR fences (ASCII tables: +---+ rules, | rows, box-drawing) are
         // destroyed by wrapping — those get pre + sideways scroll. Ordinary
-        // code keeps the wrap rule (the owner 2026-07-09: chat column too narrow
-        // to pan for prose-ish code).
+        // code keeps the wrap rule .
         const _rows = code.split('\n');
         const _tabular = _rows.length >= 2 &&
           _rows.filter(l => /^\s*[|+┌├└│┏┣┗┃]/.test(l)).length >= Math.ceil(_rows.length * 0.6);
@@ -1375,8 +1476,7 @@
         // A fence holding NOTHING BUT a table is a formatting mistake by the
         // model, not code — Gemini wraps its tables in ``` constantly, and
         // _tabular only bought them sideways scroll, so they still read as pipe
-        // soup (the owner 2026-07-29: "gemini code blocks still not rendering tables
-        // right"). Promote those through _renderBlock so they become a real
+        // soup . Promote those through _renderBlock so they become a real
         // <table>. Strict gate: every non-blank line must be a pipe row or a
         // |---| rule, and a header+separator must be present — so real code that
         // merely contains pipes (shell pipelines, ||, C bitwise) can't be
@@ -1413,7 +1513,7 @@
       const raw = lines[li_];
       // ASCII grid table (+---+ rules around | rows): Flash draws these, and
       // when its fence stutters the grid lands OUTSIDE any code block and
-      // wrapped into soup (the owner 2026-07-27). Signature is strict — a +---+
+      // wrapped into soup . Signature is strict — a +---+
       // opener, >=2 pipe rows, >=2 grid rules — so prose can't false-positive.
       const _isGrid = l => /^\s*\+[-=+]+\+\s*$/.test(l);
       if (_isGrid(raw) && li_ + 1 < lines.length && _isRow(lines[li_ + 1])){
@@ -1543,7 +1643,7 @@
   function takeControl(card){
     if (card && card.dataset.done === '1') return;
     if (card) card.dataset.done = '1';
-    // The card STAYS after takeover (the owner 2026-07-23) as a record of the
+    // The card STAYS after takeover  as a record of the
     // hand-off: mark it .done (blinker stops + dims via CSS) and turn the
     // Take-control button into a grayed, inert "Took control" — no separate
     // "Took control" system line anymore, the card carries that state itself.
@@ -1558,6 +1658,9 @@
     setTimeout(()=>{ _interrupting=false; }, 1500);
     _handedToUser = true;                // Operator kicked control to YOU → show Finish-up
     MODE = 'man'; applyMode(); saveSession();       // hand the wheel to the user
+    // This click is the user activation iOS requires to summon its keyboard.
+    // Spend it now; an async status poll cannot open the keyboard later.
+    focusTouchKeyboard();
   }
   function renderHandoff(reason){
     // DEDUP: never stack hand-off cards. If one is already on screen (the agent can
@@ -1595,7 +1698,7 @@
 
   // ── Operator-style task group ("Worked for Nm" + indented steps) ──
   let _task = null, _taskStart = 0, _stepCount = 0;
-  const BOT_EMOJI = { 'claude-b':'🦆', 'claude-a':'💣', 'gpt':'🤖', 'gemma':'✨' };
+  const BOT_EMOJI = { 'claude-a':'🤖', 'claude-b':'🤖', 'gpt':'🤖', 'gemma':'✨' };
   function botEmoji(b){ return BOT_EMOJI[b] || '🤖'; }
   // gemma rides on the agy runtime; its picker FACE shows the real Gemini logo
   // (gradient 4-point star) instead of a flat emoji. HTML <option> text can't
@@ -1624,9 +1727,9 @@
     Resize:'📐', 'Handle dialog':'💬', 'Read console':'🖥️', 'Inspect network':'📡', 'Save PDF':'📄',
     Searching:'🔍', Fetching:'🔗', 'Running command':'⌨️', 'Reading file':'📄',
     'Searching files':'🔍', 'Finding files':'📁', 'Writing file':'✏️', 'Editing file':'✏️',
-    'Checking quote':'📈', 'Checking portfolio':'📊',
-    'Searching web':'🌐', 'Searching the web':'🌐', 'Searching memory':'🧠', 'Searching files':'🔍',
-    Recalling:'🧠', 'Checking memory':'🧠', Fetching:'🔗', 'Fetching messages':'💬',
+    'Checking data':'📈', 'Checking data':'📊',
+    'Searching web':'🌐', 'Searching the web':'🌐', 'Searching':'🧠', 'Searching files':'🔍',
+    Recalling:'🧠', 'Checking data':'🧠', Fetching:'🔗', 'Fetching messages':'💬',
     Listing:'📋', 'Listing resources':'📋', 'Listing files':'📁', 'Reading resource':'📖',
     'Reading console':'🖥️', 'Reading docs':'📚', 'Reading file':'📄',
     Replying:'💬', 'Sending message':'💬', Reacting:'😀', Downloading:'📥', 'Setting presence':'🟢',
@@ -1713,6 +1816,22 @@
     'Took screenshot':'Taking screenshot', 'Screenshot':'Taking screenshot', 'Capture':'Taking screenshot'
   };
   function actCont(label){ return ACT_CONT[label] || label; }
+  // The cursor is only honest while the agent is acting AT a screen position.
+  // Everything else — navigating, reading the DOM, editing a file, a web
+  // search, an a broker call — leaves it sitting on the page as a stale artifact
+  // claiming the bot is somewhere it is not .
+  //
+  // So this enumerates the POSITIONAL actions and hides for everything else.
+  // That polarity matters: the trace emits ~90 labels and all but these are
+  // non-positional, so defaulting to "show" held the cursor up through most of
+  // what the agent does. Typing and key presses count — they land on the
+  // element just clicked, which is where the cursor already is.
+  const ACT_POSITIONAL = new Set([
+    'Clicking', 'Double-clicking', 'Triple-clicking', 'Middle-clicking',
+    'Right-clicking', 'Moving', 'Moving cursor', 'Pressing', 'Pressing mouse',
+    'Releasing', 'Releasing mouse', 'Holding key', 'Dragging', 'Hovering',
+    'Scrolling', 'Typing', 'Selecting', 'Filling', 'Filling form']);
+  function actIsVisual(label){ return ACT_POSITIONAL.has(label); }
   const ACT_VERB = { goto:'Navigating', click:'Clicking', click_at:'Clicking', rclick_at:'Right-clicking', type:'Typing',
     key:'Pressing', scroll:'Scrolling', back:'Going back', reload:'Reloading',
     browser_click:'Clicking', browser_type:'Typing', browser_navigate:'Navigating' };
@@ -1785,6 +1904,10 @@
   function taskStep(text) {
     if (!_task) startTask();
     markScroll();
+    // flash traces open with a bold heading then a blank line; the blank
+    // renders as <br> and reads as a hole between heading and body — collapse
+    // it 
+    text = String(text).replace(/^(\s*\*\*[^\n]+\*\*)\s*\n\s*\n+/, '$1\n');
     const e=document.createElement('div'); e.className='op-task-step';
     e.innerHTML = _mdToHtml(text);   // _mdToHtml escapes first → XSS-safe
     _task.querySelector('.op-task-steps').appendChild(e);
@@ -1810,7 +1933,7 @@
     const e=document.createElement('div'); e.className='op-task-step op-notice-step';
     const head=document.createElement('div'); head.className='op-notice-head';
     const mk=document.createElement('span'); mk.className='op-notice-mark'; mk.textContent='!';
-    const tl=document.createElement('span'); tl.textContent = title || 'Re-grounding';
+    const tl=document.createElement('span'); tl.textContent = title || 'Operator may be stuck';
     head.appendChild(mk); head.appendChild(tl); e.appendChild(head);
     if (reason && String(reason).trim()) {
       const r=document.createElement('div'); r.className='op-notice-reason';
@@ -1826,7 +1949,7 @@
     const steps = _task.querySelector('.op-task-steps');
     // COALESCE consecutive identical actions: if the last step is an act-step with
     // the SAME label+detail, bump an animated ×N badge in place instead of spitting
-    // out a new line (the owner — repeated clicks/screenshots shouldn't flood the trace).
+    // out a new line .
     const _last = steps && steps.lastElementChild;
     const _sig = (label||'') + '' + (detail||'');
     const _noCoalesce = /^(Browsing|Navigating|Going back|Going forward)$/.test(label||'');   // navigations are milestones — never merge
@@ -1865,9 +1988,9 @@
     // search verbs; the query rides right after the label in muted quotes.
     const _isSearch = /search|searching|grep|finding|looking up/.test((label||'').toLowerCase());
     if (detail && _isSearch) {
-      // op-act-query rides on op-act-coord's look (DM Sans, muted, inline)
+      // op-act-query rides on op-act-coord's look (Anthropic Sans, muted, inline)
       // but opts OUT of the label row's nowrap — a search query is arbitrarily
-      // long and was clipping at the rail edge (the owner 2026-07-29).
+      // long and was clipping at the rail edge .
       const c=document.createElement('span'); c.className='op-act-coord op-act-query';
       c.textContent = '("' + detail.trim() + '")';
       lab.appendChild(c);
@@ -1875,9 +1998,9 @@
       return;
     }
     // coordinate-click detail e.g. "(420, 315)" or a drag "(120, 80) → (300, 240)":
-    // show it INLINE after the label in lighter, smaller, muted text (the owner's preferred).
+    // show it INLINE after the label in lighter, smaller, muted text .
     const _isCoord = detail && /^\(\s*-?\d/.test(detail.trim());
-    // a short duration like '2s' / '1m 3s' also goes INLINE (the owner: Waiting matches Clicking)
+    // a short duration like '2s' / '1m 3s' also goes INLINE 
     const _isDur = detail && /^\d+(\.\d+)?\s*(ms|s|m|h)(\s+\d+\s*(s|m))?$/.test(detail.trim());
     // a short element label (e.g. "Button", "Submit") also goes inline — not a URL/path/command, not long.
     const _dt = (detail||'').trim();
@@ -1984,8 +2107,7 @@
   // Manual steering fires one silent act() per gesture (move / wheel tick / drag
   // segment), so a disconnected browser used to spam one error line per gesture.
   // Coalesce: while this error is still the last chat message, leave the single
-  // line as-is — no ×N counter (the owner 2026-07-21: keep it as one line until a
-  // DIFFERENT warning fires or normal conversation resumes). The lastElementChild
+  // line as-is — no ×N counter . The lastElementChild
   // guard is what gives "until something else happens": once any other message is
   // appended, _failEl is no longer the tail, so the next failure starts a fresh line.
   const FAIL_TEXT = 'Action failed — browser disconnected';
@@ -1998,7 +2120,7 @@
     m.appendChild(w); m.appendChild(b); log.appendChild(m); trim();
     _failEl = m;
   }
-  function _trimOnly(){ while(log.children.length>60) log.removeChild(log.firstChild); saveSession(); }
+  function _trimOnly(){ saveSession(); } // retained turns are paginated, not silently removed at item 60
   function trim(){ _trimOnly(); stickToBottom(); }
 
   // status panel toggles the granular event history (chat stays visible)
@@ -2039,6 +2161,8 @@
   const _clearBtn = document.getElementById('op-clear');
   if (_clearBtn) _clearBtn.addEventListener('click', () => {
     if (_clearBtn.dataset.busy === '1') return;          // ignore double-tap mid-animation
+    _clearedAgentRun = _lastAgentRun;  // reject the discarded run, without comparing clocks across devices
+    _historyEpoch++; _historyPages.delete(_conversationId || 'legacy');
     const finishClear = () => {
       log.innerHTML=''; log.classList.remove('op-clearing');
       try{localStorage.removeItem(LS_KEY);}catch{}
@@ -2046,8 +2170,7 @@
       setFollowUp();
       _clearBtn.dataset.busy='0';
       // back to a fresh idle stage → bring the launchpad back as the SOLID
-      // splash (the owner 2026-07-18, superseding the 07-17 over-the-feed blur;
-      // the .op-lp-over CSS stays for now in case the presentation returns).
+      // splash .
       try { initLaunchpad(); } catch(e){ console.error('operator: launchpad init failed', e); }
       try { const _lp = document.getElementById('op-lp');
         if (_lp) { _lp.classList.remove('op-lp-over'); _lp.hidden = false; } } catch(_){}
@@ -2069,6 +2192,7 @@
   const eventsEl = document.getElementById('op-events');
   const actionBtn = document.getElementById('op-action');
   actionBtn.addEventListener('click', () => {
+    if (window.OperatorWorkbench && window.OperatorWorkbench.toggleJob()) return;
     const exp = eventsEl.classList.toggle('expanded');
     actionBtn.setAttribute('aria-expanded', exp ? 'true' : 'false');
     eventsEl.scrollTop = eventsEl.scrollHeight;
@@ -2311,7 +2435,7 @@
       setTimeout(() => { b.disabled = false; }, 900);   // app needs a beat to map
     });
   });
-  // taskbar auto-minimize (the owner 2026-07-11): after a few idle seconds the
+  // taskbar auto-minimize : after a few idle seconds the
   // button labels drop away (icons stay tappable); pointer over the bar
   // brings them back, leaving re-arms the timer.
   (function(){
@@ -2415,7 +2539,7 @@
     });
   }
 
-  // Code-block scroll trap fix (the owner 2026-07-21, round 2): scrolling STICKS
+  // Code-block scroll trap fix : scrolling STICKS
   // whenever the cursor/finger lands on a code block — the earlier delegate
   // (forward only when the <pre> lacks its own vertical scroll) missed cases,
   // and on iPad a touch that starts on the pre's selectable text initiates
@@ -2541,7 +2665,7 @@
     'vivino.com':'Vivino', 'strava.com':'Strava', 'fandango.com':'Fandango',
     'offerup.com':'OfferUp', 'bookshop.org':'Bookshop.org',
     'amazon.ca':'Amazon', 'ebay.com':'eBay', 'walmart.ca':'Walmart',
-    'bestbuy.ca':'Best Buy', 'ibkr.com':'Interactive Brokers', 'gmail.com':'Gmail',
+    'bestbuy.ca':'Best Buy', 'tool.com':'Interactive Brokers', 'gmail.com':'Gmail',
     'docs.google.com':'Google Docs', 'expedia.ca':'Expedia', 'x.com':'X',
     'netflix.com':'Netflix', 'weather.com':'Weather.com',
     'dominos.com':'Domino’s', 'toasttab.com':'Toast', 'gopuff.com':'Gopuff',
@@ -2711,7 +2835,7 @@
     { name: 'Compare vegetarian meal boxes', prompt: 'On Blue Apron, compare the current vegetarian meal options for two people — price per serving, prep time, and variety — against a typical grocery run.', sites: ['blueapron.com'], category: 'delivery', isExample: true },
     { name: 'Order a meeting catering box', prompt: 'On Panera, build a catering order for an eight-person morning meeting — coffee, pastries, and a bagel pack — and stop before placing it.', sites: ['panerabread.com'], category: 'delivery', isExample: true },
     { name: 'Send a birthday bouquet', prompt: 'On 1-800-Flowers, find three bouquets under $70 that can deliver tomorrow to a zip code I’ll give you, and compare what’s in each.', sites: ['1800flowers.com'], category: 'delivery', isExample: true },
-    { name: 'Join the waitlist at a hot spot', prompt: 'On Resy, check availability for a buzzy restaurant I name this weekend, add me to the notify list for a 7–8pm two-top, and show what’s bookable now.', sites: ['resy.com'], category: 'delivery', isExample: true },   // Resy waitlist is Food (the owner 2026-07-26 audit)
+    { name: 'Join the waitlist at a hot spot', prompt: 'On Resy, check availability for a buzzy restaurant I name this weekend, add me to the notify list for a 7–8pm two-top, and show what’s bookable now.', sites: ['resy.com'], category: 'delivery', isExample: true },   // Resy waitlist is Food 
     { name: 'Find a deal on a local experience', prompt: 'On Groupon, find three well-reviewed local experience deals — spa, class, or activity — under $60 and summarize the fine print on each.', sites: ['groupon.com'], category: 'local', isExample: true },
     { name: 'Find a hobby group meeting this week', prompt: 'On Meetup, find three active groups near me meeting this week around a hobby I name, and summarize when, where, and typical turnout.', sites: ['meetup.com'], category: 'local', isExample: true },
     { name: 'See what neighbors recommend', prompt: 'On Nextdoor, look through recent recommendation threads in my area for a service I name — handyman, plumber, tutor — and list the names that keep coming up.', sites: ['nextdoor.com'], category: 'local', isExample: true },
@@ -2784,7 +2908,7 @@
     { name: 'Find newsletters worth reading', prompt: 'On Substack, find three well-regarded newsletters on a topic I name, and summarize each writer’s angle and posting cadence.', sites: ['substack.com'], isExample: true },
     { name: 'Review my last chess game', prompt: 'On Lichess, open my most recent game, run the analysis, and explain my two biggest mistakes and the ideas I missed.', sites: ['lichess.org'], isExample: true },
     { name: 'Survey takes on a topic', prompt: 'On Medium, find three thoughtful recent essays on a topic I name from different viewpoints, and summarize where they agree and clash.', sites: ['medium.com'], isExample: true },
-    // ── 2026-07-26 expansion (the owner: +6 per category, Cathay Pacific in travel) ──
+    // ── 2026-07-26 expansion  ──
     { name: 'Skim buy-it-for-life picks', prompt: 'On Quora, find well-argued recommendations for three durable, buy-once everyday items, and summarize the consensus reasons.', sites: ['quora.com'], isExample: true },
     { name: 'Check the week\u2019s weather ahead', prompt: 'On Weather.com, pull the 7-day forecast for my area and flag the best two days for outdoor plans.', sites: ['weather.com'], isExample: true },
     { name: 'Cook from pantry staples', prompt: 'On Allrecipes, find three well-rated dinners built from pantry staples like canned tomatoes, beans, rice, and pasta, and list what little I\u2019d need to buy fresh.', sites: ['allrecipes.com'], isExample: true },
@@ -2889,7 +3013,7 @@
     function _taskCategory(t){
       if (t.category) return t.category;
       const sites = (t.sites || []).join(' ').toLowerCase();
-      if (/(ubereats|doordash|instacart|grubhub|opentable|resy|yelp|vivino|allrecipes)/.test(sites)) return 'delivery';   // restaurant booking/discovery is Food, not Local (the owner 2026-07-26)
+      if (/(ubereats|doordash|instacart|grubhub|opentable|resy|yelp|vivino|allrecipes)/.test(sites)) return 'delivery';   // restaurant booking/discovery is Food, not Local 
       if (/(kayak|booking|airbnb|expedia|tripadvisor|flights\.google)/.test(sites)) return 'travel';
       if (/(wikipedia|arxiv|stackoverflow|wolframalpha|coursera|wikihow|nih\.gov|investopedia|khanacademy|pubmed|docs\.python|consumerreports|nasa\.gov|loc\.gov|glassdoor|duolingo)/.test(sites)) return 'research';
       if (/(spotify|imdb|goodreads|espn|nytimes|reddit|rottentomatoes|bandcamp|fandango|justwatch|seatgeek|ticketmaster)/.test(sites)) return 'media';
@@ -2932,7 +3056,7 @@
       grid.textContent = '';
       grid.classList.toggle('op-lp-examples', showExamples);
       items.forEach(t => grid.appendChild(buildLpCard(t, lp)));
-      // Heading follows the active category (the owner 2026-07-19) — expanded copy,
+      // Heading follows the active category  — expanded copy,
       // not the pill's terse label; Browse keeps the classic line.
       const _CAT_TITLES = {
         delivery: 'Order food and groceries',
@@ -2974,7 +3098,7 @@
       clearTimeout(_gridSwapTimer);
       grid.classList.add('op-lp-fading');
       // the heading rides the same cross-fade — its text swaps mid-fade in
-      // renderGrid, so it glides instead of snapping (the owner 2026-07-22)
+      // renderGrid, so it glides instead of snapping 
       if (lpTitle) lpTitle.classList.add('op-lp-fading');
       _gridSwapTimer = setTimeout(() => {
         if (seq !== _gridSwapSeq) return;
@@ -2982,7 +3106,7 @@
         renderGrid(showExamples);
         // height morph: empty ↔ cards changes the block height in one frame —
         // pin the old height, flip to the new one next frame so the container
-        // glides instead of jumping (the owner 2026-07-22 "jumpy")
+        // glides instead of jumping 
         if (_lpInner) {
           const h1 = _lpInner.offsetHeight;
           if (h0 && h1 && h1 !== h0) {
@@ -3017,7 +3141,7 @@
     }
 
     function syncSavedToggle(){
-      // Saved is a PERMANENT category (the owner 2026-07-19) — an empty list shows
+      // Saved is a PERMANENT category  — an empty list shows
       // a minimal "No saved tasks" state instead of hiding the tab. If tasks
       // vanish while the saved view is open, repaint in place (no jarring
       // bounce back to Browse).
@@ -3118,7 +3242,7 @@
             if (!heroInput.offsetWidth) return;   // splash display:none — nothing to measure
             if (!heroInput.value) {
               // EMPTY: same reset as the rail autoGrow — a stale inline height
-              // survives the placeholder clamp on iPad Safari (the owner 2026-07-27).
+              // survives the placeholder clamp on iPad Safari .
               heroInput.style.height = '';
               heroInput.style.marginBottom = '';
               heroInput.style.overflowY = 'hidden';
@@ -3178,8 +3302,7 @@
             // opening from collapsed: render the target cards FIRST (they're
             // invisible at 0fr — no crossfade needed), THEN expand, so the
             // 0fr→1fr animation targets the REAL height. Expanding against the
-            // stale grid overshot to its height and fell back (the owner 2026-07-27,
-            // "opens too much before falling back down").
+            // stale grid overshot to its height and fell back .
             renderGrid(true);
             lp.classList.remove('op-lp-collapsed');
           } else {
@@ -3203,11 +3326,11 @@
           // Home works from MANUAL too: manual force-hides .op-lp, so the button
           // used to be hidden there (and would have been dead anyway). Flip back
           // to auto first, then open — home = "leave manual, go to the splash"
-          // (the owner 2026-07-22 "house icon disappears in manual").
+          // .
           if (MODE !== 'auto') { MODE = 'auto'; try { applyMode(); } catch(_){} }
           lp.classList.remove('op-lp-over');
           // PHONES land on the BARE splash — wordmark + composer + pills, cards
-          // only on a pill tap (the owner 2026-07-26). Desktop keeps the open grid.
+          // only on a pill tap . Desktop keeps the open grid.
           if (window.matchMedia('(max-width: 820px)').matches) {
             lp.classList.add('op-lp-collapsed');
           } else {
@@ -3225,7 +3348,7 @@
           catBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
           tasksTgl.classList.add('active'); tasksTgl.setAttribute('aria-pressed', 'true');
           if (wasCollapsed) {
-            // same render-then-expand as the category pills (the owner 2026-07-27)
+            // same render-then-expand as the category pills 
             renderGrid(false);
             lp.classList.remove('op-lp-collapsed');
           } else {
@@ -3271,7 +3394,7 @@
       // cross-fade. Examples advance the shuffle bucket; saved tasks page through
       // in windows of 6. Frozen while the user is searching or hovering a card, or
       // when the tab is backgrounded — never yank a card out from under a click. ──
-      const CYCLE_MS = 20000;   // 15s -> 20s linger (the owner 2026-07-26)
+      const CYCLE_MS = 20000;   // 15s -> 20s linger 
       let _hovered = false;
       grid.addEventListener('pointerenter', () => { _hovered = true; });
       grid.addEventListener('pointerleave', () => { _hovered = false; });
@@ -3293,7 +3416,7 @@
       if (!grid._cycle) grid._cycle = setInterval(_cycleTick, CYCLE_MS);
       // Pill taps RESET the clock: without this, a tap landing near the end of
       // a cycle showed the fresh category for a beat before rotating it away
-      // (the owner 2026-07-26). Exposed for the pill handler below.
+      // . Exposed for the pill handler below.
       window._opCycleReset = () => {
         if (!grid._cycle) return;
         clearInterval(grid._cycle);
@@ -3410,8 +3533,7 @@
     }
     // Go launches; a tap anywhere else on the card ONLY pastes the prompt into
     // the composer — the launchpad stays open and keeps browsing, tapping
-    // another card just swaps the draft (the owner 2026-07-11; supersedes the
-    // 2026-07-09 close-on-tap). Never auto-fires. Go/Edit stopPropagation.
+    // another card just swaps the draft . Never auto-fires. Go/Edit stopPropagation.
     c.addEventListener('click', () => {
       input.value = t.prompt || '';
       const heroInput = document.getElementById('op-lp-input');
@@ -3420,7 +3542,7 @@
         // The VISIBLE composer on the splash is the hero input, not #op-input. It
         // grows via its own autoGrowHero (wired to its 'input' event, out of scope
         // here). Setting .value programmatically fires no event, so a long pasted
-        // prompt stayed clamped to one row and clipped (the owner 2026-07-21). Dispatch
+        // prompt stayed clamped to one row and clipped . Dispatch
         // the event to run the grow-to-fit exactly as typing would.
         heroInput.dispatchEvent(new Event('input', { bubbles: true }));
       }
@@ -3474,11 +3596,11 @@
     // Enter pills anything; Backspace on empty pops the last.
     const COMMON = [
       // MCPs / tools first
-      {v:'playwright', tool:true}, {v:'ibkr-mcp', tool:true}, {v:'host-app', tool:true},
-      {v:'vecgrep', tool:true}, {v:'discord', tool:true},
+      {v:'playwright', tool:true}, {v:'github-mcp', tool:true}, {v:'notion-mcp', tool:true},
+      {v:'memory-search', tool:true}, {v:'discord', tool:true},
       // finance / work
       {v:'bloomberg.com'}, {v:'reuters.com'}, {v:'finviz.com'},
-      {v:'ibkr.com', ico:'interactivebrokers.com'}, {v:'github.com'},
+      {v:'wsj.com'}, {v:'github.com'},
       {v:'gmail.com', ico:'mail.google.com'}, {v:'docs.google.com'},
       // shopping / food
       {v:'amazon.ca'}, {v:'ebay.com'}, {v:'walmart.ca'}, {v:'bestbuy.ca'},
@@ -3499,7 +3621,7 @@
       {v:'strava.com'}, {v:'bookshop.org'},
     ];
     // Every site the example cards use joins the pick list with its real name
-    // (the owner 2026-07-22) — derived from the pool so the two can't drift apart.
+    //  — derived from the pool so the two can't drift apart.
     // MCPs + the hand-picked entries above keep their pinned order; the pool
     // sites append alphabetized by display label.
     _LP_EXAMPLE_POOL
@@ -3649,6 +3771,7 @@
     schedSync();
 
     function openModal(){
+      if (window.OperatorWorkbench) window.OperatorWorkbench.recipeFill({});
       const draft = input.value.trim();
       prompt.value = (draft && !draft.startsWith('/')) ? draft
         : ((window._opLastDispatch || {}).task || '');
@@ -3665,6 +3788,7 @@
     // Edit an existing saved task: prefill every field + its site pills, remember
     // the slug so save() updates in place (backend keeps `created`).
     function openModalWith(t){
+      if (window.OperatorWorkbench) window.OperatorWorkbench.recipeFill(t);
       name.value = t.name || '';
       prompt.value = t.prompt || '';
       sitesIn.value = '';
@@ -3708,6 +3832,7 @@
         model: (document.getElementById('op-model')||{}).value || '',
         effort: (document.getElementById('op-effort')||{}).value || '' };
       if (_editSlug) body.slug = _editSlug;   // update in place
+      if (window.OperatorWorkbench) Object.assign(body, window.OperatorWorkbench.recipeFields());
       try { const d = await (await fetch(TASKS_URL, { method:'POST',
           headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
         if (d.ok) {
@@ -3794,11 +3919,11 @@
         o.value=x.value; o.textContent=x.label; sel.appendChild(o); });
       let savedModel = (typeof _sess!=='undefined' && _sess) ? _sess.model : '';
       if (!savedModel) { try { const _sv = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (_sv) savedModel = _sv.model || ''; } catch {} }
-      const want = (driver === 'gpt') ? 'gpt-5.6-sol' : (driver === 'gemma') ? 'gemini-3.7-flash' : 'claude-sonnet-5';
+      const want = (driver === 'gpt') ? 'gpt-5.6-sol' : (driver === 'gemma') ? 'gemini-3.8-flash' : 'claude-sonnet-5';
       if (savedModel && [].some.call(sel.options, o=>o.value===savedModel)) sel.value = savedModel;
       else if ([].some.call(sel.options, o=>o.value===want)) sel.value = want;
       if (typeof syncEffort === 'function') syncEffort();
-      fitMini(sel);   // model select only — effort is right-aligned + auto-sizes
+      fitMini(sel);
       // enable the smooth gray transition only AFTER this first programmatic build paints,
       // so the disabled state lands instantly on load (no light->gray flash) but animates on change.
       const _r=document.getElementById('op-modelrow'); if(_r) _r.classList.add('op-ready');
@@ -3828,11 +3953,11 @@
     // gemma/agy: pick the Gemini family in the model picker, the tier in the effort
     // picker; start() passes the slug as --model and the tier as --effort (agy
     // stopped accepting the folded "Gemini X (Tier)" form, 2026-07-24).
-    "gemini-3.7-flash": ["low", "medium", "high"],
+    "gemini-3.8-flash": ["low", "medium", "high"],
     "gemini-3.1-pro": ["low", "high"],
     "Claude Sonnet 4.6 (Thinking)": [], "Claude Opus 4.6 (Thinking)": [], "GPT-OSS 120B (Medium)": [],
   };
-  // a width:auto <select> sizes to its WIDEST option, so a short selection (e.g. '3.7 Flash')
+  // a width:auto <select> sizes to its WIDEST option, so a short selection (e.g. '3.8 Flash')
   // leaves the caret floating right. fitMini measures the SELECTED option's text and sets the
   // select width to it so the caret stays snug. Uses a shared hidden measuring span.
   let _measSpan = null;
@@ -3846,7 +3971,11 @@
     // #op-model's flex-shrink collapsed it below the measured width and the row
     // ellipsized the name ("Sonne…", the owner 2026-07-21). The name now can't be
     // clipped; the effort picker (margin-left:auto) absorbs any row squeeze.
-    const px = (w + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 1) + 'px';
+    // Round UP and keep two physical pixels of breathing room. Sub-pixel font
+    // rasterisation can make the SELECT paint a hair wider than the hidden
+    // span even when both report the same CSS font.
+    const px = Math.ceil(w + parseFloat(cs.paddingLeft)
+      + parseFloat(cs.paddingRight) + 2) + 'px';
     sel.style.width = px;
     sel.style.minWidth = px;
     sel.style.flex = '0 0 auto';
@@ -3854,12 +3983,25 @@
   // expose so the +/- zoom (applyScale, defined earlier) can RE-measure the
   // model picker after a font-scale change — otherwise the width pinned at the
   // old scale stayed fixed while the bigger text needed more room, clipping the
-  // name at higher zooms (the owner 2026-07-21).
-  window._opFitModel = () => { const m = document.getElementById('op-model'); if (m) fitMini(m); };
+  // name at higher zooms .
+  window._opFitModel = () => {
+    fitMini(document.getElementById('op-model'));
+    fitMini(document.getElementById('op-effort'));
+  };
+  // A cold page can receive the model roster before Anthropic Sans finishes
+  // loading. fitMini then measures the narrower fallback face and pins that
+  // width, leaving "GPT-5.6 Te…" in a row with acres of unused space. Refit on
+  // both the current font set's completion and every later font-loading batch;
+  // loadModels still handles the inverse race where fonts win first.
+  if (document.fonts) {
+    document.fonts.ready.then(() => window._opFitModel()).catch(() => {});
+    if (typeof document.fonts.addEventListener === 'function') {
+      document.fonts.addEventListener('loadingdone', () => window._opFitModel());
+    }
+  }
   const _modelSel = document.getElementById('op-model');
   const _effortSel = document.getElementById('op-effort');
   function syncEffort() {
-    _effortSel.style.width = '';   // clear any prior fitMini width — effort auto-sizes + right-aligns
     const m = _modelSel.value || 'opus';
     const opts = EFFORT_BY_MODEL[m] || ["low", "medium", "high"];
     const prev = _effortSel.value;
@@ -3871,6 +4013,7 @@
       if (_mm) {
         _effortSel.hidden = false; _effortSel.disabled = true;
         const o=document.createElement('option'); o.value=_mm.toLowerCase(); o.textContent=_mm.toLowerCase(); _effortSel.appendChild(o); _effortSel.value=o.value;
+        fitMini(_effortSel);
         return;
       }
       _effortSel.hidden = true; return;   // truly no effort (e.g. Haiku): hide
@@ -3880,15 +4023,16 @@
     opts.forEach(v => { const o=document.createElement('option');
       o.value=v; o.textContent = v; _effortSel.appendChild(o); });
     // default when nothing meaningful was chosen (prev blank/unavailable): GPT
-    // models default to 'low' (the owner — GPT default is 5.6 Sol low), everything
+    // models default to 'low' , everything
     // else to 'medium'.
     if (prev && opts.includes(prev)) _effortSel.value = prev;
     else if (m.startsWith('gpt-') && opts.includes('low')) _effortSel.value = 'low';
     else if (opts.includes('medium')) _effortSel.value = 'medium';
+    fitMini(_effortSel);
   }
   function _flashMini(el){ if(!el || el.disabled) return; el.classList.remove('op-mini-swap'); void el.offsetWidth; el.classList.add('op-mini-swap'); }
   _modelSel.addEventListener('change', () => { syncEffort(); fitMini(_modelSel); _flashMini(_modelSel); _flashMini(_effortSel); saveSession(); });
-  _effortSel.addEventListener('change', () => { _flashMini(_effortSel); saveSession(); });
+  _effortSel.addEventListener('change', () => { fitMini(_effortSel); _flashMini(_effortSel); saveSession(); });
 
   // ⌘L / Ctrl+L → focus the URL bar; ⌘K / Ctrl+K → focus the composer (v0.7.0,
   // browser idiom). Both swallow the browser default (⌘L would hijack OUR urlbar).
@@ -3931,7 +4075,7 @@
   }
   function applyMode() {
     // keep the chat fixed across AUTO⇄MAN: toggling the "Manual mode" banner changes
-    // the rail height and reflows the log, shoving it up (the owner). Capture the log's
+    // the rail height and reflows the log, shoving it up . Capture the log's
     // position before the change, restore it after the synchronous reflow.
     const _atBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 24;
     const _fromBottom = log.scrollHeight - log.scrollTop;
@@ -3948,6 +4092,9 @@
       input.disabled = !_canControl;
       if(inputbox) inputbox.classList.toggle('disabled', !_canControl);
       if(manNote) manNote.hidden = true;
+      // AUTO composer is live again — bring back any parked draft the MAN
+      // branch (or a boot mode-flip) cleared. Empty + not-disabled guarded.
+      try { if (typeof _restoreDraft === 'function') _restoreDraft(); } catch(_){}
       setFollowUp();
       { const f=document.getElementById('op-pick-face'); setPickFace(f, selectedBot()); }
       if (actTxt.textContent === 'Manual') actTxt.textContent = idleCardText();
@@ -3961,7 +4108,7 @@
       // Finish-up hand-back: only when Operator kicked control to the user.
       // Preserve an OPEN expand across re-applies — the old blind reset
       // re-showed the trigger while the expand was open, so tapping Finish up
-      // left two "Finish up" buttons on screen (the owner 2026-07-11). Trigger and
+      // left two "Finish up" buttons on screen . Trigger and
       // expand are mutually exclusive by construction now.
       { const fin=document.getElementById('op-finish'), exp=document.getElementById('op-finish-expand'),
             fbtn=document.getElementById('op-finish-btn');
@@ -4038,7 +4185,7 @@
                        if (finBtn) finBtn.hidden = false; }, 330);
     }
     // tap/click anywhere outside the Finish-up block → minimize it back to the
-    // trigger (the owner 2026-07-11). Capture-phase so popover handlers can't eat it.
+    // trigger . Capture-phase so popover handlers can't eat it.
     document.addEventListener('click', (e)=>{
       const fin = document.getElementById('op-finish');
       if (!fin || fin.hidden || !finExp || finExp.hidden) return;
@@ -4070,10 +4217,12 @@
   let _agentPolling = false;
   let _lastAssistant = '';
   let _lastActionEmoji = '💭', _lastActionVerb = 'Thinking';
+  let _lastActionVisual = false;   // last action acted at a screen position
   let _runProgressTs = 0;
   let _runSawProgress = false;   // has THIS run emitted at least one progress msg yet?
   let _handledState = '';
   let _steerQueued = false;  // a soft steer is queued but not yet consumed by a delivery seam
+  let _heldSteer = null;     // the parked steer bubble awaiting its seam (op-held)
   let _postSteerUntil = 0;
   let _steering = false;     // true from a steer until the NEW run is confirmed 'running' —
   // suppresses ALL terminal-state handling so the killed run's stale done/error can't
@@ -4084,7 +4233,7 @@
   // ^ guards re-emitting a turn that COMPLETED before the page loaded: on refresh the
   // server still reports the last turn's terminal state, which would otherwise re-append
   // its reply (the "last 2 messages duplicate on every refresh" bug, the owner).
-  let _errShown = false;     // one error card per turn — suppress the stacking (the owner)
+  let _errShown = false;     // one error card per turn — suppress the stacking 
   // show at most ONE error card per turn. A failing turn otherwise stacks 3-4:
   // the stderr 'error' message + the 120s watchdog + the 'error' state handler.
   // Prefer a specific reason; ignore generic follow-ups once one is shown.
@@ -4094,7 +4243,7 @@
     taskError(title, reason);
   }
   async function pollAgent() {
-    if (MODE !== 'auto' || _agentPolling) return;   // guard re-entrancy
+    if ((MODE !== 'auto' && _canControl) || _agentPolling) return;   // observers still receive terminal output
     _agentPolling = true;
     const pollConversation = _conversationId || 'legacy';
     try {
@@ -4104,13 +4253,32 @@
       // the old conversation's late telemetry paint into the newly selected
       // transcript; its next selected poll will read that runner directly.
       if (pollConversation !== (_conversationId || 'legacy')) return;
+      const runKey = d.run_id || String(d.started_ts || '');
+      if (_clearedAgentRun && runKey === _clearedAgentRun) return;
+      _lastAgentRun = runKey;
+      if (window.OperatorWorkbench) setTimeout(() => window.OperatorWorkbench.update(d, pollConversation), 0);
       let maxTs = _agentSince;
       const msgs = (d.messages||[]);
+      // Steer delivery seam (before painting the batch): a queue that drained
+      // while still running means the hook consumed the correction. Close the
+      // pre-steer card as Steered, promote the held bubble into the flow at
+      // this exact point, and let the batch below open a fresh card under it.
+      if (_steerQueued && d.steer_pending === 0) {
+        _steerQueued = false;
+        if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
+        if (_heldSteer) {
+          _heldSteer.classList.remove('op-held');
+          log.appendChild(_heldSteer);
+          try { _markLastUser(); } catch(_){}
+          _heldSteer = null;
+          scrollToBottom(true);
+        }
+      }
       // The live verb is decided per poll BATCH, actions outranking narration:
       // the agent narrates between every tool call, so setting the verb per
       // message left the header stuck on "Thinking…" through whole action
       // streaks — the trailing narration stomped each action verb within the
-      // same poll (the owner 2026-07-22). A narration-only batch still reads
+      // same poll . A narration-only batch still reads
       // Thinking; any action in the batch wins with its own verb.
       let batchVerb = null;
       msgs.forEach((m, i) => {
@@ -4122,6 +4290,7 @@
           taskActionStep(m.text, m.detail);
           batchVerb = actCont(m.text);
           _lastActionEmoji = actEmoji(m.text); _lastActionVerb = actCont(m.text);
+          _lastActionVisual = actIsVisual(m.text);
         } else if (m.role === 'assistant') {
           // a genuine final-answer step; remember it — the LAST one becomes the reply bubble
           _lastAssistant = m.text;
@@ -4132,12 +4301,12 @@
           // the trace same as 'assistant', but NEVER let it become the reply bubble: a
           // turn that ends (or is cut off mid-loop) without a real answer should fall
           // through to the "no summary" card below, not leak a raw work-summary/checklist
-          // (the owner 2026-06-30, #37/#40).
+          // .
           taskStep(m.text);
           if (!batchVerb) batchVerb = 'Thinking';
         } else if (m.role === 'notice') {
           const nt = (m.text||'').trim();
-          taskNotice(m.kind === 'usage' ? 'Usage warning' : 'Re-grounding', nt);
+          taskNotice(m.kind === 'usage' ? 'Usage warning' : 'Operator may be stuck', nt);
         } else if (m.role === 'error') {
           const et = (m.text||'').trim();
           turnError('Turn failed', et || 'The agent ended the turn with an error.');   // one card/turn, specific msg preferred
@@ -4146,13 +4315,6 @@
       if (batchVerb) taskVerb(batchVerb, true);
       _agentSince = maxTs;
       if (msgs.length) { _runProgressTs = Date.now(); _runSawProgress = true; }   // any new msg = progress
-      // 1.0.12 steer delivery notice: pending → 0 while still running means a
-      // delivery seam consumed the queue (the hook injected it mid-loop, or
-      // the exit seam started the follow-up turn).
-      if (_steerQueued && d.steer_pending === 0) {
-        _steerQueued = false;
-        if (d.state === 'running') logEvent('Steer delivered to ' + (d.bot || 'the agent'), true);
-      }
       // terminal states must be handled ONCE — not re-fired every poll (that
       // looped "agent stopped" after a stop). Reset when a fresh run starts.
       // While interrupting (user hit Stop), do NOT let a lingering 'running' poll from
@@ -4177,10 +4339,18 @@
         commitMode('man');
         return;
       }
-      // A turn that finished BEFORE this page load (refresh): we never saw it run, so
-      // don't re-emit its reply/handoff/error — the restored log already shows it.
-      // Just mark the state handled and bail.
-      if (d.state !== 'running' && !_sawRunning) { _handledState = d.state; return; }
+      // Joining late/backgrounding can miss the entire running state. The
+      // saved HTML is only a cache; reconcile the server's final independently.
+      const reply = d.state === 'done' ? ((d.final || '').trim() || _lastAssistant) : '';
+      const _key = el => (el ? el.textContent : '').replace(/\s+/g, ' ').trim();
+      const renderedReply = document.createElement('div');
+      renderedReply.innerHTML = _mdToHtml(reply || '');
+      const _replyKey = _key(renderedReply);
+      const lastMessage = d.state === 'done' ? [...log.querySelectorAll('.op-msg')].pop() : null;
+      const _alreadyShown = !!(lastMessage && lastMessage.classList.contains('bot')
+        && _key(lastMessage.querySelector('.bubble')) === _replyKey);
+      const missingFinal = d.state === 'done' && !!reply && !_alreadyShown;
+      if (d.state !== 'running' && !_sawRunning && !missingFinal) { _handledState = d.state; return; }
       // #4 HAND-OFF: the agent emitted [[TAKE_CONTROL]] → surface the takeover card
       // (once per request) instead of the normal done/no-summary path.
       if (d.handoff && d.handoff.ts && d.handoff.ts !== _handoffTs) {
@@ -4197,13 +4367,13 @@
       // tail; don't also emit a reply / "no summary" / error card (the bug: the
       // "(no summary)" line appearing right under "Operator needs human input").
       if (_handoffActive && d.state !== 'running') { _handledState = d.state; return; }
-      if (d.state !== 'running' && _handledState === d.state) { return; }
+      if (d.state !== 'running' && _handledState === d.state && !missingFinal) { return; }
       // Swallow the STEERED (killed) run's trailing done/error until the NEW run
       // reaches 'running' (which clears _steering, line ~3237). The old guard
       // used only a 1500ms window (_postSteerUntil) which raced: if the killed
       // run's `done` landed after the window but before the new run started, it
       // fired finishTask() with the default "Worked for 1s" — an orphan card
-      // alongside the "Steered after Xs" one (the owner 2026-07-21). _steering is the
+      // alongside the "Steered after Xs" one . _steering is the
       // real signal; the timer is only a belt-and-suspenders backstop now.
       if ((d.state === 'done' || d.state === 'error')
           && (_steering || Date.now() < _postSteerUntil)) { _handledState = d.state; return; }  // swallow the killed run's tail after a steer
@@ -4228,14 +4398,13 @@
         // on 120s of no new *message*, but a healthy agent legitimately goes quiet for
         // >2min: a long reasoning step, a slow page load, a cold start spinning up the
         // subprocess+MCP, or a natural pause mid-conversation. Those were all getting
-        // false-killed with "the agent stalled" (the owner: happens mid-flight, not just at
-        // start). The server now reports `alive` (subprocess poll()==None); we gate the
+        // false-killed with "the agent stalled" . The server now reports `alive` (subprocess poll()==None); we gate the
         // watchdog on it. A long timeout (8min) stays as a backstop for a process that's
         // alive but truly hung, so we never spin forever — but a working agent is never
         // killed for being quiet.
         const _dead = d.alive === false;            // subprocess gone but state stuck "running" → real crash
         const _hung = Date.now() - _runProgressTs > 480000;  // 8min backstop: alive but wedged
-        if ((_dead && Date.now() - _runProgressTs > 15000) || _hung) {
+        if (_canControl && ((_dead && Date.now() - _runProgressTs > 15000) || _hung)) {
           op.dataset.busy='0'; setCardText(actTxt, 'Failed');
           setCardSub(d.bot||'', 'stalled'); op.dataset.agent='errored';
           turnError('Turn failed', 'The agent stopped responding and was ended.'); finishTask(true); setInFlight(false);
@@ -4244,40 +4413,49 @@
         }
       }
       else if (d.state === 'done') { op.dataset.busy='0'; setCardText(actTxt, 'Done');
-        _lastActionEmoji='💭'; _lastActionVerb='Thinking';   // clear stale live verb
+        _lastActionEmoji='💭'; _lastActionVerb='Thinking'; _lastActionVisual=false;   // clear stale live verb
         setCardSub(selectedBot()||'', 'idle'); op.dataset.agent='done';   // idle shows the SELECTED bot, not whoever last ran
-        // promote the final reply into a markdown bubble. Prefer the incrementally
-        // captured one; fall back to the server's authoritative `final` (covers the
+        // Promote the final reply into a markdown bubble. Prefer the server's
+        // authoritative `final`; fall back to the incrementally captured one (covers the
         // case where the message flushed together with turn-end — gpt/codex does
         // this, which is why a "Spelunked 19s" turn could end with no reply shown).
-        const reply = _lastAssistant || (d.final || '').trim();
+        // Compare RENDERED text, never raw markdown. Trace steps and bubbles both
+        // hold _mdToHtml output, so their textContent has already lost the `**`,
+        // the list markers and the fence — while `reply` still carries them. The
+        // old raw-vs-rendered compare therefore matched only plain-prose answers;
+        // any answer with bold, a list or a code block failed both guards and got
+        // drawn twice, as the last trace step AND the bubble .
+        // Whitespace is collapsed because a <li> and a <p> space out differently.
         // don't re-append a reply that's already the last bot bubble (e.g. after a
         // refresh restores the log, or repeated 'done' polls) — that caused the
         // message to duplicate on every refresh.
-        const _lastBubble = log.querySelector('.op-msg.bot:last-of-type .bubble');
-        const _alreadyShown = _lastBubble && _lastBubble.textContent.trim() === reply.trim();
         if (reply && !_alreadyShown) {
-          if (_task) { const steps=_task.querySelectorAll('.op-task-step');
-            const lastStep = steps[steps.length-1];
-            if (lastStep && !lastStep.classList.contains('op-act-step')
-                && lastStep.textContent.trim() === reply.trim()) lastStep.remove(); }
+          // Walk back over trailing action steps: the answer is not always the very
+          // last thing in the trace, and giving up at the first action step left the
+          // duplicate standing.
+          if (_task) { const steps=[..._task.querySelectorAll('.op-task-step')];
+            for (let i = steps.length - 1; i >= 0; i--) {
+              if (steps[i].classList.contains('op-act-step')) continue;
+              if (_replyKey && _key(steps[i]) === _replyKey) steps[i].remove();
+              break;
+            } }
           finishTask();
           logBotReply(reply);
           _lastAssistant = '';
         } else {
           // genuinely no final answer from the agent — say so rather than going silent
           finishTask();
-          logBotReply('_(done — the agent acted but returned no summary. ask it to recap, or try again.)_');
+          if (!reply) logBotReply('_(done — the agent acted but returned no summary. ask it to recap, or try again.)_');
         }
         _runProgressTs = 0;   // like interrupted/error: never leak this run's stamp into the next turn's dead-run watchdog
-        setInFlight(false); }
+        setInFlight(false); recoverHistory(); }
       else if (d.state === 'interrupted') {           // USER hit stop → clean interrupt, NOT an error
         // server SIGTERM'd the agent (exit -15). Finalize the turn as "Interrupted
         // after Xs" — no red error card, no extra done-verb. (Unless a steer is mid-
         // flight, in which case submit() already closed it as "Steered".)
         if (!_interrupting && !_steering) {
           op.dataset.busy='0'; setCardText(actTxt, 'Ready');
-          _lastActionEmoji='💭'; _lastActionVerb='Thinking';
+          _lastActionEmoji='💭'; _lastActionVerb='Thinking'; _lastActionVisual=false;
           setCardSub(selectedBot()||'', 'idle'); op.dataset.agent='';
           if (_task) { try { finishTask(false, 'Interrupted'); } catch(_){} }
         }
@@ -4310,17 +4488,37 @@
   const ham = document.getElementById('op-ham-menu');
   const hamWrap = document.getElementById('op-ham');
   const hamBtn = document.getElementById('op-ham-btn');
+  // These are genuine shortcut guides, not a generic box for any glyph that
+  // vaguely resembles the action. Match the keyboard in front of the viewer.
+  const _hamPlatform = (navigator.userAgentData && navigator.userAgentData.platform)
+    || navigator.platform || '';
+  const _hamApple = /Mac|iPhone|iPad|iPod/i.test(_hamPlatform);
+  const _hamShortcuts = _hamApple ? {
+    'reload':'⌘ R', 'hard-reload':'⇧ ⌘ R', 'zoom-in':'⌘ +',
+    'zoom-out':'⌘ -', 'zoom-reset':'⌘ 0', 'find':'⌘ F',
+    'select-all':'⌘ A', 'escape':'Esc', 'next-tab':'⌃ Tab'
+  } : {
+    'reload':'Ctrl R', 'hard-reload':'Ctrl Shift R', 'zoom-in':'Ctrl +',
+    'zoom-out':'Ctrl -', 'zoom-reset':'Ctrl 0', 'find':'Ctrl F',
+    'select-all':'Ctrl A', 'escape':'Esc', 'next-tab':'Ctrl Tab'
+  };
+  ham.querySelectorAll('[data-shortcut]').forEach(el => {
+    el.textContent = _hamShortcuts[el.dataset.shortcut] || '';
+  });
   function closeHam() { ham.hidden = true; }
-  function openHam() {
+  function positionHam() {
     const r = hamBtn.getBoundingClientRect();
     // anchor the fixed menu just under the button, right-aligned to it
     const top = r.bottom + 4;
     ham.style.top = top + 'px';
     ham.style.left = 'auto';
-    ham.style.right = (window.innerWidth - r.right) + 'px';
+    ham.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
     // cap to the space actually below the button so a tall menu (high zoom /
     // short viewport) scrolls inside itself instead of running off the bottom
     ham.style.maxHeight = Math.max(160, (window.innerHeight - top - 10)) + 'px';
+  }
+  function openHam() {
+    positionHam();
     ham.hidden = false;
   }
   hamBtn.addEventListener('click', e => {
@@ -4329,6 +4527,7 @@
   // outside click (capture phase so it always fires first) closes it
   document.addEventListener('click', (e) => {
     if (!ham.hidden && !hamWrap.contains(e.target)) closeHam(); }, true);
+  window.addEventListener('resize', () => { if (!ham.hidden) positionHam(); }, {passive:true});
   // picking a menu item runs its action then closes
   ham.querySelectorAll('.op-ham-item').forEach(it =>
     it.addEventListener('click', () => {
@@ -4337,7 +4536,7 @@
         if (u && navigator.clipboard) navigator.clipboard.writeText(u);
         logEvent('Copied URL', true);
       }
-      if (it.dataset.kind === 'reset_view') logEvent('Cleared stuck zoom', true);
+      if (it.dataset.kind === 'reset_view') logEvent('Repaired page size', true);
       closeHam();
     }));
 
@@ -4575,8 +4774,7 @@
     if (_favPop) return _favPop;
     _favPop = document.createElement('div'); _favPop.className = 'op-favpop';
     _favPop.innerHTML = '<img alt=""><span class="fp-txt"><span class="fp-t"></span><span class="fp-h"></span></span>';
-    // body, NOT .op-browser (the owner 2026-07-25: the card was hidden under the
-    // browser window). .op-browser is `overflow: hidden` with a border-radius,
+    // body, NOT .op-browser . .op-browser is `overflow: hidden` with a border-radius,
     // so it CLIPS any descendant that reaches past the pane — no z-index can
     // escape a clipping ancestor. Anchored with position:fixed off the
     // favicon's viewport rect instead.
@@ -4696,7 +4894,7 @@
           el.classList.add('op-tab-closing');   // play the close-out animation first
           // Was this the last one? Then the strip itself is about to go, and
           // :empty would cut it dead. Send it out with the same fade the
-          // toggle uses (the owner 2026-08-22).
+          // toggle uses .
           const last = el.parentNode.querySelectorAll('.op-tab:not(.op-tab-closing)').length === 0;
           setTimeout(async () => {
             try { await fetch(OP_URLS.tab_close.replace('/0','/'+t.i), {method:'POST'}); } catch {}
@@ -4742,9 +4940,20 @@
       _agentCursor.classList.remove('press'); void _agentCursor.offsetWidth; _agentCursor.classList.add('press');
       setTimeout(()=>_agentCursor.classList.remove('press'), 460);
     }, 520);   // ≈ the glide duration
-    // keep the cursor visible while the agent is active; fade only after idle
+    // Keep the cursor PRESENT for the whole run. The old 5s timer hid it during
+    // any stretch without a click — a typing or scrolling passage — so it read
+    // as absent exactly when you were watching to see where the bot was
+    // . Re-arm while the run is live; hide once it ends, so an
+    // idle stage still clears. MAN is unaffected: CSS hides this cursor there.
     clearTimeout(_agentCursor._fade);
-    _agentCursor._fade = setTimeout(()=>_agentCursor.classList.remove('show'), 5000);
+    const _keepAlive = () => {
+      if ((_inFlight || op.dataset.busy === '1') && _lastActionVisual) {
+        _agentCursor._fade = setTimeout(_keepAlive, 2000);
+        return;
+      }
+      _agentCursor.classList.remove('show');
+    };
+    _agentCursor._fade = setTimeout(_keepAlive, 5000);
   }
   // MANUAL-steer local cursor: snap a client-drawn pointer to normalized coords
   // the INSTANT you act, so input feels immediate even while the video feed (the
@@ -4771,7 +4980,17 @@
     _steerCursor._fade = setTimeout(() => _steerCursor.classList.remove('show'), 2500);
   }
   let _coldSince = 0;
+  function launchpadConnection(state) {
+    // Presentation only: a failed reachability probe during demand-start is
+    // not a failed connection. Do not feed this back into stream recovery.
+    op.dataset.connection = state;
+    const mark = document.getElementById('op-lp-mark');
+    if (mark) mark.setAttribute('aria-label', state === 'connecting' ? 'Connecting…' :
+      state === 'live' ? 'Connected' : 'Connection error');
+  }
   async function poll() {
+    // Match the frame pump; visibilitychange already refreshes on return.
+    if (document.hidden) return;
     try { const d = await (await fetch(STATUS)).json();
       // another tab (or a dispatch) may have switched the surface — stay in sync
       if (d.surface && d.surface !== _surfaceActive) {
@@ -4782,10 +5001,15 @@
       if (d.click) showAgentClick(d.click);   // draw the agent cursor where it clicked
       // Chrome reachability, independent of the feed. On the launchpad the feed
       // rests at 'idle' whether the browser is healthy or dead, so this is the
-      // ONLY signal that distinguishes them (the owner 2026-08-02). null = not probed
+      // ONLY signal that distinguishes them . null = not probed
       // yet — leave the mark alone rather than flash a false "down".
       if (d.browser_up === false) op.classList.add('op-browser-down');
       else if (d.browser_up === true) op.classList.remove('op-browser-down');
+      if (!_isGameSurface()) {
+        launchpadConnection(d.has_frame ? 'live' : d.status === 'connecting' ? 'connecting' :
+          d.status === 'error' || d.browser_up === false ? 'error' :
+          d.browser_up === true ? 'live' : 'connecting');
+      } else delete op.dataset.connection;
       if (d.has_frame) { setState('live', ''); _coldSince = 0; _desktopNoFrame = false;
         _pollCold = false;   // poll authority: feed is healthy — loads may clear again
         // server healthy → if we were showing SIGNAL LOST, reconnect ONCE to
@@ -4823,7 +5047,10 @@
         }
       }
     } catch { if (!_coldSince) _coldSince = Date.now();
-      if (Date.now()-_coldSince >= 6000) setState('error','disconnected'); }
+      if (Date.now()-_coldSince >= 6000) {
+        setState('error','disconnected');
+        if (!_isGameSurface()) launchpadConnection('error');
+      } }
   }
   const _sess = restoreSession();
   // restore the mode IMMEDIATELY (not in the 400ms timeout) so an early saveSession
@@ -4878,12 +5105,86 @@
       if (typeof syncEffort === 'function') syncEffort(); }
     if (d.effort) { const c = document.getElementById('op-effort');
       if (c && [].some.call(c.options, o => o.value === d.effort)) c.value = d.effort; }
+    window._opFitModel();
+    if (d.log) recoverHistory();
     // cache the adopted copy locally WITH its rev — and no re-push (nothing new)
     try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign(
       {_srev: _srev, _crev: _crev, _conversation_id: _conversationId},
       _sessionPayload()))); } catch {}
   }
   window._opApplySession = applySessionData;
+  function mergeHistory(page) {
+    const norm = text => String(text || '').replace(/\s+/g, ' ').trim();
+    const turns = [...page.turns.values()].sort((a,b) => a.id-b.id);
+    let previous = null;
+    const used = new Set();
+    for (const turn of turns) {
+      let user = [...log.querySelectorAll('.op-msg.user')].find(el => el.dataset.historyTurn === String(turn.id));
+      if (!user) user = [...log.querySelectorAll('.op-msg.user')].find(el =>
+        !el.dataset.historyTurn && !used.has(el) && norm(el.querySelector('.bubble')?.textContent) === norm(turn.task));
+      if (!user) {
+        user = document.createElement('div'); user.className = 'op-msg user';
+        const bubble = document.createElement('span'); bubble.className = 'bubble'; bubble.textContent = turn.task;
+        user.append(bubble);
+        if (previous && previous.isConnected) previous.after(user);
+        else log.prepend(user);
+      }
+      user.dataset.historyTurn = turn.id; used.add(user);
+      let end = user.nextElementSibling, anchor = user;
+      const section = [];
+      while (end && !end.matches('.op-msg.user')) { section.push(end); anchor = end; end = end.nextElementSibling; }
+      if (turn.final) {
+        const rendered = document.createElement('span'); rendered.className = 'bubble'; rendered.innerHTML = _mdToHtml(turn.final);
+        const key = norm(rendered.textContent);
+        const found = section.find(el => el.matches('.op-msg.bot') && norm(el.querySelector('.bubble')?.textContent) === key);
+        if (!found) {
+          const answer = document.createElement('div'); answer.className = 'op-msg bot';
+          answer.dataset.historyTurn = turn.id; answer.append(rendered); _addCopyButtons(rendered);
+          anchor.after(answer); anchor = answer;
+        }
+      }
+      previous = anchor;
+    }
+    log.querySelector('.op-load-earlier')?.remove();
+    if (page.more) {
+      const earlier = document.createElement('button'); earlier.className = 'op-load-earlier';
+      earlier.type = 'button'; earlier.textContent = 'Load earlier messages';
+      earlier.onclick = () => { earlier.disabled = true; recoverHistory(true).finally(() => { earlier.disabled = false; }); };
+      log.prepend(earlier);
+    }
+    _markLastUser();
+  }
+  async function recoverHistory(older = false) {
+    if (demoReadOnly || !OP_URLS.history_list) return;
+    const cid = _conversationId || 'legacy', epoch = _historyEpoch;
+    let page = _historyPages.get(cid);
+    if (!page) { page = {turns:new Map(), latest:0, oldest:0, more:false, busy:false}; _historyPages.set(cid, page); }
+    if (page.busy) return;
+    page.busy = true;
+    try {
+      const cursor = older ? '&before=' + page.oldest : '&after=' + page.latest;
+      const r = await fetch(OP_URLS.history_list + '?conversation_id=' + encodeURIComponent(cid) + cursor, {cache:'no-store'});
+      if (!r.ok) throw new Error('History unavailable');
+      const d = await r.json();
+      if (!d.ok || cid !== (_conversationId || 'legacy') || epoch !== _historyEpoch) return;
+      // A different device may have cleared the chat since our last page.
+      for (const [id, turn] of page.turns) {
+        if ((d.cleared_through_id && id <= d.cleared_through_id) || (d.cleared_ts && turn.started_ts <= d.cleared_ts)) page.turns.delete(id);
+      }
+      const first = page.turns.size === 0;
+      (d.turns || []).forEach(turn => page.turns.set(turn.id, turn));
+      page.latest = Math.max(page.latest, d.latest_id || 0);
+      // More than one page may have completed while this viewer was away.
+      // Expose the intervening gap through Load earlier rather than skipping it.
+      if (first || older || d.has_more) { page.oldest = d.oldest_id || page.oldest; page.more = !!d.has_more; }
+      const height = log.scrollHeight, top = log.scrollTop;
+      mergeHistory(page);
+      if (older) log.scrollTop = top + log.scrollHeight - height;
+    } catch (_) {
+      const button = log.querySelector('.op-load-earlier');
+      if (button) button.textContent = 'Could not load earlier messages — retry';
+    } finally { page.busy = false; }
+  }
   (async () => { try {
     const r = await fetch(SESSION + (_conversationId
       ? '?conversation_id=' + encodeURIComponent(_conversationId) : ''),
@@ -4909,6 +5210,7 @@
       if (typeof syncEffort==='function') syncEffort(); }
     if (_sess.effort) { const c=document.getElementById('op-effort');
       if (c && [].some.call(c.options,o=>o.value===_sess.effort)) c.value=_sess.effort; }
+    window._opFitModel();
     if (typeof applyMode === 'function') { MODE = (_sess.mode === 'auto' ? 'auto' : (_sess.mode === 'man' ? 'man' : MODE)); applyMode(); }
   } catch {} }, 400);
   // ── conversations (2026-08-06): the cockpit held exactly ONE chat, so every
@@ -4925,6 +5227,9 @@
     const listEl = document.getElementById('op-chat-list');
     const newBtn = document.getElementById('op-chat-new');
     const search = document.getElementById('op-chat-search');
+    const filter = document.getElementById('op-chat-filter');
+    const sort = document.getElementById('op-chat-sort');
+    const count = document.getElementById('op-chat-count');
     const empty = document.getElementById('op-chat-empty');
     const feedback = document.getElementById('op-chat-feedback');
     const confirmBox = document.getElementById('op-chat-confirm');
@@ -5028,7 +5333,7 @@
         || (s.empty ? 'Ready for a new task' : 'No prompt preview');
       const meta = document.createElement('span');
       meta.className = 'op-chat-meta';
-      const bot = document.createElement('span'); bot.textContent = s.bot || '';
+      const bot = document.createElement('span'); bot.textContent = s.model || s.bot || '';
       const surface = document.createElement('span');
       surface.textContent = friendlySurface(s.surface);
       const state = document.createElement('span');
@@ -5076,28 +5381,34 @@
     }
     function render(){
       const q = (search.value || '').trim().toLocaleLowerCase();
-      const shown = rows.filter(s => !q
-        || ((s.title || '') + '\n' + (s.preview || ''))
-          .toLocaleLowerCase().includes(q))
+      const shown = rows.filter(s => (!q
+        || [s.title, s.preview, s.bot, s.model, s.surface, (s.presence || {}).controller_label]
+          .join(' ').toLocaleLowerCase().includes(q))
+        && (!filter || filter.value === 'all'
+          || (filter.value === 'running' && (s.alive || s.state === 'running'))
+          || (filter.value === 'here' && (s.presence || {}).can_control)))
         .sort((a, b) => {
+          if (sort && sort.value === 'title') return (a.title || '').localeCompare(b.title || '');
+          if (sort && sort.value === 'oldest') return (a.updated_ts || 0) - (b.updated_ts || 0);
           const ar = +(a.alive || a.state === 'running');
           const br = +(b.alive || b.state === 'running');
           return br - ar || (b.updated_ts || 0) - (a.updated_ts || 0);
         });
       listEl.replaceChildren();
       shown.forEach(s => listEl.appendChild(row(s)));
+      if (count) count.textContent = shown.length + ' of ' + rows.length + ' chats';
       empty.hidden = shown.length !== 0;
       const strong = empty.querySelector('strong');
       const copy = empty.querySelector('span');
       if (strong) strong.textContent = rows.length ? 'No matching chats' : 'No chats yet';
       if (copy) copy.textContent = rows.length
-        ? 'Try another search or start a new chat.'
+        ? 'Try another search or filter, or start a new chat.'
         : 'Start a new chat and it will appear here on every device.';
       cancelDelete();
     }
     function fingerprint(items, activeId){
       return JSON.stringify([activeId, items.map(s => [
-        s.id, s.title, s.preview, s.bot, s.surface, s.updated_ts,
+        s.id, s.title, s.preview, s.bot, s.model, s.surface, s.updated_ts,
         s.state, !!s.alive,
         (s.presence || {}).controller_label || '',
         !!(s.presence || {}).can_control
@@ -5140,6 +5451,7 @@
       _setConversationId(id);
       _crev = typeof j.conversation_rev === 'number' ? j.conversation_rev : 0;
       _agentSince = Date.now()/1000; _seenMsg.clear(); _sawRunning = false;
+      _lastAgentRun = ''; _clearedAgentRun = '';
       _handledState = ''; _lastAssistant = ''; _queue = []; _inFlight = false;
       await window._opApplySession(
         j.data, j.rev, true, id, j.conversation_rev);
@@ -5193,6 +5505,8 @@
     });
     if (closeBtn) closeBtn.addEventListener('click', () => hide(true));
     if (search) search.addEventListener('input', render);
+    if (filter) filter.addEventListener('change', render);
+    if (sort) sort.addEventListener('change', render);
     if (confirmCancel) confirmCancel.addEventListener('click', cancelDelete);
     if (confirmDelete) confirmDelete.addEventListener('click', async () => {
       const s = deleteTarget;
@@ -5353,28 +5667,28 @@
   }
   async function submit(){
     const txt = input.value.trim(); if(!txt) return; input.value=''; autoGrow(); if(typeof refreshSendButton==='function') refreshSendButton();
+    if (typeof _clearDraft === 'function') _clearDraft();
     if (MODE === 'auto') {
-      logUser(txt);
       if (_inFlight) {
-        // INTERRUPT-STEER (restored 2026-07-12, the owner): a mid-run message stops
-        // the current turn and immediately redirects the bot — barge-in, not a
-        // polite queue. The 1.0.12 soft-steer ("lands at the agent's next step",
-        // delivered via SAY_URL) was never asked for and read as sluggish; the
-        // old stop+re-dispatch "worked well enough." This is intentional
-        // steering, NOT an error — close the current turn quietly as "Steered"
-        // (no Interrupted/error UI, no extra message). Stop (■) is unchanged.
-        _interrupting = true; _steering = true;   // hard-suppress terminal handling until the new run is RUNNING
-        try { await fetch(STOP_URL, _conversationPost()); } catch(_){}
-        if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
-        op.dataset.busy='0'; op.dataset.agent='';
-        _inFlight = false;
-        await new Promise(r => setTimeout(r, 350));   // let the backend register the stop
-        _postSteerUntil = Date.now() + 1500;
-        _interrupting = false; _handledState = 'done';
-        setTimeout(()=>{ _steering = false; }, 8000);   // backstop: never leave terminal handling suppressed forever
-        dispatchTask(txt);
+        // Mid-run steer: park the message as a HELD bubble instead of driving
+        // the workbench status strip. The trace keeps growing above it; the
+        // delivery seam in pollAgent promotes it into the flow and breaks the
+        // card so everything after renders below it.
+        const bubble = logUser(txt, true);
+        const message_id = crypto.randomUUID();
+        const run_id = window.OperatorWorkbench ? window.OperatorWorkbench.runId() : '';
+        try {
+          const d = await (await fetch(SAY_URL, _conversationPost({text: txt, message_id, run_id}))).json();
+          if (!d.ok) throw new Error(d.error || 'Correction was not accepted');
+          _heldSteer = bubble; _steerQueued = true;
+        } catch (error) {
+          // No automatic redispatch: an acknowledgement may have been lost.
+          bubble.classList.add('op-held-failed');
+          logRes(String(error.message || error), false);
+        }
         return;
       }
+      logUser(txt);
       dispatchTask(txt);
       return;
     }
@@ -5473,7 +5787,7 @@
       // Pin the wrap to the PAINTED height explicitly. The picker row's
       // position used to ride the negative-margin math, and iPad Safari's
       // rounding let a 3+-line draft spill onto the model picker
-      // (the owner 2026-07-27). An explicit wrap height makes the flow
+      // . An explicit wrap height makes the flow
       // engine-independent; on desktop (paintScale 1) it equals the input
       // height, i.e. a no-op.
       if (_gw) _gw.style.height = (layoutHeight * paintScale) + 'px';
@@ -5481,7 +5795,25 @@
     _growFrame = requestAnimationFrame(measure);
     _growTimer = setTimeout(measure, 32);
   }
-  input.addEventListener('input', () => { autoGrow(); refreshSendButton(); });
+  // Composer draft survives a refresh: per-conversation localStorage, saved
+  // on every keystroke, restored at boot / after a chats switch when the box
+  // is empty, cleared the moment the message actually sends.
+  const _draftKey = () => 'operator-draft:' + (_conversationId || 'legacy');
+  function _saveDraft(){ try { const v = input.value;
+    if (v.trim()) localStorage.setItem(_draftKey(), v);
+    else localStorage.removeItem(_draftKey()); } catch(_){} }
+  function _clearDraft(){ try { localStorage.removeItem(_draftKey()); } catch(_){} }
+  function _restoreDraft(){ try { if (input.value || input.disabled) return;
+    const v = localStorage.getItem(_draftKey());
+    if (v){ input.value = v; autoGrow(); if (typeof refreshSendButton==='function') refreshSendButton(); } } catch(_){} }
+  window._restoreDraft = _restoreDraft;
+  input.addEventListener('input', () => { autoGrow(); refreshSendButton(); _saveDraft(); });
+  // Deferred, not synchronous: at parse time the conversation id (set from
+  // sessionStorage / the first poll) and restoreSession's log paint have not
+  // all settled, so a bare call read the 'legacy' key and found nothing. A
+  // rAF after boot restores against the resolved conversation, empty-guarded
+  // so it never stomps something the user already typed.
+  requestAnimationFrame(_restoreDraft);
   input.addEventListener('keydown', e => {
     if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); submit(); }   // Shift+Enter = newline
   });
@@ -5504,6 +5836,12 @@
     try { keyCapture.setSelectionRange(1, 1); } catch(_){}
   }
   function focusTouchKeyboard(){
+    const touchUI = Number(navigator.maxTouchPoints || 0) > 0
+      || window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    if (!touchUI) {
+      stage.focus();
+      return;
+    }
     if (!keyCapture) { stage.focus(); return; }
     op.classList.add('op-keyboard-open');
     resetKeyCapture();

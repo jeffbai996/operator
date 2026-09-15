@@ -4,7 +4,7 @@
 #
 # Registered per-run by operator_agent.py alongside the Playwright MCP. The
 # active surface arrives in OPERATOR_SURFACE (browser | desktop-sandbox |
-# desktop-real); the bot name for the trace in SQUAD_STORE_BOT.
+# desktop-real); the bot name for the trace in OPERATOR_BOT.
 #
 # Python resolution: control/venv if present (playwright + numpy + pillow +
 # pytesseract + pyyaml — see requirements.txt), else the vision venv (no
@@ -21,7 +21,7 @@ if [ -z "$PY" ] && [ -x "$HERE/venv/bin/python3" ]; then PY="$HERE/venv/bin/pyth
 if [ -z "$PY" ] && [ -x "$VISION/venv/bin/python3" ]; then PY="$VISION/venv/bin/python3"; fi
 if [ -z "$PY" ]; then PY="$(command -v python3)"; fi
 
-export PYTHONPATH="$HERE:$VISION${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$HERE:$HERE/..:$VISION${PYTHONPATH:+:$PYTHONPATH}"
 # WSL interop dir for powershell.exe (desktop-real backend) — absent from PATH
 # under systemd --user units; harmless elsewhere.
 [ -d /mnt/c/Windows/System32/WindowsPowerShell/v1.0 ] && \

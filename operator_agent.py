@@ -1,20 +1,22 @@
 """operator_agent.py — run a headless Claude Code agent that drives the browser.
 
-Option 1 (the owner 2026-06-26): the operator IS the agent. We spawn `claude -p` in a
+Option 1 : the operator IS the agent. We spawn `claude -p` in a
 background thread, as the chosen persona, with the Playwright MCP pointed at the
 SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTION
 (claude reads ~/.claude/.credentials.json), zero metered API spend. We parse its
 stream-json output live: assistant text → the operator chat, browser tool calls
 → the action trail. No Discord, no live-session dependency, no spam.
 
-Only host personas that can drive: claude-a + claude-b.
+Only the host personas that can drive: claude-a + claude-b.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import hashlib
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -29,6 +31,8 @@ import operator_ping
 import operator_restart_guard
 import operator_runtimes
 import operator_steer
+import operator_workspace
+import operator_diagnostics
 import operator_prompts as _prompts
 from operator_prompts import (
     AGY_STEPWISE_DIRECTIVE as _AGY_STEPWISE_DIRECTIVE,
@@ -41,21 +45,21 @@ from operator_prompts import (
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
 def _squad_boot_context(bot: str = "gpt") -> str:
-    """Slim squad context for Operator runs (browser tasks don't need the full digest).
+    """Slim the app context for Operator runs (browser tasks don't need the full digest).
 
     Loads:
     - SQUAD.md rulebook (behavioral rules, ~5.7k tokens)
     - SYSTEM.md roster + endpoints (~731 tokens)
     - Feedback memories — full bodies (behavioral rules must be pre-loaded)
     - Memory INDEX only for everything else (names + tags, ~2k tokens)
-    - Instruction to use host-app recall / vecgrep for deeper lookup
+    - Instruction to use host-app recall / search for deeper lookup
 
     The full digest (format_store_digest) loads ~18.9k tokens of memory bodies that
-    a browser-task agent rarely needs. Index + vecgrep covers it at ~1/10th the cost.
+    a browser-task agent rarely needs. Index + search covers it at ~1/10th the cost.
     Fail-soft: if host-app isn't importable, gpt/gemma runs without it."""
     try:
         import sys as _sys
-        _ss = os.path.expanduser("~/agents/host-app")
+        _ss = os.path.expanduser("~/.host-app")
         if _ss not in _sys.path:
             _sys.path.insert(0, _ss)
         import store as _store  # type: ignore
@@ -97,7 +101,7 @@ def _squad_boot_context(bot: str = "gpt") -> str:
         parts.append(
             "MEMORY ACCESS: The above is an index. To read a specific memory's full "
             "text: `host-app memory show <id>`. To search by topic: "
-            "`host-app recall \"<query>\"` (semantic) or vecgrep MCP tool if available."
+            "`host-app recall \"<query>\"` (semantic) or search MCP tool if available."
         )
         return "\n\n".join(parts)
     except Exception:
@@ -113,26 +117,26 @@ AGENT_BOTS = {
                "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     "claude-b": {"label": "claude-b", "runtime": "claude",
               "config_dir": os.path.expanduser("~/.config/claude-b"),
-              "cwd": os.path.expanduser("~/.operator-sessions/jiabanya"),
+              "cwd": os.path.expanduser("~/.operator-sessions/claude-b"),
               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
     # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
     # ~/.codex-operator/config.toml wires playwright (Operator-only home); the
     # Unlike the Claude bots, codex has no CLAUDE.md / SessionStart hook loading
-    # host-app, so we hand gpt its squad self-context inline via _GPT_SELF.
+    # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
             "config_dir": os.path.expanduser("~/.codex-operator"),  # Operator-only CODEX_HOME: has playwright; the interactive gpt Discord bot uses ~/.codex (no playwright) — clean platform separation
             "cwd": os.path.expanduser("~/.operator-sessions/gpt"),
-            "persona": ("You are GPT — concise, capable." + _GPT_SELF + _BROWSER_MANDATE)},
-    # gemma drives via agy (Google Antigravity CLI) on the owner's flat Google sub —
+            "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
+    # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
     # the agy analog of the codex/ChatGPT-sub path. agy `-p` returns PLAIN TEXT
     # (no JSON event stream), so the live action-trace is unavailable; we surface
     # the final text only. Like gpt/codex, agy has no CLAUDE.md / SessionStart
-    # hook, so gemma gets its squad self-context inline (host-app digest if
+    # hook, so gemma gets its the app self-context inline (host-app digest if
     # reachable, else _GEMMA_SELF).
     "gemma": {"label": "gemma", "runtime": "agy",
               "config_dir": os.path.expanduser("~/.gemini"),
               "cwd": os.path.expanduser("~/.operator-sessions/gemma"),
-              "persona": ("You are Gemma — concise, capable, decisive." + _GEMMA_SELF + _BROWSER_MANDATE)},
+              "persona": ("You are a helpful, capable computer-using assistant." + _GEMMA_SELF + _BROWSER_MANDATE)},
 }
 
 # Operator's headless agent runs use dedicated cwds (above) so their sessions don't
@@ -160,7 +164,7 @@ def _ensure_steer_hook_settings(cwd: str) -> None:
     PRUNES stale entries too (2026-07-22): _STEER_HOOK_CMD is derived from
     __file__ at import time, so any earlier run of this module from a
     different checkout (a git worktree, a /tmp scratchpad copy, an old
-    agents-repo clone) wrote a DIFFERENT absolute path here — and the old
+    the host repo clone) wrote a DIFFERENT absolute path here — and the old
     match-by-exact-string dedup let those stale commands pile up forever
     instead of being replaced, since a new path never string-equals an old
     one. Every stale entry then failed on every single tool call once its
@@ -211,7 +215,7 @@ def _ensure_steer_hook_settings(cwd: str) -> None:
         hooks["PostToolUse"] = kept
 
         # The restart guard must live here too. Claude drivers may use their
-        # own user config (notably jiabanya's ~/.config/claude-b), so installing it
+        # own user config (notably claude-b's ~/.config/claude-b), so installing it
         # only in ~/.claude/settings.json leaves those Operator runs unguarded.
         # Keep exactly one canonical Bash hook and preserve every foreign hook.
         pre_groups = hooks.setdefault("PreToolUse", [])
@@ -350,7 +354,7 @@ def _resolve_claude() -> str | None:
 
 
 def _resolve_agy() -> str | None:
-    """Google Antigravity CLI (`agy`). Drives the browser on the owner's flat Google
+    """Google Antigravity CLI (`agy`). Drives the browser on the owner flat Google
     sub (no metered API key) — the agy analog of the codex/ChatGPT-sub path."""
     from shutil import which
     a = which("agy")
@@ -400,6 +404,14 @@ class AgentRunner:
         self._use_legacy_storage = bool(use_legacy_storage)
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
+        self._workspace_run = None
+        self._codex_transport = None
+        self._redirect_prompt = ''
+        self._steer_delivery_ids = []
+        self._steer_generation = 0
+        self._tool_started_at = None
+        self._first_action_recorded = False
+        self._recipe_authorization = None
         # Popen uses start_new_session=True, so the leader PID is also the
         # process-group id. Retain it independently: a CLI leader may exit
         # while a descendant still owns stdout, and getpgid(dead_pid) cannot
@@ -451,7 +463,7 @@ class AgentRunner:
                            _conversation_path(_stop_base, self.conversation_id,
                                               ".json"))
         self._session_ids: dict = {}      # bot -> last claude session id (resume)
-        self._boot_sent: dict = {}        # bot -> squad boot context DELIVERED (see dispatch)
+        self._boot_sent: dict = {}        # bot -> the app boot context DELIVERED (see dispatch)
         # NB: _boot_sent is a claim about a THREAD, not about a bot. Any path
         # that throws a thread away must go through _forget_session so the
         # claim goes with it — see that method for what happened when it did
@@ -472,6 +484,7 @@ class AgentRunner:
         self._action_repeat_streak: int = 0
         self._repeat_warned: bool = False
         self._recent_calls: list = []       # rolling window of (name, x, y)
+        self._shape_history: list = []      # survives reads; see _SHAPE_WINDOW
         self._stall_kill_reason: str = ""
         self._stopped: bool = False
         # B3: a user Stop must survive _run_inner's per-run reset of _stopped —
@@ -486,6 +499,15 @@ class AgentRunner:
         self._acts_since_visual: int = 0
         self._gate_fired: bool = False
         self._gate_pending: bool = False   # true only in the inter-turn gap
+        self._gate_verify_active: bool = False
+        self._gate_original_final: str = ""
+        self._gate_message_start: int = 0
+        # Browser-surface contract. The model may have other research tools,
+        # but only Playwright drives the Chrome the user can see. A non-chatty
+        # browser task must produce at least one browser_* call before `done`.
+        self._browser_required: bool = False
+        self._browser_tool_calls: int = 0
+        self._browser_contract_failed: bool = False
         # governor (#34) token accounting — also reset per-run in _run()
         self._peak_in_tokens: int = 0
         self._tok_warned: bool = False
@@ -506,7 +528,17 @@ class AgentRunner:
         if old != new:
             _log.info("operator state %s -> %s%s", old, new,
                       f" ({reason})" if reason else "")
-        if old == "running" and new in ("done", "error", "interrupted"):
+        if old == "running" and new in ("done", "error", "interrupted", "idle"):
+            if getattr(self, '_workspace_run', None):
+                try:
+                    rid = self._workspace_run['run_id']
+                    operator_workspace.finish_run(rid, 'interrupted' if new == 'idle' else new)
+                    operator_diagnostics.record('run_ms', max(0, time.time() - self.started_ts) * 1000, run_id=rid, model=self.model)
+                    if new != 'done':
+                        operator_diagnostics.record('interruptions' if new == 'interrupted' else 'failures', run_id=rid, model=self.model)
+                    operator_diagnostics.flush_soon()
+                except Exception:
+                    _log.exception('Operator job terminal update failed')
             # flight recorder (1.0.11): exactly one ledger row per finished
             # run, hooked at the sole state writer so the gate gap's proc-less
             # turns can't double-record. record() never raises by contract.
@@ -583,7 +615,7 @@ class AgentRunner:
 
     def start(self, bot: str, task: str, model: str = '', effort: str = '',
               demo: bool = False, surface: str = 'browser',
-              real_ok: bool = False) -> dict:
+              real_ok: bool = False, authorization=None) -> dict:
         with self._lock:
             if self.is_running():
                 return {"ok": False, "error":
@@ -626,6 +658,11 @@ class AgentRunner:
                     return {"ok": False, "error": "claude binary not found"}
             self._switched_bot = (self._last_bot is not None and self._last_bot != bot)
             self.bot, self.task = bot, task
+            self._recipe_authorization = authorization
+            self._workspace_run = None
+            self._steer_generation += 1
+            self._redirect_prompt = ''
+            self._steer_delivery_ids = []
             # §2.2: everything from here to _thread.start() runs under a revert
             # guard — an exception in this window used to leave a PHANTOM
             # state='running' with no thread (the class of bug behind the
@@ -663,15 +700,23 @@ class AgentRunner:
         self.started_ts = time.time()
         self.ended_ts = 0.0
         self._gate_fired = False   # §3.3: one gate/replan follow-up per start()
+        self._gate_verify_active = False
+        self._gate_original_final = ""
+        self._gate_message_start = 0
+        self._browser_required = (self.surface == "browser"
+                                  and _prompts.requires_browser(task))
+        self._conversation_only = _prompts.is_conversation_query(task)
+        self._browser_tool_calls = 0
+        self._browser_contract_failed = False
         self.model, self.effort = (model or '').strip(), (effort or '').strip()
-        self.demo = bool(demo)   # demo=True → sandboxed: no squad context/identity
+        self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
         # default the claude runtime to Sonnet 5 / medium when nothing was picked
         # (empty model would otherwise drop the flag and use the CLI's own default).
         if b.get("runtime") == "claude":
             if not self.model:  self.model = "claude-sonnet-5"
             if not self.effort: self.effort = "medium"
         elif b.get("runtime") == "codex":
-            # gpt/codex default: 5.6 Sol / low (the owner 2026-07-09), matching the UI
+            # gpt/codex default: 5.6 Sol / low , matching the UI
             # picker default. Without the effort default, an unset effort drops the
             # -c flag and codex falls back to its config.toml default (xhigh) —
             # needless token burn for browser tasks.
@@ -686,15 +731,23 @@ class AgentRunner:
         # ("--effort is not supported for model …"). So: pass the bare family
         # slug and let effort ride its own flag. Entries whose tier is already
         # fixed must dispatch WITHOUT effort: either a tier-suffixed Gemini slug
-        # (gemini-3.7-flash-low) or a parenthesised display name, which is still
+        # (gemini-3.8-flash-low) or a parenthesised display name, which is still
         # the only accepted form for the Claude/GPT-OSS entries — NB `agy models`
         # prints "claude-sonnet-4-6-thinking" but --model rejects it.
         elif b.get("runtime") == "agy":
-            if not self.model:  self.model = "gemini-3.7-flash"
+            if not self.model:  self.model = "gemini-3.8-flash"
             _m = self.model.strip()
             _baked = _m.endswith(("-low", "-medium", "-high")) or "(" in _m
             self.model = _m
             self.effort = "" if _baked else (self.effort or "high").strip().lower()
+        if not self.demo:
+            self._workspace_run = operator_workspace.start_run(
+                self.conversation_id, task, self._recipe_authorization)
+            if self.surface == 'browser':
+                import operator_file_bridge
+                operator_file_bridge.ensure_running()
+        self._first_action_recorded = False
+        self._tool_started_at = None
         self._thread = threading.Thread(target=self._run, args=(binpath, b, task),
                                         daemon=True, name="operator-agent")
         self._thread.start()
@@ -705,7 +758,8 @@ class AgentRunner:
         operator_prompts.build_persona (1.0.8 R2)."""
         return _prompts.build_persona(b["persona"],
                                       getattr(self, "surface", "browser"),
-                                      getattr(self, "demo", False))
+                                      getattr(self, "demo", False),
+                                      model=getattr(self, "model", ""))
 
     def cwd_for(self, bot: str) -> str:
         """A stable work directory owned by this conversation and bot."""
@@ -719,7 +773,7 @@ class AgentRunner:
             cwd = os.path.join(parent, _conversation_slug(self.conversation_id))
         os.makedirs(cwd, exist_ok=True)
         if b.get("runtime") == "claude":
-            # The base session directory can carry the bot's CLAUDE.md (Claude-a
+            # The base session directory can carry the bot's CLAUDE.md (claude-a
             # does in production). A blank scoped cwd would silently drop those
             # instructions, so project the stable instruction file while every
             # conversation keeps its own writable directory and hook settings.
@@ -755,6 +809,12 @@ class AgentRunner:
                     self._gate_pending = False
                     self._set_state("interrupted", "user stop")
                     break
+                if followup == self._GATE_VERIFY_PROMPT:
+                    self._gate_verify_active = True
+                    self._gate_message_start = len(self.messages)
+                    self._gate_original_final = next(
+                        (m["text"] for m in reversed(self.messages)
+                         if m.get("role") == "assistant" and m.get("text")), "")
                 self.ended_ts = 0.0
                 followup = self._run_inner(binpath, b, followup)
         except Exception as e:  # noqa: BLE001 — a dead launch must surface
@@ -763,6 +823,11 @@ class AgentRunner:
             self.messages.append({"ts": time.time(), "role": "error",
                                   "text": f"launch failed: {e}"})
         finally:
+            # MCP helpers can daemonize/re-parent away from the CLI process
+            # group. Natural completion used to skip stop()'s scavenger, so
+            # every successful turn leaked another CDP client onto the same
+            # Operator tab. Reap by exact conversation marker on every exit.
+            self._reap_owned_browser_helpers()
             with self._lock:
                 self._tool_active = False
                 self._takeover_requested = False
@@ -785,15 +850,17 @@ class AgentRunner:
         self._agy_resumed = False
         self._agy_live_traj = ""
         self._agy_seen = set()   # step_index already emitted (live-tail dedupe)
+        self._agy_answer_steps = set()
         self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
                                           # tool_calls, no content) — the "overthink loop"
-                                          # counter (the owner 2026-06-30, #40)
+                                          # counter 
         self._agy_loop_warned = False    # one-shot stuck-in-a-loop warning per run
         # §2.1 runtime-agnostic repeat-action guard (per-run counters)
         self._last_action_key = ""
         self._action_repeat_streak = 0
         self._repeat_warned = False
         self._recent_calls = []
+        self._shape_history = []
         # §3.3 evidence ledger (per-turn): did recent actions include a look?
         self._consequential_acts = 0
         self._acts_since_visual = 0
@@ -820,12 +887,36 @@ class AgentRunner:
         # the prompt heavily, esp. codex/GPT); chatty asks pass unwrapped.
         # The directive prose lives in operator_prompts (1.0.8 R2).
         _surface = getattr(self, "surface", "browser")
-        task = _prompts.wrap_task(task, _surface, getattr(self, "demo", False))
+        task = _prompts.wrap_task(
+            task, _surface, getattr(self, "demo", False), model=self.model,
+            conversation_only=getattr(self, "_conversation_only", False))
         env = dict(os.environ)
-        env["SQUAD_STORE_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["OPERATOR_SURFACE"] = _surface        # control MCP reads the surface
         env["OPERATOR_CONVERSATION_ID"] = self.conversation_id
         env["OPERATOR_STOP_PATH"] = self._stop_path
+        if self._workspace_run:
+            env['OPERATOR_RUN_ID'] = self._workspace_run['run_id']
+            env['OPERATOR_RUN_CREDENTIAL'] = self._workspace_run['credential']
+            task += '\n\n' + operator_workspace.context(self.conversation_id)
+            artifact_dir = operator_workspace.root() / 'artifacts' / self._workspace_run['run_id']
+            artifact_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            task += ('\nGenerated files: write inside ' + str(artifact_dir)
+                     + ' and publish using job_file. Chat uploads/downloads are listed in job_state; '
+                       'job_file stage resolves IDs, and job_file upload bridges Windows Chrome file inputs.')
+            task += ('\nUse job_update for meaningful checkpoints, job_result for useful structured '
+                     'outcomes, and job_state for observed evidence and files. Write job_result.summary '
+                     'in Markdown: compact tables for ranked options, dates/prices and comparisons; '
+                     'bullets for other findings, followed by a short takeaway. Do not pack rankings '
+                     'into a paragraph or draw tables inside code fences. Avoid duplicating the full '
+                     'result in the chat reply. Before committing a '
+                     'purchase, booking or outward message, call job_approval with exact details. '
+                     'Only an approved proposal authorizes that action. If pending, explain briefly '
+                     'and finish the turn; do not poll or continue committing actions. Do not invent '
+                     'checkpoints for simple conversation or duplicate a result card in prose.')
+        else:
+            env.pop('OPERATOR_RUN_ID', None)
+            env.pop('OPERATOR_RUN_CREDENTIAL', None)
         if getattr(self, "_real_ok", False):
             env["OPERATOR_REAL_OK"] = "1"         # per-session desktop-real confirm
         else:
@@ -840,10 +931,10 @@ class AgentRunner:
         # codex/agy have no hook, so their first turn folds it into the prompt
         # (resumes already carry it — don't re-send).
         _boot_bot = {"codex": "gpt", "agy": "gemma"}.get(self._runtime)
-        # A resume alone is NOT proof the thread ever received the squad
+        # A resume alone is NOT proof the thread ever received the app
         # context: a thread created before this wiring existed resumes
         # context-less forever — which is why gemma behaved like a naive bot
-        # with no squad priors (the owner 2026-07-26). Delivery is tracked per bot
+        # with no the app priors . Delivery is tracked per bot
         # in state; a resumed thread that never got it gets the context folded
         # into THIS turn's prompt instead of never.
         _boot = ""
@@ -857,10 +948,18 @@ class AgentRunner:
             demo=bool(getattr(self, "demo", False)),
             real_ok=bool(getattr(self, "_real_ok", False)),
             resume_id=resume_id or "", config_dir=b["config_dir"],
-            conversation_id=self.conversation_id, stop_path=self._stop_path)
+            conversation_id=self.conversation_id, stop_path=self._stop_path,
+            run_id=env.get('OPERATOR_RUN_ID', ''),
+            run_credential=env.get('OPERATOR_RUN_CREDENTIAL', ''),
+            workspace_dir=str(operator_workspace.root()) if self._workspace_run else '')
         plan = operator_runtimes.build_cmd(self._runtime, spec)
         env.update(plan.env)
         cmd = plan.cmd
+        native_codex = (self._runtime == 'codex' and not getattr(self, 'demo', False)
+                        and os.environ.get('OPERATOR_CODEX_APP_SERVER', '1') != '0')
+        if native_codex:
+            import operator_codex_transport
+            cmd = operator_codex_transport.command(plan)
         if self._runtime == "agy":
             # runner-owned agy state: where trajectories land + the pre-launch
             # snapshots that identify THIS run's transcript/conversation after
@@ -876,28 +975,31 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=(os.path.expanduser("~/local-projects/operator-demo/workspace")
+                cmd, cwd=(os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_WORKSPACE", "~/.operator-sandbox/workspace"))
                           if getattr(self, "demo", False)
                           else self.cwd_for(self.bot or "")), env=env,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if native_codex else subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=_errf, text=True, bufsize=1,
                 start_new_session=True)   # own process group → stop() can kill the whole tree (codex + MCP + node + bwrap)
             self._process_group_id = getattr(self._proc, "pid", None)
             self._gate_pending = False   # §3.3: the follow-up turn is live now
             self._touch()   # B2: spawn is progress — don't inherit a stale heartbeat
+            for message_id in self._steer_delivery_ids:
+                operator_workspace.correction_status(message_id, 'delivered')
+            self._steer_delivery_ids = []
             if _boot and _boot_bot:
-                # squad context is in this run's prompt — record delivery so
+                # the app context is in this run's prompt — record delivery so
                 # resumes stop re-sending ~26k chars every turn
                 self._boot_sent[_boot_bot] = True
                 self._save_state()
-            if self._cancel_requested:
+            if self._cancel_requested or self._redirect_prompt:
                 # a Stop landed in the pre-spawn window, when there was no
                 # process to kill — honor it the moment the process exists,
                 # instead of letting an invisible run burn to completion.
                 # _stopped again (stop()'s own set predates this method's
                 # per-run reset above) so _resolve_terminal reads it as an
                 # interrupt, not "error exit -15".
-                self._stopped = True
+                self._stopped = bool(self._cancel_requested)
                 import signal as _sig
                 try:
                     os.killpg(os.getpgid(self._proc.pid), _sig.SIGTERM)
@@ -906,9 +1008,28 @@ class AgentRunner:
                     except Exception: pass
             if self._runtime == "agy":
                 self._start_agy_live_poll()
-            for line in self._proc.stdout:
-                self._consume(line)
-            self._proc.wait()
+            native_rc = None
+            if native_codex:
+                transport = operator_codex_transport.AppServer(self._proc)
+                self._codex_transport = transport
+                transport.begin(prompt=plan.cmd[-1], cwd=self.cwd_for(self.bot or ''),
+                                model=self.model, effort=self.effort, resume_id=resume_id or '')
+                self._cur_session = transport.thread_id
+                for event in transport.notifications():
+                    native_rc = self._consume_native_codex(event) if event.get('method') == 'turn/completed' else native_rc
+                    if event.get('method') != 'turn/completed':
+                        self._consume_native_codex(event)
+                self._codex_transport = None
+                self._proc.stdin.close()
+                try:
+                    self._proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._proc.terminate()
+                    self._proc.wait(timeout=2)
+            else:
+                for line in self._proc.stdout:
+                    self._consume(line)
+                self._proc.wait()
             if self._runtime == "agy":
                 self._flush_agy()   # agy buffers plain text → push as one assistant msg
                 # Resume continuity: a resumed run keeps its id; a fresh run's id
@@ -922,6 +1043,15 @@ class AgentRunner:
                         operator_agy.conversation_ids())
                     if _new:
                         self._cur_session = _new
+            if self._redirect_prompt and not self._cancel_requested:
+                followup, self._redirect_prompt = self._redirect_prompt, ''
+                # The old process has exited before this branch can schedule
+                # its replacement. Retain the durable job, not a half-killed
+                # native session; uncertain side effects must be inspected.
+                self._forget_session(self.bot or '')
+                self._reap_owned_browser_helpers()
+                self._gate_pending = True
+                return followup
             if self._cur_session and not getattr(self, "_stopped", False):
                 self._session_ids[self.bot or ""] = self._cur_session
             elif getattr(self, "_stopped", False):
@@ -938,7 +1068,7 @@ class AgentRunner:
                 self._transcript = self._transcript[-40:]
             self._last_bot = self.bot
             self._save_state()
-            rc = self._proc.returncode
+            rc = native_rc if native_rc is not None else self._proc.returncode
             if rc == 0:
                 gate = self._completion_gate_check()   # §3.3: verify-or-replan
                 if gate:
@@ -951,6 +1081,10 @@ class AgentRunner:
                 steer_fu = self._steer_followup_check()   # 1.0.12 exit seam
                 if steer_fu:
                     return steer_fu   # one more resumed turn carrying the steers
+                # A successful visual check is evidence for the original
+                # answer, not a replacement answer. Scrub its assistant-only
+                # chatter before the terminal transition records history.
+                self._finish_verify_gate()
             # B4: one deterministic priority decides the terminal label. A stop
             # SIGTERMs the group (non-zero exit — an interrupt, NOT a failure,
             # so no raw kill-signal stderr card), and a stop racing a clean
@@ -971,9 +1105,23 @@ class AgentRunner:
                 except Exception:
                     pass
         except Exception as e:  # noqa: BLE001
-            self._set_state("error", f"run exception: {e}")
-            self.messages.append({"ts": time.time(), "role": "error", "text": str(e)})
+            if self._cancel_requested:
+                self._set_state('interrupted', 'user stop')
+            else:
+                self._set_state("error", f"run exception: {e}")
+                self.messages.append({"ts": time.time(), "role": "error", "text": str(e)})
         finally:
+            self._codex_transport = None
+            if native_codex and self._proc and self._proc.poll() is None:
+                # Also reap on handshake/disconnect exceptions. Never leave a
+                # detached app-server dispatching after Operator says failed.
+                try:
+                    import signal
+                    os.killpg(self._proc.pid, signal.SIGTERM)
+                    self._proc.wait(timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
+                    try: os.killpg(self._proc.pid, signal.SIGKILL)
+                    except OSError: pass
             try: _errf.close()
             except Exception: pass
             operator_runtimes.cleanup_launch_plan(plan)
@@ -1007,6 +1155,10 @@ class AgentRunner:
         # every shape before touching it, drop what doesn't conform.
         if not isinstance(evt, dict):
             return
+        if self._workspace_run and ((evt.get('type') == 'user') or
+                (evt.get('type') == 'item.completed' and isinstance(evt.get('item'), dict)
+                 and evt['item'].get('type') in ('mcp_tool_call', 'tool_call', 'function_call', 'custom_tool_call', 'command_execution'))):
+            self._observe_tool_output(evt)
         if getattr(self, "_runtime", "claude") == "codex":
             self._consume_codex(evt)
             return
@@ -1094,7 +1246,7 @@ class AgentRunner:
     # Never auto-kills the run (same policy as the agy guard, the owner 2026-06-30).
     _REPEAT_ACTION_STREAK = 3
 
-    # Rolling-window loop detection (the owner 2026-08-02). The exact-key streak
+    # Rolling-window loop detection . The exact-key streak
     # above only fires on IDENTICAL, STRICTLY CONSECUTIVE calls, which misses
     # the failure that actually happens: a run clicking DIFFERENT wrong
     # coordinates, with a screenshot between each, so every call resets the
@@ -1105,20 +1257,40 @@ class AgentRunner:
     _WINDOW_SAME_TOOL = 6        # sustained browser action before regrounding
     _NEAR_PX = 30                # ...or clicks landing within this many px
     _WINDOW_NEAR_CLICKS = 3      # >= this many near-identical clicks
+    # Desktop-control MCP tools. `perceive` is that surface's snapshot — it
+    # re-grounds, so it clears the blind-acting window the same way
+    # browser_snapshot does. The rest ACT.
+    _READ_TOOLS = ("snapshot", "perceive")
+    _ACT_VERBS = ("click", "hover", "type", "press", "navigate", "drag",
+                  "select", "evaluate", "macro", "computer", "emu_input")
+    # Snapshot-immune loop memory. A read/act alternation used to be invisible:
+    # every read wiped _recent_calls, so the acts never accumulated. Reading is
+    # only recovery if what follows CHANGES.
+    _SHAPE_WINDOW = 8
+    _SHAPE_REPEAT = 5
+    _LOOP_NOTICE = (
+        "Operator is repeating an action without making progress. "
+        "If it continues, stop the run and try again."
+    )
 
-    # §3.3 evidence ledger — name fragments that classify a tool call. VISUAL
-    # is an explicit look (screenshot/perceive/snapshot). ACT is a consequential
-    # action. A playwright browser_* action is consequential AND self-evidencing
-    # (its tool result embeds a page snapshot), so it resets the visual counter;
-    # desktop `computer` actions carry only the §3.1 changed-verdict, which says
+    # §3.3 evidence ledger — name fragments that classify a SURFACE tool call.
+    # VISUAL is an explicit look (screenshot/perceive/snapshot). ACT changes the
+    # visible browser/desktop. Shell commands and file writes deliberately do
+    # NOT count: a final screenshot cannot verify an artifact saved on disk,
+    # and treating those tools as screen actions caused a useful result to be
+    # replaced by a pointless "confirmed:" turn (2026-08-28).
+    # A playwright browser_* action is consequential AND self-evidencing (its
+    # result embeds a page snapshot), so it resets the visual counter; desktop
+    # `computer` actions carry only the §3.1 changed-verdict, which says
     # "something changed", not "the right thing happened" — they don't.
     _VISUAL_HINTS = ("screenshot", "snapshot", "perceive")
     _ACT_HINTS = ("click", "type", "key", "scroll", "drag", "fill", "navigate",
-                  "select", "press", "upload", "drop", "command", "write",
-                  "edit", "game_macro", "computer")
+                  "select", "press", "upload", "drop", "game_macro", "computer")
 
     def _note_evidence(self, name: str, args) -> None:
         nl = (name or "").lower()
+        if "browser_" in nl:
+            self._browser_tool_calls += 1
         act = str(args.get("action", "")).lower() if isinstance(args, dict) else ""
         visual = (any(h in nl for h in self._VISUAL_HINTS) or act == "screenshot")
         if not visual and any(h in nl for h in self._ACT_HINTS):
@@ -1151,10 +1323,71 @@ class AgentRunner:
                 and not self._repeat_warned):
             self._repeat_warned = True
             self._repeat_nudge_pending = True   # consume-once, next turn
-            self.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
-                "text": ("⚠️ Same action repeated %d× (%s) — this looks stuck "
-                         "in a loop. Consider stopping if it doesn't recover."
-                         % (self._action_repeat_streak, name or "action"))})
+            self._warn_loop("%d identical %s calls"
+                            % (self._action_repeat_streak, name or "action"))
+
+    def _warn_loop(self, detail: str) -> None:
+        """Surface calm product copy; keep detector internals in service logs.
+
+        Tool names, coordinate buckets, and advice aimed at the model are useful
+        for diagnosis and ridiculous in the user-facing activity rail.
+        """
+        _log.warning("loop guard: %s", detail)
+        self.messages.append({"ts": time.time(), "role": "notice",
+                              "kind": "recovery", "text": self._LOOP_NOTICE})
+
+    def _is_action_tool(self, name: str) -> bool:
+        """Does this tool CHANGE the page/screen (as opposed to reading it)?"""
+        nl = (name or "").lower()
+        if any(r in nl for r in self._READ_TOOLS):
+            return False
+        return any(v in nl for v in self._ACT_VERBS)
+
+    def _note_shape(self, nl: str, args) -> bool:
+        """Catch a read/act loop, which the rolling window cannot see.
+
+        Every read clears _recent_calls on the theory that re-grounding IS the
+        recovery. True when the agent is acting blind — useless when it reads,
+        acts the same way, reads, acts the same way. That is what ran on the
+        desktop surface: perceive / game_macro alternating fourteen times and
+        then a 123-step macro, typing into a field it never cleared, with
+        neither detector able to see it .
+
+        So keep a coarse SHAPE per acting call that reads do not erase: the
+        tool plus its target bucket, never the payload — retyped text differs
+        every round, which is exactly why the exact-key streak stayed silent.
+        """
+        if not self._is_action_tool(nl):
+            return False
+        bucket = ""
+        if isinstance(args, dict):
+            for kx, ky in (("x", "y"), ("startX", "startY"), ("fromX", "fromY")):
+                if isinstance(args.get(kx), (int, float)):
+                    bucket = "%d,%d" % (int(args[kx]) // self._NEAR_PX,
+                                        int(args.get(ky) or 0) // self._NEAR_PX)
+                    break
+            else:
+                for k in ("label", "target", "selector", "map"):
+                    if isinstance(args.get(k), str) and args[k].strip():
+                        bucket = args[k].strip()[:40]
+                        break
+        shape = nl + "|" + bucket
+        self._shape_history.append(shape)
+        if len(self._shape_history) > self._SHAPE_WINDOW:
+            self._shape_history.pop(0)
+        if self._repeat_warned or len(self._shape_history) < self._SHAPE_REPEAT:
+            return False
+        top = max(set(self._shape_history), key=self._shape_history.count)
+        n = self._shape_history.count(top)
+        if n < self._SHAPE_REPEAT:
+            return False
+        self._repeat_warned = True
+        self._repeat_nudge_pending = True
+        self._shape_history = []
+        self._recent_calls = []
+        self._warn_loop("%d repeated %s calls with reads between them"
+                        % (n, top.split("|")[0] or "action"))
+        return True
 
     def _note_window(self, name: str, args) -> None:
         """Rolling-window loop detection — the shape the exact-key streak misses.
@@ -1168,8 +1401,10 @@ class AgentRunner:
         recovery we want, so it should not count against the run.
         """
         nl = (name or "").lower()
-        if "snapshot" in nl:
+        if any(r in nl for r in self._READ_TOOLS):
             self._recent_calls = []          # re-grounded; start clean
+            return                           # ...but _shape_history remembers
+        if self._note_shape(nl, args):
             return
         x = y = None
         if isinstance(args, dict):
@@ -1189,10 +1424,7 @@ class AgentRunner:
         # Same-tool dominance only means "re-ground on the page" for browser
         # interaction tools. Four different run_command calls during research
         # are four steps, not a loop, and a browser snapshot cannot help them.
-        browser_action = ("browser" in top and any(
-            verb in top for verb in
-            ("click", "hover", "type", "press", "navigate", "drag", "select",
-             "evaluate")))
+        browser_action = self._is_action_tool(top)
         if browser_action and names.count(top) >= self._WINDOW_SAME_TOOL:
             reason = ("%d× %s in the last %d calls with no page snapshot"
                       % (names.count(top), top or "action", len(self._recent_calls)))
@@ -1212,9 +1444,7 @@ class AgentRunner:
         self._repeat_warned = True
         self._repeat_nudge_pending = True
         self._recent_calls = []
-        self.messages.append({"ts": time.time(), "role": "notice", "kind": "recovery",
-            "text": ("⚠️ Going in circles — %s. Take a fresh browser_snapshot "
-                     "and continue from fresh element refs." % reason)})
+        self._warn_loop(reason)
 
     def _note_token_usage(self, in_tokens) -> None:
         try:
@@ -1335,15 +1565,42 @@ class AgentRunner:
     _GATE_VERIFY_PROMPT = _prompts.GATE_VERIFY_PROMPT
     _GATE_REPLAN_PROMPT = _prompts.GATE_REPLAN_PROMPT
 
+    def _drop_browserless_answers(self) -> None:
+        """Discard text produced without the surface it claims to describe.
+
+        _run_inner has already copied the final into the shared transcript by
+        the time the completion gate executes. Remove every trailing assistant
+        entry for this user turn as well as the visible assistant bubbles; the
+        native resumed thread still knows what it tried. Operator surfaces the
+        contract failure directly instead of spending another model turn on a
+        retry that cannot manufacture a missing tool.
+        """
+        self.messages = [m for m in self.messages
+                         if m.get("role") != "assistant"]
+        while (self._transcript
+               and self._transcript[-1].get("role") == "assistant"):
+            self._transcript.pop()
+        self._save_state()
+
     def _completion_gate_check(self) -> str:
         """Gate prompt for a follow-up turn, or '' to accept `done` as-is."""
         if os.environ.get("OPERATOR_COMPLETION_GATE", "1") == "0":
             return ""
-        if self._gate_fired or getattr(self, "demo", False):
+        if getattr(self, "demo", False):
             return ""
         if getattr(self, "_stopped", False) or self._tok_stop_fired:
             return ""
         if self.handoff:            # deliberate takeover request — not a bail
+            return ""
+        if self._browser_required and self._browser_tool_calls < 1:
+            self._drop_browserless_answers()
+            self._browser_contract_failed = True
+            self.messages.append({"ts": time.time(), "role": "error", "text":
+                ("Operator could not start a visible browser action. Its "
+                 "unverified answer was discarded instead of being presented "
+                 "as done.")})
+            return ""
+        if self._gate_fired:
             return ""
         if self._consequential_acts < 1:
             return ""               # chat/read-only turn — nothing to verify
@@ -1369,7 +1626,35 @@ class AgentRunner:
             return self._GATE_VERIFY_PROMPT
         return ""
 
-    def steer(self, text: str) -> dict:
+    def _finish_verify_gate(self) -> None:
+        """Keep a successful verify turn as evidence, not as the answer.
+
+        The verify prompt's `confirmed:` response is deliberately tiny. If a
+        substantive answer already exists, remove only assistant chatter from
+        the verification turn while retaining its screenshot/action trace.
+        A correction or continued-work answer does not start with `confirmed:`
+        and remains untouched.
+        """
+        if not self._gate_verify_active:
+            return
+        self._gate_verify_active = False
+        start = max(0, min(self._gate_message_start, len(self.messages)))
+        turn = self.messages[start:]
+        final = next((m.get("text", "") for m in reversed(turn)
+                      if m.get("role") == "assistant" and m.get("text")), "")
+        if (not self._gate_original_final
+                or not final.lstrip().lower().startswith("confirmed:")):
+            return
+        self.messages = self.messages[:start] + [
+            m for m in turn if m.get("role") != "assistant"]
+        if (self._transcript
+                and self._transcript[-1].get("role") == "assistant"
+                and self._transcript[-1].get("text", "").lstrip().lower()
+                    .startswith("confirmed:")):
+            self._transcript.pop()
+        self._save_state()
+
+    def steer(self, text: str, message_id: str = '', run_id: str = '') -> dict:
         """Queue a mid-run message for the LIVE run (1.0.12). Delivery is
         layered: the PostToolUse steer hook injects it right after the agent's
         next tool call (claude runtime, mid-loop), and whatever the hook didn't
@@ -1378,10 +1663,31 @@ class AgentRunner:
         not ok, and the client falls back to a normal dispatch."""
         if not self.is_running():
             return {"ok": False, "error": "nothing running"}
-        try:
-            n = operator_steer.push(text, self.conversation_id)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
+        workspace = self._workspace_run
+        if run_id and (not workspace or run_id != workspace['run_id']):
+            return {'ok': False, 'error': 'that run has already ended'}
+        text = (text or '').strip()
+        if not text or len(text) > operator_steer.MAX_TEXT:
+            return {'ok': False, 'error': 'message must contain 1–4000 characters'}
+        if workspace:
+            import uuid
+            message_id = message_id or uuid.uuid4().hex
+            try:
+                old, fresh = operator_workspace.correction(self.conversation_id, workspace['run_id'], message_id, text)
+            except (ValueError, operator_workspace.Conflict) as exc:
+                return {'ok': False, 'error': str(exc)}
+            if not fresh:
+                return {'ok': True, 'message_id': message_id, 'status': old['status'], 'duplicate': True}
+            # Acknowledge locally before waiting on the provider. Native
+            # acknowledgements and boundary delivery update this same ID.
+            threading.Thread(target=self._deliver_correction,
+                args=(text, message_id, workspace['run_id'], self._steer_generation), daemon=True).start()
+            n = 1
+        else:
+            try:
+                n = operator_steer.push(text, self.conversation_id)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
         text = text.strip()
         # visible in the run trace (and thus the history ledger), and part of
         # the shared transcript so a future cold-start inject carries it too
@@ -1390,9 +1696,59 @@ class AgentRunner:
         self._transcript = self._transcript[-40:]
         self._save_state()
         self._touch()
-        return {"ok": True, "queued": n,
+        return {"ok": True, "queued": n, 'message_id': message_id, 'status': 'pending',
                 "live": (getattr(self, "_runtime", "") == "claude"
                          and not getattr(self, "demo", False))}
+
+    def _deliver_correction(self, text, message_id, run_id, generation):
+        def current():
+            return (self._workspace_run and self._workspace_run['run_id'] == run_id
+                    and generation == self._steer_generation and not self._cancel_requested)
+        begun = time.monotonic()
+        try:
+            if self._runtime == 'codex' and os.environ.get('OPERATOR_CODEX_APP_SERVER', '1') != '0':
+                # Startup is bounded too. A request whose acknowledgement is
+                # lost is never replayed through the fallback queue.
+                while current() and time.monotonic() - begun < 3:
+                    transport = self._codex_transport
+                    if transport and transport.turn_id:
+                        transport.steer(text)
+                        operator_workspace.correction_status(message_id, 'delivered')
+                        operator_diagnostics.record('steering_ms', (time.monotonic() - begun) * 1000, run_id=run_id)
+                        return
+                    time.sleep(.05)
+                raise ValueError('Codex did not become ready for steering')
+            if not current():
+                raise ValueError('run ended before delivery')
+            operator_steer.push(text, self.conversation_id, message_id=message_id)
+            operator_workspace.correction_status(message_id, 'accepted')
+            time.sleep(3)
+            with self._lock:
+                if not current() or not self.is_running():
+                    return
+                waiting = operator_steer.take_all(self.conversation_id)
+                if not waiting:
+                    return  # already injected by the runtime hook
+                self._steer_delivery_ids.extend(s['id'] for s in waiting if s.get('id'))
+                self._redirect_prompt = (operator_steer.followup_prompt(waiting)
+                    + '\nThe previous run was interrupted for this correction. Keep the existing job. '
+                      'An in-flight external action may have completed: inspect its outcome before '
+                      'retrying. Never repeat a purchase, booking or message merely because the '
+                      'previous tool response was interrupted.')
+                p = self._proc
+                if p and p.poll() is None:
+                    import signal
+                    pgid = self._process_group_id or p.pid
+                    os.killpg(pgid, signal.SIGTERM)
+                    def reap():
+                        time.sleep(1)
+                        try: os.killpg(pgid, signal.SIGKILL)
+                        except OSError: pass
+                    threading.Thread(target=reap, daemon=True).start()
+                    operator_diagnostics.record('interruptions', 1, run_id=run_id)
+        except Exception:
+            operator_workspace.correction_status(message_id, 'failed')
+            _log.warning('steering acknowledgement unavailable for run %s', run_id)
 
     def _steer_followup_check(self) -> str:
         """Exit-seam steer delivery (1.0.12): a clean exit with steers still
@@ -1408,9 +1764,69 @@ class AgentRunner:
         steers = operator_steer.take_all(self.conversation_id)
         if not steers:
             return ""
+        self._steer_delivery_ids.extend(s['id'] for s in steers if s.get('id'))
         self._gate_pending = True
         self._touch()
         return operator_steer.followup_prompt(steers)
+
+    def _observe_tool_output(self, evt):
+        try:
+            # Text evidence only: strip inline screenshot/base64 payloads before storage.
+            def compact(value):
+                if isinstance(value, dict):
+                    return {k: compact(v) for k, v in value.items()
+                            if k not in ('data', 'image', 'images', 'image_url')}
+                if isinstance(value, list):
+                    return [compact(x) for x in value[:30]]
+                return value[:2000] if isinstance(value, str) else value
+            item = evt.get('item') or {}
+            tool = str(item.get('tool') or item.get('name') or item.get('type') or 'tool_result')
+            if 'job_' in tool:
+                return
+            if item:
+                payload = item.get('result', item.get('aggregated_output', ''))
+            else:
+                content = (evt.get('message') or {}).get('content', [])
+                payload = [block.get('content') for block in content
+                           if isinstance(block, dict) and block.get('type') == 'tool_result']
+            if not payload:
+                return
+            text = json.dumps(compact(payload), ensure_ascii=False)[:12000]
+            text = re.sub(r'(?i)(password|authorization|api[_-]?key|access[_-]?token|cookie)(["\s:=]+)[^\s,"}]+',
+                          r'\1\2[redacted]', text)
+            operator_workspace.observe(self._workspace_run['run_id'], tool, text,
+                re.findall(r'https?://[^\s<>"\\]+', text))
+        except Exception:
+            _log.debug('could not retain tool evidence', exc_info=True)
+
+    def _consume_native_codex(self, event):
+        import operator_codex_transport
+        self._touch()
+        method, params = event.get('method'), event.get('params', {})
+        projected = operator_codex_transport.cli_event(event)
+        if projected:
+            self._consume(json.dumps(projected))
+        elif method == 'turn/plan/updated' and self._workspace_run:
+            try:
+                operator_workspace.update_job(self._workspace_run['run_id'], self._workspace_run['credential'],
+                    {'checkpoints': [{'step': p['step'], 'status': p['status']}
+                                     for p in params.get('plan', [])[:20]]})
+            except (ValueError, KeyError):
+                _log.debug('ignored invalid or late native plan')
+        elif method == 'thread/tokenUsage/updated':
+            usage = params.get('tokenUsage', {}).get('last', {})
+            self._note_token_usage(usage.get('inputTokens'))
+            if self._workspace_run:
+                for key, metric in [('inputTokens', 'input_tokens'), ('outputTokens', 'output_tokens')]:
+                    operator_diagnostics.record(metric, usage.get(key, 0),
+                        run_id=self._workspace_run['run_id'], model=self.model)
+        elif method == 'error':
+            self._consume_codex({'type': 'error', 'message': params.get('error', {}).get('message', 'Codex error')})
+        elif method == 'turn/completed':
+            turn = params.get('turn', {})
+            if turn.get('error'):
+                self._consume_codex({'type': 'error', 'message': turn['error'].get('message', 'Codex turn failed')})
+            return 0 if turn.get('status') == 'completed' else 1
 
     def _consume_codex(self, evt: dict) -> None:
         """Parse one codex `exec --json` JSONL event into messages."""
@@ -1426,13 +1842,24 @@ class AgentRunner:
             item = evt.get("item")
             item = item if isinstance(item, dict) else {}
             if item.get("type") in ("mcp_tool_call", "tool_call", "function_call",
-                                     "command_execution"):
+                                     "custom_tool_call", "command_execution"):
                 self._set_tool_active(True)
         elif t == "item.completed":
             item = evt.get("item")
             item = item if isinstance(item, dict) else {}
             it = item.get("type")
-            if it == "agent_message":
+            if it == "reasoning":
+                # Codex emits user-facing reasoning summaries as their own
+                # completed items. They are neither final assistant replies nor
+                # tool calls, so dropping this type made GPT's live trace go
+                # silent whenever it stopped sending optional commentary even
+                # though the run and its internal progress continued normally.
+                txt = item.get("text")
+                txt = txt.strip() if isinstance(txt, str) else ""
+                if txt:
+                    self.messages.append({"ts": time.time(), "role": "thinking",
+                                          "text": txt})
+            elif it == "agent_message":
                 txt = item.get("text")
                 txt = txt.strip() if isinstance(txt, str) else ""
                 if txt:
@@ -1441,16 +1868,36 @@ class AgentRunner:
                         self.handoff = {"reason": _reason, "ts": time.time()}
                     if txt:
                         self.messages.append({"ts": time.time(), "role": "assistant", "text": txt})
-            elif it in ("mcp_tool_call", "tool_call", "function_call"):
+            elif it in ("mcp_tool_call", "tool_call", "function_call",
+                        "custom_tool_call"):
                 # surface browser actions inline (Operator-style trace)
                 name = item.get("tool") or item.get("name")
                 name = name if isinstance(name, str) else ""
                 args = item.get("arguments") or item.get("input") or {}
+                # Codex >=0.144 exposes MCP calls inside its JS exec bridge.
+                # The outer completed item is merely `exec`; recover the nested
+                # Playwright tool name so the visible trace and browser-use gate
+                # see what actually happened. (Built-in tools.web__run does NOT
+                # match, deliberately: it never drives the cockpit browser.)
+                try:
+                    raw_call = args if isinstance(args, str) else json.dumps(args)
+                except (TypeError, ValueError):
+                    raw_call = ""
+                bridged = re.search(
+                    r"mcp__playwright__(browser_[A-Za-z0-9_]+)", raw_call)
+                if bridged:
+                    name = "mcp__playwright__" + bridged.group(1)
                 if isinstance(args, str):
                     try:
                         args = json.loads(args)
                     except Exception:
-                        args = {}
+                        # Exec bridge source is JavaScript, not JSON. Dropping
+                        # it made every different code batch look like the same
+                        # tool({}) and trigger a false repeat nudge after 3 calls.
+                        # Keep an opaque identity, never raw code/credentials in
+                        # the trace or detector diagnostics.
+                        args = ({"_bridge_fingerprint": hashlib.sha256(
+                            raw_call.encode()).hexdigest()} if bridged else {})
                 args = args if isinstance(args, dict) else {}
                 self._note_action(name, args)
                 label, detail = _action_label(name, args)
@@ -1465,6 +1912,7 @@ class AgentRunner:
                     self.messages.append({"ts": time.time(), "role": "action",
                                           "text": "Running command", "detail": cmd[:70]})
             if it in ("mcp_tool_call", "tool_call", "function_call",
+                      "custom_tool_call",
                       "command_execution"):
                 self._set_tool_active(False)
         elif t == "token_count":
@@ -1487,16 +1935,15 @@ class AgentRunner:
     def _forget_session(self, bot: str) -> None:
         """Drop a bot's resumable thread AND the record of having briefed it.
 
-        These two have to move together. The squad boot context is folded into
+        These two have to move together. The the app boot context is folded into
         a runtime's FIRST turn (codex/agy have no SessionStart hook), gated on
         `resume_id and boot_sent` — the point being not to re-send it down a
         thread that already has it. But a user stop pops the resume id so the
         next turn starts FRESH, and boot_sent stayed True: the fresh thread was
         judged already-briefed and got nothing. No task memory, because it is a
-        new thread; no squad priors, because we thought we had already sent
+        new thread; no the app priors, because we thought we had already sent
         them. Gemma answered "what would you like me to look up?" instead of
-        searching squad memory as its own prompt instructs (the owner 2026-07-30,
-        "doesn't seem to have any context whatsoever").
+        searching the app memory as its own prompt instructs .
         """
         self._session_ids.pop(bot or "", None)
         # _boot_sent is keyed by BOT name ("gemma"/"gpt") — the same key
@@ -1574,11 +2021,15 @@ class AgentRunner:
             return   # interrupted run produced only noise → emit nothing
         if not stdout_text:
             return
-        text, _reason = _extract_handoff(_clean_gemma_text(stdout_text))
+        clean = _clean_gemma_text(stdout_text)
+        text, _reason = _extract_handoff(operator_agy.strip_plan_scaffold(clean, reject_running_plan=True))
         if _reason is not None and not self.handoff:
             self.handoff = {"reason": _reason, "ts": time.time()}
         if text:
             self.messages.append({"ts": time.time(), "role": "assistant", "text": text})
+        elif clean:
+            if not any(m.get('role') == 'thinking' and m.get('text') == clean for m in self.messages):
+                self.messages.append({'ts': time.time(), 'role': 'thinking', 'text': clean})
 
     def reset_session(self, bot: str = "") -> dict:
         """Forget stored session id(s) + the shared transcript so the next task
@@ -1610,6 +2061,7 @@ class AgentRunner:
             tok_capped = self._tok_stop_fired
             stall_reason = self._stall_kill_reason
             stopped = self._stopped
+            browser_contract_failed = self._browser_contract_failed
         if tok_capped:
             # the handoff banner set by _note_token_usage carries the detail
             return ("interrupted", "token cap auto-stop")
@@ -1619,12 +2071,98 @@ class AgentRunner:
             return ("error", stall_reason)
         if stopped:
             return ("interrupted", "user stop")
+        if browser_contract_failed:
+            return ("error", "browser contract: no Playwright tool call")
         if returncode == 0:
             return ("done", "exit 0")
         return ("error", f"exit {returncode}")
 
+    @staticmethod
+    def _is_operator_browser_helper(args: str) -> bool:
+        """Whether a process command is a per-run Operator browser helper."""
+        try:
+            argv = shlex.split(args)
+        except ValueError:
+            argv = args.split()
+        if not argv:
+            return False
+
+        # Match an executable/script position, never a later prompt argument.
+        # The agent's own command line can quite reasonably contain a task such
+        # as "inspect operator_playwright_mcp.js"; a substring matcher would
+        # then kill the agent while trying to clean up its helper. Very tidy,
+        # in the same sense that a wood chipper tidies a desk.
+        launchers = {"env", "node", "nodejs", "bash", "sh"}
+
+        def is_early_script(name: str) -> bool:
+            for index, token in enumerate(argv[:4]):
+                if any(ch.isspace() for ch in token):
+                    continue
+                if os.path.basename(token) != name:
+                    continue
+                if index == 0:
+                    return True
+                prior = {os.path.basename(part) for part in argv[:index]}
+                return bool(prior & launchers)
+            return False
+
+        if (is_early_script("operator_playwright_mcp.js")
+                or is_early_script("mcp_image_governor.js")
+                or is_early_script("playwright-mcp.sh")):
+            return True
+        return (is_early_script("cli.js")
+                and any("@playwright/mcp/cli.js" in part for part in argv[:4])
+                and "--caps" in argv and "--cdp-endpoint" in argv
+                and not any(part == "--port" or part.startswith("--port=")
+                            for part in argv))
+
+    def _helper_env_belongs(self, proc_env: bytes) -> bool:
+        """Exact per-conversation ownership check for a helper environment."""
+        marker = b"OPERATOR_CONVERSATION_ID="
+        wanted = marker + self.conversation_id.encode() + b"\0"
+        if wanted in proc_env:
+            return True
+        # Pre-1.1 helpers had no conversation marker. Only the legacy runner
+        # may reap those, so one chat can never kill another chat's driver.
+        return bool(self._use_legacy_storage and marker not in proc_env)
+
+    def _reap_owned_browser_helpers(self) -> int:
+        """Kill detached per-run browser helpers owned by this conversation."""
+        killed = 0
+        try:
+            import signal as _sig
+            out = subprocess.run(
+                ["ps", "-eo", "pid=,args="], capture_output=True,
+                text=True, timeout=5).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                pid_s, _, args = line.partition(" ")
+                if (not pid_s.isdigit()
+                        or int(pid_s) == os.getpid()
+                        or not self._is_operator_browser_helper(args)):
+                    continue
+                try:
+                    with open(f"/proc/{pid_s}/environ", "rb") as env_file:
+                        proc_env = env_file.read()
+                except OSError:
+                    continue
+                if not self._helper_env_belongs(proc_env):
+                    continue
+                try:
+                    os.kill(int(pid_s), _sig.SIGKILL)
+                    killed += 1
+                except (OSError, ValueError):
+                    pass
+        except Exception:  # noqa: BLE001 — cleanup must never break terminal state
+            pass
+        return killed
+
     def stop(self) -> dict:
         with self._lock:
+            self._steer_generation += 1
+            self._redirect_prompt = ''
             self._takeover_requested = False
             self._takeover_token += 1
             self._tool_active = False
@@ -1671,53 +2209,17 @@ class AgentRunner:
             except Exception:  # noqa: BLE001 — fall back to terminating the leader
                 try: p.terminate()
                 except Exception: pass
-            # REAP THE STDIO MCP. claude -p / codex spawn the Playwright MCP as a stdio
-            # child that often survives the process-group kill (it re-parents / detaches),
-            # leaving a node cli.js still attached to the CDP page. The NEXT turn's MCP
-            # then contends with the zombie for the same page → the agent hangs after the
-            # first turn (the stuck-after-interrupt bug). Kill ONLY the Operator-spawned
-            # stdio MCP — signature: cli.js with --caps + --cdp-endpoint and NO --port
-            # (the persistent :8772 HTTP MCP HAS --port, so it's untouched).
-            try:
-                import subprocess as _sp, signal as _sig2
-                out = _sp.run(["ps", "-eo", "pid=,args="], capture_output=True,
-                              text=True, timeout=5).stdout
-                for ln in out.splitlines():
-                    ln = ln.strip()
-                    if not ln:
-                        continue
-                    pid_s, _, args = ln.partition(" ")
-                    # the Operator-spawned stdio MCP: the playwright cli.js with --caps
-                    # and --cdp-endpoint but NO --port (the persistent :8772 HTTP MCP HAS
-                    # --port, so it's spared). Also reap the wrapper script if lingering.
-                    is_stdio_mcp = ("@playwright/mcp/cli.js" in args
-                                    and "--caps" in args and "--cdp-endpoint" in args
-                                    and "--port" not in args)
-                    is_wrapper = "browse/playwright-mcp.sh" in args
-                    belongs = False
-                    try:
-                        with open(f"/proc/{pid_s}/environ", "rb") as _envf:
-                            proc_env = _envf.read()
-                        marker = b"OPERATOR_CONVERSATION_ID="
-                        belongs = (marker + self.conversation_id.encode()
-                                   + b"\0" in proc_env)
-                        # Reap pre-conversations orphans only from the legacy
-                        # runner. New scoped children always carry the marker,
-                        # so stopping legacy cannot kill another live chat.
-                        if self._use_legacy_storage and marker not in proc_env:
-                            belongs = True
-                    except OSError:
-                        belongs = False
-                    if (is_stdio_mcp or is_wrapper) and belongs:
-                        try: os.kill(int(pid_s), _sig2.SIGKILL)
-                        except Exception: pass
-            except Exception:
-                pass
+            # The CLI leader's group kill does not reliably catch stdio MCPs
+            # that re-parented to systemd. Match the custom scoped bridge and
+            # its image governor too, not only the old upstream cli.js path.
+            self._reap_owned_browser_helpers()
             # Do NOT write a state here: the _run thread is still alive and will
             # land its own terminal state ("interrupted", via _stopped) once the
             # killed process reaps. Writing "idle" here raced that write — last
             # writer won, so a stop sometimes read idle, sometimes interrupted.
             return {"ok": True}
+        # A wedged/dead leader can leave only its detached helper behind.
+        self._reap_owned_browser_helpers()
         # B3: the gate gap has no proc to kill, but the run thread is alive and
         # about to consult _cancel_requested — it lands "interrupted" itself.
         # Unwedging here would flip a legitimately-running run to idle and race
@@ -1743,6 +2245,17 @@ class AgentRunner:
 
     def _set_tool_active(self, active: bool) -> None:
         """Track a structured runtime's current tool and honor deferred MAN."""
+        if self._workspace_run:
+            now = time.monotonic()
+            rid = self._workspace_run['run_id']
+            if active and self._tool_started_at is None:
+                self._tool_started_at = now
+                if not self._first_action_recorded:
+                    operator_diagnostics.record('first_action_ms', max(0, time.time() - self.started_ts) * 1000, run_id=rid, model=self.model)
+                    self._first_action_recorded = True
+            elif not active and self._tool_started_at is not None:
+                operator_diagnostics.record('tool_ms', (now - self._tool_started_at) * 1000, run_id=rid, model=self.model)
+                self._tool_started_at = None
         with self._lock:
             self._tool_active = bool(active)
             fire = not active and self._takeover_requested
@@ -1849,6 +2362,7 @@ class AgentRunner:
                       if m.get("role") == "assistant" and m.get("text")), "")
         return {
             "conversation_id": self.conversation_id,
+            "run_id": self._workspace_run['run_id'] if self._workspace_run else '',
             "bot": self.bot, "task": self.task, "state": self.state,
             "started_ts": self.started_ts, "ended_ts": self.ended_ts,
             "messages": [m for m in msgs if m["ts"] > since_ts],
@@ -1952,6 +2466,36 @@ class RunnerRegistry:
             if r is None or not r.is_running():
                 self._slots.pop(cid, None)
 
+    @staticmethod
+    def _tab_cleanup_generation(runner) -> tuple | None:
+        # Only completion witnessed by THIS process proves abandonment.
+        # Restored transcripts do not restore handoff intent, so idle/unknown
+        # runners (including pre-deploy tabs) must not become cleanup targets.
+        if (runner.is_running() or getattr(runner, "state", None) not in {"done", "error"}
+                or getattr(runner, "handoff", None)
+                or getattr(runner, "_cancel_requested", False)
+                or getattr(runner, "_takeover_requested", False)):
+            return None
+        thread = getattr(runner, "_thread", None)
+        if thread is not None and thread.is_alive():
+            return None
+        started, ended = getattr(runner, "started_ts", 0), getattr(runner, "ended_ts", 0)
+        return (started, ended) if started and ended else None
+
+    def tab_cleanup_candidates(self) -> dict:
+        with self._lock:
+            return {cid: generation for cid, runner in self._runners.items()
+                    if (generation := self._tab_cleanup_generation(runner)) is not None}
+
+    def with_tab_cleanup_lease(self, cid: str, generation: tuple, action) -> bool:
+        # start() holds this same lock through its pre-spawn reservation.
+        # Bound the callback's network operations; never wait on a task here.
+        with self._lock:
+            runner = self._runners.get(cid)
+            if runner is None or self._tab_cleanup_generation(runner) != generation:
+                return False
+            return bool(action())
+
     def _holders_locked(self) -> str:
         return ", ".join(
             f"conversation '{cid}' ({bot})"
@@ -1959,7 +2503,8 @@ class RunnerRegistry:
 
     def start(self, bot: str, task: str, model: str = '', effort: str = '',
               demo: bool = False, surface: str = 'browser',
-              real_ok: bool = False, conversation_id: str | None = None) -> dict:
+              real_ok: bool = False, conversation_id: str | None = None,
+              authorization=None) -> dict:
         cid = _conversation_id(conversation_id)
         if bot not in AGENT_BOTS:
             return {"ok": False, "error": f"'{bot}' can't drive"}
@@ -2000,7 +2545,7 @@ class RunnerRegistry:
                 try:
                     result = target.start(bot, task, model=model, effort=effort,
                                           demo=demo, surface=surface,
-                                          real_ok=real_ok)
+                                          real_ok=real_ok, authorization=authorization)
                 except Exception:
                     self._slots.pop(cid, None)
                     raise
@@ -2044,13 +2589,14 @@ class RunnerRegistry:
             return {"ok": True, "pending": False, "ready": True}
         return target.request_takeover()
 
-    def steer(self, text: str, conversation_id: str | None = None) -> dict:
+    def steer(self, text: str, conversation_id: str | None = None,
+              message_id: str = '', run_id: str = '') -> dict:
         cid = _conversation_id(conversation_id)
         with self._lock:
             target = self._runners.get(cid)
         if target is None:
             return {"ok": False, "error": "nothing running"}
-        return target.steer(text)
+        return target.steer(text, message_id=message_id, run_id=run_id)
 
     def reset_session(self, bot: str = "",
                       conversation_id: str | None = None) -> dict:

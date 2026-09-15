@@ -1,6 +1,7 @@
 """Tests for mcp_server.py — the operator control MCP (perceive / game_macro /
 desktop computer actions) at the JSON-RPC handler level. No stdio, no browser:
 a fake surface is injected via the factory."""
+import io
 import json
 
 import numpy as np
@@ -112,6 +113,54 @@ def test_emu_input_blocked_off_sandbox(tmp_path):
                                  "arguments": {"button": "a"}})
     _, is_err = tool_result(r)
     assert is_err
+
+
+def test_emu_input_uses_one_loopback_tunnel_for_server_lifetime(monkeypatch):
+    calls = []
+
+    class FakeTunnel:
+        url = "http://127.0.0.1:43123"
+
+        def close(self):
+            calls.append("tunnel.close")
+
+    tunnel = FakeTunnel()
+
+    class FakeSandbox:
+        def ensure(self):
+            calls.append("ensure")
+
+        def open_cdp_tunnel(self):
+            calls.append("open")
+            return tunnel
+
+    class FakeEmu:
+        def __init__(self, url):
+            calls.append(("emu", url))
+
+    monkeypatch.setattr(S, "_load_cu_module", lambda name: FakeSandbox())
+    monkeypatch.setattr(S.emu_input_mod, "EmuInput", FakeEmu)
+    srv = server("desktop-sandbox")
+
+    assert srv._get_emu() is srv._get_emu()
+    assert calls == ["ensure", "open", ("emu", tunnel.url)]
+    srv.close()
+    assert calls[-1] == "tunnel.close"
+
+
+def test_main_closes_server_when_stdin_reaches_eof(monkeypatch):
+    calls = []
+
+    class FakeServer:
+        def close(self):
+            calls.append("close")
+
+    monkeypatch.setattr(S, "OperatorMCP", FakeServer)
+    monkeypatch.setattr(S.sys, "stdin", io.StringIO(""))
+    monkeypatch.setattr(S.sys, "stdout", io.StringIO())
+
+    assert S.main() == 0
+    assert calls == ["close"]
 
 
 # ── perceive ─────────────────────────────────────────────────────────────────

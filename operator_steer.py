@@ -6,26 +6,33 @@ A steer is a user message sent while a run is live. Two consumers, two seams:
   * the runner's exit-seam check turns leftovers into one more resumed turn
     (the only seam codex/agy have — they expose no mid-loop input channel).
 
-The hook runs inside the SPAWNED AGENT PROCESS, not the server, so this store
-must be safe across processes without a shared lock:
-  * push()    — one NDJSON line via O_APPEND (atomic for small writes),
-  * take_all()— claim by os.rename to a unique temp name (atomic: exactly one
-                of two racing consumers gets the file), then read + unlink.
-A push racing a claim normally lands in a fresh file and is picked up by the
-next consumer; double-delivery is impossible (rename is the atomic claim).
-Loss is possible only in a tight window (append fd obtained before a rename,
-write landing after the claimed file is read) — irrelevant at human steer
-rates, so we accept it rather than add locking.
+The hook runs inside the spawned agent process. A conversation-scoped flock
+serializes append, claim and clear across processes: an append cannot land in
+an already-claimed file after its consumer has read it. Claim still uses an
+atomic rename, so only one consumer receives a correction.
 """
 from __future__ import annotations
 
 import json
+import contextlib
+import fcntl
 import os
 import re
 import time
 
 MAX_TEXT = 4000      # one steer's text cap (it rides inside a prompt)
 MAX_PENDING = 8      # queue cap — more than this means nobody's listening
+
+
+@contextlib.contextmanager
+def _queue_lock(filename):
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    with open(filename + '.lock', 'a') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 _DEFAULT = os.path.join(os.path.expanduser("~/.cache/computer-use"),
                         "operator-steer.ndjson")
@@ -60,13 +67,16 @@ def _read(p: str) -> list[dict]:
                 except ValueError:
                     continue
                 if isinstance(d, dict) and isinstance(d.get("text"), str):
-                    out.append({"ts": d.get("ts", 0.0), "text": d["text"]})
+                    item = {"ts": d.get("ts", 0.0), "text": d["text"]}
+                    if d.get('id'):
+                        item['id'] = d['id']
+                    out.append(item)
     except OSError:
         pass
     return out
 
 
-def push(text: str, conversation_id: str | None = None) -> int:
+def push(text: str, conversation_id: str | None = None, message_id: str = '') -> int:
     """Queue one steer; returns the pending count. Raises ValueError on
     empty/oversize text or a full queue (the caller surfaces it to the UI)."""
     text = (text or "").strip()
@@ -75,13 +85,13 @@ def push(text: str, conversation_id: str | None = None) -> int:
     if len(text) > MAX_TEXT:
         raise ValueError(f"steer too long (max {MAX_TEXT} chars)")
     p = path(conversation_id)
-    n = len(_read(p))
-    if n >= MAX_PENDING:
-        raise ValueError(f"steer queue full ({MAX_PENDING} pending)")
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    line = json.dumps({"ts": time.time(), "text": text}) + "\n"
-    with open(p, "a", encoding="utf-8") as f:
-        f.write(line)
+    with _queue_lock(p):
+        n = len(_read(p))
+        if n >= MAX_PENDING:
+            raise ValueError(f"steer queue full ({MAX_PENDING} pending)")
+        line = json.dumps({"ts": time.time(), "text": text, 'id': message_id}) + "\n"
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(line)
     return n + 1
 
 
@@ -93,23 +103,26 @@ def take_all(conversation_id: str | None = None) -> list[dict]:
     """Atomically claim and return every queued steer ([] when none)."""
     p = path(conversation_id)
     claim = f"{p}.claim.{os.getpid()}.{time.monotonic_ns()}"
-    try:
-        os.rename(p, claim)
-    except OSError:
-        return []
-    out = _read(claim)
-    try:
-        os.unlink(claim)
-    except OSError:
-        pass
+    with _queue_lock(p):
+        try:
+            os.rename(p, claim)
+        except OSError:
+            return []
+        out = _read(claim)
+        try:
+            os.unlink(claim)
+        except OSError:
+            pass
     return out
 
 
 def clear(conversation_id: str | None = None) -> None:
-    try:
-        os.unlink(path(conversation_id))
-    except OSError:
-        pass
+    p = path(conversation_id)
+    with _queue_lock(p):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
 
 
 def format_context(steers: list[dict]) -> str:

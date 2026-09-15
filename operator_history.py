@@ -58,12 +58,53 @@ def _conn() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(_PATH), exist_ok=True)
     c = sqlite3.connect(_PATH, timeout=5)
     c.execute(_SCHEMA)
+    c.execute("CREATE TABLE IF NOT EXISTS conversation_clears (conversation_id TEXT PRIMARY KEY, through_id INTEGER NOT NULL, cleared_ts REAL NOT NULL)")
     # CREATE IF NOT EXISTS does not add columns to the live pre-conversations
     # ledger. This additive migration is idempotent and keeps every old row.
     cols = {row[1] for row in c.execute("PRAGMA table_info(runs)")}
     if "conversation_id" not in cols:
         c.execute("ALTER TABLE runs ADD COLUMN conversation_id TEXT DEFAULT ''")
+    c.execute("CREATE INDEX IF NOT EXISTS runs_conversation_id ON runs(conversation_id, id)")
     return c
+
+
+def clear_conversation_history(conversation_id: str) -> None:
+    """A restore boundary, not deletion of audit records."""
+    with _LOCK, _conn() as c:
+        boundary = c.execute('SELECT COALESCE(MAX(id), 0) FROM runs').fetchone()[0]
+        c.execute('INSERT OR REPLACE INTO conversation_clears VALUES (?, ?, ?)', (conversation_id, boundary, time.time()))
+
+
+def conversation_turns(conversation_id: str, *, before: int = 0, after: int = 0, limit: int = 30) -> dict:
+    """Bounded, conversation-scoped transcript pages, without bulky tool traces.
+
+    Historical rows with no conversation identity are intentionally not guessed
+    into legacy. Original trace details remain available via get(run_id).
+    """
+    limit = min(50, max(1, int(limit)))
+    with _LOCK, _conn() as c:
+        boundary = c.execute('SELECT through_id, cleared_ts FROM conversation_clears WHERE conversation_id=?',
+                             (conversation_id,)).fetchone()
+        floor = max(after, boundary[0] if boundary else 0)
+        rows = c.execute('SELECT id, started_ts, task, state, bot, model, trace FROM runs '
+            'WHERE conversation_id=? AND demo=0 AND id>? AND (?=0 OR id<?) AND COALESCE(started_ts, 0)>? '
+            'ORDER BY id DESC LIMIT ?', (conversation_id, floor, before, before, boundary[1] if boundary else -1, limit + 1)).fetchall()
+    more = len(rows) > limit
+    turns = []
+    for ident, started, task, state, bot, model, raw in reversed(rows[:limit]):
+        try:
+            trace = json.loads(raw or '[]')
+        except (ValueError, TypeError):
+            trace = []
+        final = next((m.get('text', '') for m in reversed(trace) if isinstance(m, dict)
+                      and m.get('role') == 'assistant' and m.get('text')), '') if isinstance(trace, list) else ''
+        turns.append(dict(id=ident, started_ts=started, task=task, state=state,
+                          bot=bot, model=model, final=final))
+    return {'turns': turns, 'has_more': more,
+            'cleared_through_id': boundary[0] if boundary else 0,
+            'cleared_ts': boundary[1] if boundary else 0,
+            'oldest_id': turns[0]['id'] if turns else 0,
+            'latest_id': turns[-1]['id'] if turns else after}
 
 
 def _to_int(v) -> int | None:
