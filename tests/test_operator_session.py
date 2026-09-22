@@ -319,6 +319,19 @@ def test_deleting_the_last_one_leaves_somewhere_to_write(store):
     assert len(store.listing()["sessions"]) == 1
 
 
+def test_delete_fresh_preserves_other_chats_without_reopening_them(store):
+    store.save({"log": "Keep this chat"})
+    survivor = store.listing()["active"]
+    deleted = store.create()["id"]
+    store.save({"log": "Delete this chat"})
+    out = store.delete(deleted, fresh=True)
+    assert out["active"] not in (survivor, deleted)
+    assert store.load(out["active"])["data"] is None
+    assert store.load(survivor)["data"]["log"] == "Keep this chat"
+    with pytest.raises(KeyError):
+        store.load(deleted)
+
+
 def test_deleting_an_unknown_conversation_raises(store):
     with pytest.raises(KeyError):
         store.delete("nope")
@@ -441,6 +454,28 @@ def test_presence_route_gates_writes_until_takeover(tmp_path, monkeypatch):
         "conversation_id": "legacy", "client_id": "phone",
         "expected_rev": 1, "data": {"log": "phone took over"}})
     assert saved.status_code == 200
+
+
+def test_peer_name_survives_presence_session_save_and_control_guard(tmp_path, monkeypatch):
+    app = _app(False, tmp_path, monkeypatch)
+    c = app.test_client()
+    address = '100.94.27.37'
+    monkeypatch.setattr(OV, '_peer_device_label',
+        lambda ip, label: 'HOST-B' if ip == address else label)
+    remote = {'REMOTE_ADDR': address}
+    c.post('/operator/session', json={'conversation_id': 'legacy', 'data': {'log': 'first'}})
+    url = '/operator/sessions/legacy/presence'
+    claimed = c.post(url, json={'client_id': 'desktop', 'label': 'Windows'}, environ_overrides=remote)
+    assert claimed.get_json()['controller_label'] == 'HOST-B'
+    saved = c.post('/operator/session', json={'conversation_id': 'legacy',
+        'client_id': 'desktop', 'device_label': 'Windows', 'expected_rev': 1,
+        'data': {'log': 'updated'}}, environ_overrides=remote)
+    assert saved.status_code == 200
+    with app.test_request_context('/operator/agent/say', environ_overrides=remote):
+        assert OV._thread_control_guard({'client_id': 'desktop', 'device_label': 'Windows'}, 'legacy') is None
+    observed = c.post(url, json={'client_id': 'ipad', 'label': 'iPad'}).get_json()
+    assert observed['can_control'] is False
+    assert observed['controller_label'] == 'HOST-B'
 
 
 def test_conversation_routes_reject_a_bad_id_and_action(tmp_path, monkeypatch):

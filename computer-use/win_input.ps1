@@ -1,7 +1,7 @@
 # win_input.ps1 — inject one computer-use action into the live Windows session.
-# Runs as the interactive OperatorInputBroker scheduled task. The WSL backend
-# writes JSON requests into a user-private queue; keeping this process rooted in
-# an InteractiveToken session is what gives it real input-desktop access.
+# Runs on demand through an Explorer-owned shortcut. The WSL backend writes JSON
+# requests into a user-private queue; the Explorer launch is what gives this
+# process real input-desktop access. It exits after an idle grace period.
 #
 # Args: -Action <move|left_click|right_click|double_click|type|key|hotkey|scroll>
 #       -X <int> -Y <int>            (for move/click/scroll)
@@ -20,9 +20,43 @@ param(
   [string]$Action = "",
   [int]$X = -1, [int]$Y = -1,
   [string]$Text = "", [string]$Key = "", [int]$Amount = 3,
-  [string]$BrokerDir = ""
+  [string]$BrokerDir = "",
+  [int]$IdleSeconds = 300
 )
 $ErrorActionPreference = "Stop"
+# Keep a startup exception beside the broker queue when the process cannot
+# reach its heartbeat. A healthy broker
+# removes this file after its input-desktop probe succeeds.
+$startupError = if ($BrokerDir) {
+  Join-Path $BrokerDir "startup-error.txt"
+} else {
+  ""
+}
+trap {
+  if ($startupError) {
+    try {
+      New-Item -ItemType Directory -Path $BrokerDir -Force | Out-Null
+      ($_ | Out-String) | Set-Content -LiteralPath $startupError -Encoding UTF8
+    } catch {}
+  }
+  exit 1
+}
+# Some launch paths can inherit C:\Windows\Temp rather than the owner's
+# profile temp. PowerShell's Add-Type writes a transient C# file there and can
+# fail before the broker loop. The broker directory is already user-private
+# and its parent is a writable temp root for the broker.
+if ($BrokerDir) {
+  $compilerTemp = Split-Path -Parent $BrokerDir
+} elseif ($env:LOCALAPPDATA) {
+  $compilerTemp = Join-Path $env:LOCALAPPDATA "Temp"
+} else {
+  $compilerTemp = ""
+}
+if ($compilerTemp) {
+  New-Item -ItemType Directory -Path $compilerTemp -Force | Out-Null
+  $env:TEMP = $compilerTemp
+  $env:TMP = $compilerTemp
+}
 $sig = @'
 [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 '@
@@ -72,8 +106,10 @@ namespace W {
              key==0x23 || key==0x21 || key==0x22 || key==0x2D || key==0x2E;
     }
     static void Move(int x,int y) {
-      if (x>=0 && y>=0 && !SetCursorPos(x,y))
-        throw new Win32Exception(Marshal.GetLastWin32Error(), "SetCursorPos rejected input");
+      if (x>=0 && y>=0 && !SetCursorPos(x,y)) {
+        int error=Marshal.GetLastWin32Error();
+        throw new Win32Exception(error, "SetCursorPos rejected input (Win32 "+error+")");
+      }
     }
     static void Hotkey(string combo) {
       string[] names=combo.Split('+'); byte[] codes=new byte[names.Length];
@@ -115,7 +151,7 @@ Add-Type -TypeDefinition $executor -ReferencedAssemblies System.Windows.Forms
 # (e.g. 2647x1664 at 150% scale). win_backend derives its click scale factors
 # from that physical size. Without this call, THIS process is DPI-UNAWARE, so
 # SetCursorPos interprets its args as LOGICAL (DPI-scaled, 1765x1109) coords and
-# Windows re-virtualizes them — every click landed ~1.5x off-target (owner
+# Windows re-virtualizes them — every click landed ~1.5x off-target (the owner
 # 2026-07-12: "clicks/keys aren't landing on the desktop"). Making both scripts
 # DPI-aware puts capture and injection in the SAME physical-pixel space.
 [void]$U::SetProcessDPIAware()
@@ -145,12 +181,20 @@ if ($BrokerDir) {
     # Heartbeat means "can inject", not merely "a PowerShell loop exists".
     # The same call returns false from a WSL/detached window station.
     Invoke-Action "probe" -1 -1 "" "" 0
+    Remove-Item -LiteralPath $startupError -Force -ErrorAction SilentlyContinue
+    $lastRequestAt = [DateTime]::UtcNow
+    $lastHeartbeatAt = [DateTime]::MinValue
     while ($true) {
-      Write-JsonAtomic (Join-Path $BrokerDir "heartbeat.json") `
-        @{ ok = $true; pid = $PID; ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+      $now = [DateTime]::UtcNow
+      if (($now - $lastHeartbeatAt).TotalSeconds -ge 1) {
+        Write-JsonAtomic (Join-Path $BrokerDir "heartbeat.json") `
+          @{ ok = $true; pid = $PID; ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+        $lastHeartbeatAt = $now
+      }
       $requests = @(Get-ChildItem -LiteralPath $BrokerDir -Filter "*.request.json" `
                     -File -ErrorAction SilentlyContinue | Sort-Object CreationTimeUtc)
       foreach ($requestFile in $requests) {
+        $lastRequestAt = [DateTime]::UtcNow
         $responsePath = $requestFile.FullName -replace '\.request\.json$', '.response.json'
         try {
           $request = Get-Content -LiteralPath $requestFile.FullName -Raw | ConvertFrom-Json
@@ -162,6 +206,10 @@ if ($BrokerDir) {
         } finally {
           Remove-Item -LiteralPath $requestFile.FullName -Force -ErrorAction SilentlyContinue
         }
+      }
+      if ($IdleSeconds -gt 0 -and
+          ([DateTime]::UtcNow - $lastRequestAt).TotalSeconds -ge $IdleSeconds) {
+        break
       }
       Start-Sleep -Milliseconds 50
     }

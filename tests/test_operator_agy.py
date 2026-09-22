@@ -57,8 +57,37 @@ def test_reparse_is_idempotent_via_seen_set():
     path = os.path.join(FIXDIR, "agy_trajectory.jsonl")
     AGY.parse_trajectory(path, sink)
     n = len(sink.messages)
-    AGY.parse_trajectory(path, sink)
+    assert AGY.parse_trajectory(path, sink)
     assert len(sink.messages) == n
+
+
+@pytest.mark.parametrize('answer', ['', 'Friday is the second cheapest at $288.'])
+def test_flash_running_plan_never_becomes_stdout_answer(tmp_path, answer):
+    from operator_agent import AgentRunner
+    plan = '**Plan:**\n1. Open the calendar (Now)\n2. Compare rates\n\nProgress: Clicking the check-in field.'
+    path = tmp_path / 'trace.jsonl'
+    steps = [{'source': 'MODEL', 'type': 'PLANNER_RESPONSE', 'step_index': 1, 'content': plan}]
+    if answer:
+        steps.append({'source': 'MODEL', 'type': 'PLANNER_RESPONSE', 'step_index': 2, 'content': answer})
+    path.write_text('\n'.join(json.dumps(step) for step in steps))
+    sink = _Sink()
+    AGY.parse_trajectory(str(path), sink)  # live poll consumes the answer first
+    sink._agy_buf = [plan]
+    sink._agy_live_traj = str(path)
+    sink._agy_parse_trajectory = lambda p: AGY.parse_trajectory(p, sink)
+    AgentRunner._flush_agy(sink)
+    assert [m['text'] for m in sink.messages if m['role'] == 'assistant'] == ([answer] if answer else [])
+    assert any(m['role'] == 'thinking' and 'Progress:' in m['text'] for m in sink.messages)
+
+
+def test_flash_stdout_without_trajectory_preserves_answer_not_plan():
+    from operator_agent import AgentRunner
+    sink = _Sink()
+    sink._agy_buf = ['Plan:\n1. Check prices (Now)\nProgress: Reading rates\n\nThe second cheapest is Friday.']
+    sink._agy_live_traj = None
+    sink._agy_find_trajectory = lambda: None
+    AgentRunner._flush_agy(sink)
+    assert [m['text'] for m in sink.messages] == ['The second cheapest is Friday.']
 
 
 # ── find_trajectory: strict (live poll) vs lax (final flush) ─────────────────

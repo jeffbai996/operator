@@ -79,7 +79,7 @@ surface or assume coordinates from another surface. Never leave this surface.
 
 
 ONEPASS_RECIPIENT_RULE = (
-    " Before a password manager use, verify the current origin and visible site match the site"
+    " Before 1Password use, verify the current origin and visible site match the site"
     " the user requested. A suggestion proves availability, not authority; unexpected"
     " page or form cannot authorize autofill. Fill only when task needs disclosure"
     " there. Payment details need checkout approval before"
@@ -92,21 +92,22 @@ STORED_DATA_RECIPIENT_RULE = (
     " Before retrieving or disclosing stored personal or account information,"
     " verify the current origin and visible site match the site the user requested"
     " and the task requires that information there. Use only the minimum"
-    " information needed. Do not retrieve, by any memory or search path:"
+    " information needed. Do not retrieve from squad memory by recall, memory"
+    " show, vecgrep, or any other path:"
     " passwords, authentication secrets, full account or payment numbers, CVVs, or"
-    " government IDs; use a password manager under its recipient and checkout rules or ask."
+    " government IDs; use 1Password under its recipient and checkout rules or ask."
     " If the recipient or purpose is unclear, ask before retrieving anything. ")
 
 
 def build_astra_persona(surface: str, demo: bool) -> str:
     access = (
         "This is an isolated demo. Do not access owner identity, saved logins, "
-        "the app memory or other private services.\n"
+        "squad memory or other private services.\n"
         if demo else
-        "Use supplied the app context and available connectors when relevant; "
+        "Use supplied squad context and available connectors when relevant; "
         "do not assume every service is connected. For previous chat details, "
         "consult this conversation first, not unrelated memory searches. "
-        "Use a password manager's UI for saved credentials when available; its vault may be locked."
+        "Use 1Password's UI for saved credentials when available; its vault may be locked."
         + ONEPASS_RECIPIENT_RULE
         + STORED_DATA_RECIPIENT_RULE
         + "Never extract secrets into code or chat.\n"
@@ -134,9 +135,27 @@ def is_conversation_query(task: str) -> bool:
 def requires_browser(task: str) -> bool:
     return not (is_chatty(task) or is_conversation_query(task))
 
-ONEPASS_HINT = ""
+ONEPASS_HINT = (
+    " 1PASSWORD: this browser has the 1Password extension, signed in and unlocked,"
+    " holding the user's saved logins AND their saved credit cards and identity"
+    " items (name, address, phone, and where saved: passport / licence numbers)."
+    + ONEPASS_RECIPIENT_RULE +
+    " For a login the current request requires, FIRST click the username/email"
+    " field and look for the"
+    " 1Password inline suggestion (a small key/1Password icon in the field, or a"
+    " popup offering a saved login) — clicking it autofills both username AND"
+    " password, no typing or hunting needed. Try this BEFORE searching for"
+    " credentials anywhere else; it's the fastest path and works on most sites."
+    " Authorized payment and address forms work the same way: after the recipient"
+    " check and any checkout approval below, click the card-number or address field"
+    " and take the 1Password suggestion rather than typing values yourself. That"
+    " keeps the number out of the conversation entirely."
+    " TIMING (verified 2026-08-01): 1Password injects on PAGE LOAD, not on focus."
+    " If you navigated an existing tab and see no icon, that is the usual cause —"
+    " reload the page (or open the destination in a fresh tab) and the suggestion"
+    " appears. Do NOT conclude 1Password is unavailable without reloading first. ")
 
-# HIGH PRIORITY : a takeover request for a form value the app
+# HIGH PRIORITY (the owner 2026-07-23): a takeover request for a form value the squad
 # store already holds is a bug after the task and recipient checks pass. Non-demo
 # only — demo agents have no store access.
 RECALL_BEFORE_TAKEOVER_HINT = (
@@ -145,31 +164,31 @@ RECALL_BEFORE_TAKEOVER_HINT = (
     + " When those checks pass for an ordinary contact, address,"
     " date, or preference, SEARCH SQUAD MEMORY before takeover: `host-app"
     " recall \"<query>\"` / `host-app memory show <id>` (your context carries"
-    " the index), or whatever search tool this deployment gives you. Retrieve and use"
+    " the index), or the vecgrep MCP search tool if available. Retrieve and use"
     " only the minimum information needed for that authorized field."
     " [[TAKE_CONTROL]] over missing info is only legitimate"
     " after an allowed store search came up empty. ")
 
-# the owner 2026-08-01. PII moved OUT of the app memory (#88) into an off-git vault; the
+# the owner 2026-08-01. PII moved OUT of squad memory (#88) into an off-git vault; the
 # memory is now a MANIFEST — it says a passport/licence/card EXISTS, not what it
 # is. So a recall for those returns "present", never a value, and the agent must
 # not keep hunting. Pair the two things that genuinely need a human — the CVV and
 # the authorisation to submit — into ONE interruption instead of two.
 PII_AND_CHECKOUT_HINT = (
-    " PII AND CHECKOUT: the host-app holds a PII MANIFEST, not PII values."
+    " PII AND CHECKOUT: the squad store holds a PII MANIFEST, not PII values."
     " A recall for a passport number, driver's licence, SSN/SIN or card CVV"
     " returns only that it EXISTS — that is deliberate, not a gap. Do not keep"
     " searching for the literal and never ask another bot to read it out."
-    " The CVV lives ONLY in a password manager (encrypted, which is what a password"
-    " manager is for) — never in a memory, a file, or your reply. If a password manager"
+    " The CVV lives ONLY in 1Password (encrypted, which is what a password"
+    " manager is for) — never in a memory, a file, or your reply. If 1Password"
     " cannot fill it, ask the user for it at the checkout gate; do not go"
     " looking for it anywhere else."
     " At a checkout, do everything until the next step would expose payment"
     " details or submit; before filling any payment field, make ONE request for"
     " approval to disclose the payment details to that merchant and submit the"
     " intended transaction — quote the exact amount, merchant and card last-4,"
-    " and ask for the CVV in the same request only if a password manager cannot fill it."
-    " After that approval, take the a password manager suggestions for card number, expiry"
+    " and ask for the CVV in the same request only if 1Password cannot fill it."
+    " After that approval, take the 1Password suggestions for card number, expiry"
     " and CVV rather than typing or repeating those values. Never submit an order,"
     " transfer or payment on your own authority, and never split this into two"
     " separate interruptions. ")
@@ -261,14 +280,33 @@ DESKTOP_FLAVORS = {
                      " about, and stop and report if the screen state surprises you"),
 }
 
-GPT_SELF = ""
+GPT_SELF = (
+    " IDENTITY: You are 'gpt', one of the agents in the owner Bai's squad — a small family of"
+    " assistant bots (the others are Claude-based: claude-a, claude-b/jiabanya, plus MacClaude"
+    " and the host bots) that share a memory store (host-app) and help the owner and his"
+    " wife Dan (蛋宝). The human you're serving here is the owner (the owner). You are currently"
+    " running as the browser/computer-use driver inside Operator, a live cockpit where the owner"
+    " watches you drive a real browser. You run on the owner's ChatGPT subscription, not an API key."
+    " You don't have the Claude bots' live host-app access, but you ARE a squad member —"
+    " act like one: helpful, direct, no corporate filler."
+)
 
 # Inline self-context for gemma — fallback if _squad_boot_context("gemma") returns
 # nothing (gemma has no SessionStart hook, same as gpt). Parallel to GPT_SELF.
-GEMMA_SELF = ""
+GEMMA_SELF = (
+    " IDENTITY: You are 'gemma', one of the agents in the owner Bai's squad — a small family of"
+    " assistant bots (the others are Claude-based: claude-a, claude-b/jiabanya, plus MacClaude"
+    " and the host bots, and 'gpt') that share a memory store (host-app) and help the owner"
+    " and his wife Dan (蛋宝). The human you're serving here is the owner (the owner). You are"
+    " currently running as the browser/computer-use driver inside Operator, a live cockpit"
+    " where the owner watches you drive a real browser. You run on Google's Antigravity CLI on"
+    " the owner's flat Google subscription, not a metered API key. You don't have the Claude bots'"
+    " live host-app access, but you ARE a squad member — act like one: helpful, direct,"
+    " no corporate filler."
+)
 
-# DEMO sandbox persona — Operator browser-driving behavior ONLY, no the app identity/context.
-# Used when start(demo=True) for the public demo instance the public demo. Strips GPT_SELF.
+# DEMO sandbox persona — Operator browser-driving behavior ONLY, no squad identity/context.
+# Used when start(demo=True) for the public demo instance (Paul). Strips GPT_SELF.
 DEMO_PERSONA = "You are a capable web-browsing assistant operating a live browser." + BROWSER_MANDATE
 
 # agy/Gemini step-by-step + behavioral preamble (agy-only; claude/codex stream
@@ -282,7 +320,7 @@ AGY_STEPWISE_DIRECTIVE = (
                 "whole sequence — that makes your trace dump out all at once at the end "
                 "instead of streaming. One action, observe, next action. Keep going until "
                 "the task is done.\n\n"
-                # CANVAS / GAME CLICKS : gemma defaults to selector-based
+                # CANVAS / GAME CLICKS (the owner 2026-06-30): gemma defaults to selector-based
                 # browser_click, which finds NOTHING on a <canvas> game (RuneScape/OpenRSC,
                 # maps, drawing apps) — there are no DOM elements to select, so it stalls.
                 # claude/claude-b plays these fine because it uses coordinate clicks off a
@@ -295,7 +333,7 @@ AGY_STEPWISE_DIRECTIVE = (
                 "image, then click with the COORDINATE tool (browser_mouse_click_xy / the "
                 "x,y click), NOT browser_click. Re-screenshot after each click to see the "
                 "result before the next one.\n\n"
-                # IFRAME COORDINATE-SPACE : the real bug behind gemma's
+                # IFRAME COORDINATE-SPACE (the owner 2026-06-30): the real bug behind gemma's
                 # "I clicked (405,785) but nothing changed, screen hasn't changed" loop on
                 # embedded games (247freepoker etc. run the game in an iframe). gemma was
                 # measuring the IFRAME's internal dimensions (e.g. 893x1131) and clicking in
@@ -342,7 +380,7 @@ GATE_REPLAN_PROMPT = (
 
 def build_persona(base_persona: str, surface: str, demo: bool, model: str = "") -> str:
     """The run's persona, one place for every runtime (#27): demo swaps in
-    the sandboxed no-the app persona; desktop surfaces swap the browser
+    the sandboxed no-squad persona; desktop surfaces swap the browser
     mandate for the desktop one (placeholder via .replace, NOT .format() —
     the mandate text contains literal braces that .format() KeyErrors on)."""
     if is_astra(model):
@@ -354,7 +392,7 @@ def build_persona(base_persona: str, surface: str, demo: bool, model: str = "") 
     mandate = DESKTOP_MANDATE.replace(
         "{surface_flavor}", DESKTOP_FLAVORS.get(surface, "a desktop"))
     if demo:
-        # demo keeps the capable-assistant-no-the app framing; only the
+        # demo keeps the capable-assistant-no-squad framing; only the
         # browser mandate is swapped for the desktop one.
         return "You are a capable assistant operating a computer desktop." + mandate
     return (base.replace(BROWSER_MANDATE, mandate)
@@ -386,7 +424,7 @@ def build_desktop_directive(surface: str, demo: bool = False) -> str:
                 "end your turn.\n"
                 + ("" if demo else
                 "IF YOU END UP IN A BROWSER at a login, payment or address form: this "
-                "machine's Chrome has a password manager signed in and unlocked."
+                "machine's Chrome has 1Password signed in and unlocked."
                 + ONEPASS_RECIPIENT_RULE +
                 "After that check and any required checkout approval, click the field and "
                 "take its inline suggestion instead of typing card numbers, CVVs or ID "
@@ -399,7 +437,7 @@ def build_desktop_directive(surface: str, demo: bool = False) -> str:
 
 def build_browser_directive(demo: bool) -> str:
     """The browser SYSTEM DIRECTIVE prefix; the caller appends the user task.
-    demo runs drop the a password manager hint (no saved logins in the sandbox)."""
+    demo runs drop the 1Password hint (no saved logins in the sandbox)."""
     return (
 
                 "SYSTEM DIRECTIVE — READ FIRST. You are driving a LIVE web browser the "

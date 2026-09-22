@@ -26,7 +26,7 @@
     return;
   }
   // Double-tap/click on the chat rail was selecting the last word of the nearest
-  // message bubble .
+  // message bubble (the owner: "double-tap highlights the last word in the chat box").
   // Swallow the native word-select EXCEPT inside a real input/textarea, where
   // double-click-to-select-word is expected. Drag-select (mousedown+drag) for
   // copying an agent reply is unaffected — this only cancels the dblclick gesture.
@@ -438,7 +438,7 @@
       // streamer/page may still be attaching, so the steer comes back
       // ok:false ("streamer not running" / page not ready) — and setting
       // _last optimistically then swallowed the failure: the viewport stayed
-      // wrong until the user manually drag-resized . A
+      // wrong until the user manually drag-resized (the owner 2026-07-26). A
       // rejected send now clears _last and re-fires on a capped backoff.
       // ok:true with owned:true (another live viewer holds the aspect) is a
       // real answer, not a failure — no retry, exactly as before.
@@ -455,7 +455,8 @@
           // Persist for the NEXT page load. The server reads this on the
           // document request and pre-loads the viewport target, so the first
           // captured frame of a session already has the right aspect instead
-          // of opening at whatever the last viewer left . Written on
+          // of opening at whatever the last viewer left (the owner 2026-08-15,
+          // "wrong size until I resize it myself, then it snaps"). Written on
           // ok:true whatever the ownership answer — the stage is this
           // browser's own property, not the server's to grant.
           try {
@@ -573,7 +574,7 @@
     const isMobile = () => window.matchMedia('(max-width: 820px)').matches;
     function vh(){ return window.innerHeight; }
     // Snap targets: peek / the FIT notch / full. The middle stop is computed,
-    // not fixed : it's the height where the sheet's top edge
+    // not fixed (the owner 2026-07-12): it's the height where the sheet's top edge
     // sits exactly at the bottom of the full-width feed — .op-browser is
     // (100dvh - sheet - header) tall and the contain-fit frame fills the phone's
     // width when that equals vw × frame aspect. Release there = whole page
@@ -586,12 +587,13 @@
       return Math.min(0.78, Math.max(0.3, f));        // clamp: odd frames stay usable
     }
     function SNAPSNOW(){ return [0.22, fitFrac(), 0.9]; }
-    // header height (mobile, non-full) — the sheet must not grow past it .
+    // header height (mobile, non-full) — the sheet must not grow past it (the owner: maximize
+    // was colliding with the host-app header).
     function hdrH(){ const v = parseFloat(getComputedStyle(opEl).getPropertyValue('--op-hdr-h')); return v||0; }
     function setH(px){
       const maxH = vh() - hdrH() - 10;     // leave the header + a small gap clear
       // floor 0.16 (was 0.12): free-resize let the sheet collapse to a sliver
-      //  — keep handle + input row
+      // (the owner 2026-07-22 "able to drag a bit too far") — keep handle + input row
       const h = Math.max(vh()*0.16, Math.min(maxH, px));
       opEl.style.setProperty('--sheet-h', h + 'px');
       // tag nearest snap so CSS can switch the sheet into a compact 'peek' layout
@@ -613,11 +615,12 @@
       // viewport follow at drag end, exactly like the desktop rail-drag. This
       // is what broke iOS resize when the stage ResizeObserver was removed
       // (user-driven-only policy): sheet drags stopped reporting the new stage
-      // size, so the remote viewport never re-aspected . The
+      // size, so the remote viewport never re-aspected (the owner 2026-07-22). The
       // 600ms queue debounce also folds the tap-cycle's snapTo into one beacon.
       if (_stageFollow) _stageFollow(); }
       // NO snap on release — the sheet is freely resizable and keeps the dragged
-      // height .
+      // height (the owner 2026-07-22, superseding the peek/fit/full detents from
+      // 07-12: the browser pane auto-resizes now, so any height is valid).
       // Tapping the handle still cycles peek → fit → full for quick jumps.
     handle.addEventListener('pointerdown', e => { e.preventDefault();
       handle.setPointerCapture(e.pointerId); down(e.clientY); });
@@ -759,8 +762,8 @@
   // Two buttons, ONE cycle: #op-flat (the half-circle) in the chat brow and
   // the splash's sun/moon (#op-lp-theme) both step the same three stops —
   // the splash used to be a plain dark↔light flip that skipped OLED black
-  // . Two persisted axes:
-  // op_theme (dark/light, shared with the rest of host-app) and the
+  // (the owner 2026-07-28: "splash is missing the third theme"). Two persisted axes:
+  // squad_theme (dark/light, shared with the rest of host-app) and the
   // existing operator-flat-v1 — restored independently at boot, so historical
   // combos (e.g. light+flat) still render; clicking normalizes to the 3 stops.
   (function(){
@@ -769,7 +772,7 @@
     const flatBtn = document.getElementById('op-flat');
     const setTheme = (t)=>{
       document.documentElement.setAttribute('data-theme', t);
-      try { localStorage.setItem('op_theme', t); } catch {}
+      try { localStorage.setItem('squad_theme', t); } catch {}
     };
     const setFlat = (on)=>{
       if (opEl) opEl.classList.toggle('op-flat', on);
@@ -784,7 +787,8 @@
       else            { setFlat(true); }                       // default → flat
     };
     if (flatBtn) flatBtn.addEventListener('click', cycleTheme);
-    // MOBILE: the status ring doubles as the splash's menu button . A phone has no hover, so the ring's status card was
+    // MOBILE: the status ring doubles as the splash's menu button (the owner
+    // 2026-07-26). A phone has no hover, so the ring's status card was
     // unreachable and there was nowhere sane to put theme/X. Tapping the ring
     // toggles .op-menu-open, which reveals the card and slides theme + X out
     // beneath it (all CSS — see the mobile block). Desktop keeps plain hover
@@ -792,7 +796,7 @@
     const lpMark = document.getElementById('op-lp-mark');
     if (lpMark) {
       const isPhone = () => window.matchMedia('(max-width: 820px)').matches;
-      // desktop click = About card ; phone click = the menu
+      // desktop click = About card (the owner 2026-07-26); phone click = the menu
       const about = document.getElementById('op-about');
       const aboutBg = document.getElementById('op-about-backdrop');
       const aboutSet = (open) => {
@@ -848,7 +852,8 @@
       });
 
       // home button (chat brow): same complete-the-spin contract as the splash
-      // greet — the spin is class-gated so mouse-off can't reset it ; the class drops only when the double turn lands.
+      // greet — the spin is class-gated so mouse-off can't reset it (the owner
+      // 2026-07-26); the class drops only when the double turn lands.
       const homeBtn = document.getElementById('op-lp-open');
       if (homeBtn) {
         homeBtn.addEventListener('pointerenter', () => {
@@ -951,7 +956,7 @@
     if (sub !== undefined) setCardText(actSub, sub || '');
   }
   let _failRingT = null;
-  // idle status-card label: NEVER "Manual"  — it reflects the BROWSER state.
+  // idle status-card label: NEVER "Manual" (the owner) — it reflects the BROWSER state.
   // live feed → "Ready"; otherwise (connecting / signal lost / not yet attached) →
   // "Connecting". Independent of MAN/AUTO mode.
   function idleCardText() {
@@ -1090,7 +1095,7 @@
   // /frame route serves when the streamer has no real capture). Placeholder ≠
   // signal: letting its 'load' events call signalOk() had the pump clearing
   // SIGNAL LOST ~11×/s while the status poll re-asserted it every 1.5s — the
-  // Connecting↔Reconnecting word flap + class strobing .
+  // Connecting↔Reconnecting word flap + class strobing (the owner 2026-07-10).
   let _phFrame = false;
   function _afterNextPaint() {
     // Two animation frames put us on the far side of the first compositor
@@ -1203,7 +1208,7 @@
       // We HAVE a last good frame → freeze it (dimmed, small "reconnecting" chip)
       // instead of blanking to the SIGNAL LOST screen. Flapping between a live
       // frame and a full-screen overlay every few seconds read as the feed
-      // "flickering in and out" ; a static stale frame is calm.
+      // "flickering in and out" (the owner 2026-07-10); a static stale frame is calm.
       op.classList.add('op-signal-stale');
       op.classList.remove('op-signal-lost');   // overlay stays hidden — frame owns the stage
     } else {
@@ -1269,7 +1274,8 @@
   // the finished logo. Gated on the first `live` state — NOT on op-ready, which
   // flips two rAFs after parse (~32ms) and would make the animation invisible.
   // MIN_SPIN keeps a fast connect from reading as a flicker.
-  // Settle ON THE ANIMATION'S OWN LAP BOUNDARY : a timer-computed boundary drifts against the CSS
+  // Settle ON THE ANIMATION'S OWN LAP BOUNDARY (the owner 2026-07-27 "there's a
+  // halt in the middle"): a timer-computed boundary drifts against the CSS
   // animation clock (the animation starts on style apply, not script eval),
   // so the settle's one-shot turn restarted visibly mid-lap. The
   // animationiteration event IS the boundary — rotation is exactly 0deg when
@@ -1352,7 +1358,7 @@
       lockEl.className = 'op-lock' + (https ? ' secure' : (http ? ' insecure' : ''));
       lockEl.title = '';   // suppress native tooltip; we render a styled one
       lockEl.dataset.tip = (host ? host + ' — ' : '') + (https ? 'Secured with HTTPS' : (http ? 'Not secure' : ''));
-      // The page-status dot doubles as the HTTPS lock .
+      // The page-status dot doubles as the HTTPS lock (the owner 2026-07-02).
       setLockDot(https, http);
     }
     // urlEl is an editable input; don't clobber it while the user is typing in it
@@ -1363,7 +1369,7 @@
   // it (closed shackle = https, open = http). Colour rides on the .loading/.err
   // classes act() toggles, so it still shows nav status. No scheme (blank/search)
   // → clear the glyph and the dot reverts to the plain filled status dot via
-  // .op-dotstat:empty. 
+  // .op-dotstat:empty. (the owner 2026-07-02.)
   const dotEl = document.getElementById('op-dotstat');
   function setLockDot(https, http) {
     if (!dotEl) return;
@@ -1408,7 +1414,8 @@
     const m = document.createElement('div'); m.className = 'op-msg user';
     // held = a mid-run steer, parked like other AI chat UIs park a message
     // until the model reaches a boundary: dimmed at the bottom, promoted to a
-    // normal bubble when the delivery seam consumes it .
+    // normal bubble when the delivery seam consumes it (the owner 2026-09-12,
+    // replacing the 'Correction delivered' status strip).
     if (held) m.classList.add('op-held');
     const b = document.createElement('span'); b.className='bubble'; b.textContent=text;
     m.appendChild(b); log.appendChild(m); _trimOnly(); scrollToBottom(true);
@@ -1466,7 +1473,8 @@
         code = code.replace(/^\n/,'').replace(/\n$/,'');
         // TABULAR fences (ASCII tables: +---+ rules, | rows, box-drawing) are
         // destroyed by wrapping — those get pre + sideways scroll. Ordinary
-        // code keeps the wrap rule .
+        // code keeps the wrap rule (the owner 2026-07-09: chat column too narrow
+        // to pan for prose-ish code).
         const _rows = code.split('\n');
         const _tabular = _rows.length >= 2 &&
           _rows.filter(l => /^\s*[|+┌├└│┏┣┗┃]/.test(l)).length >= Math.ceil(_rows.length * 0.6);
@@ -1476,7 +1484,8 @@
         // A fence holding NOTHING BUT a table is a formatting mistake by the
         // model, not code — Gemini wraps its tables in ``` constantly, and
         // _tabular only bought them sideways scroll, so they still read as pipe
-        // soup . Promote those through _renderBlock so they become a real
+        // soup (the owner 2026-07-29: "gemini code blocks still not rendering tables
+        // right"). Promote those through _renderBlock so they become a real
         // <table>. Strict gate: every non-blank line must be a pipe row or a
         // |---| rule, and a header+separator must be present — so real code that
         // merely contains pipes (shell pipelines, ||, C bitwise) can't be
@@ -1513,7 +1522,7 @@
       const raw = lines[li_];
       // ASCII grid table (+---+ rules around | rows): Flash draws these, and
       // when its fence stutters the grid lands OUTSIDE any code block and
-      // wrapped into soup . Signature is strict — a +---+
+      // wrapped into soup (the owner 2026-07-27). Signature is strict — a +---+
       // opener, >=2 pipe rows, >=2 grid rules — so prose can't false-positive.
       const _isGrid = l => /^\s*\+[-=+]+\+\s*$/.test(l);
       if (_isGrid(raw) && li_ + 1 < lines.length && _isRow(lines[li_ + 1])){
@@ -1643,7 +1652,7 @@
   function takeControl(card){
     if (card && card.dataset.done === '1') return;
     if (card) card.dataset.done = '1';
-    // The card STAYS after takeover  as a record of the
+    // The card STAYS after takeover (the owner 2026-07-23) as a record of the
     // hand-off: mark it .done (blinker stops + dims via CSS) and turn the
     // Take-control button into a grayed, inert "Took control" — no separate
     // "Took control" system line anymore, the card carries that state itself.
@@ -1698,7 +1707,7 @@
 
   // ── Operator-style task group ("Worked for Nm" + indented steps) ──
   let _task = null, _taskStart = 0, _stepCount = 0;
-  const BOT_EMOJI = { 'claude-a':'🤖', 'claude-b':'🤖', 'gpt':'🤖', 'gemma':'✨' };
+  const BOT_EMOJI = { 'claude-b':'🦆', 'claude-a':'💣', 'gpt':'🤖', 'gemma':'✨' };
   function botEmoji(b){ return BOT_EMOJI[b] || '🤖'; }
   // gemma rides on the agy runtime; its picker FACE shows the real Gemini logo
   // (gradient 4-point star) instead of a flat emoji. HTML <option> text can't
@@ -1727,9 +1736,9 @@
     Resize:'📐', 'Handle dialog':'💬', 'Read console':'🖥️', 'Inspect network':'📡', 'Save PDF':'📄',
     Searching:'🔍', Fetching:'🔗', 'Running command':'⌨️', 'Reading file':'📄',
     'Searching files':'🔍', 'Finding files':'📁', 'Writing file':'✏️', 'Editing file':'✏️',
-    'Checking data':'📈', 'Checking data':'📊',
-    'Searching web':'🌐', 'Searching the web':'🌐', 'Searching':'🧠', 'Searching files':'🔍',
-    Recalling:'🧠', 'Checking data':'🧠', Fetching:'🔗', 'Fetching messages':'💬',
+    'Checking quote':'📈', 'Checking portfolio':'📊',
+    'Searching web':'🌐', 'Searching the web':'🌐', 'Searching memory':'🧠', 'Searching files':'🔍',
+    Recalling:'🧠', 'Checking memory':'🧠', Fetching:'🔗', 'Fetching messages':'💬',
     Listing:'📋', 'Listing resources':'📋', 'Listing files':'📁', 'Reading resource':'📖',
     'Reading console':'🖥️', 'Reading docs':'📚', 'Reading file':'📄',
     Replying:'💬', 'Sending message':'💬', Reacting:'😀', Downloading:'📥', 'Setting presence':'🟢',
@@ -1818,8 +1827,9 @@
   function actCont(label){ return ACT_CONT[label] || label; }
   // The cursor is only honest while the agent is acting AT a screen position.
   // Everything else — navigating, reading the DOM, editing a file, a web
-  // search, an a broker call — leaves it sitting on the page as a stale artifact
-  // claiming the bot is somewhere it is not .
+  // search, an IBKR call — leaves it sitting on the page as a stale artifact
+  // claiming the bot is somewhere it is not (the owner 2026-09-01: "the cursor can
+  // hide if the agent is browsing not visually").
   //
   // So this enumerates the POSITIONAL actions and hides for everything else.
   // That polarity matters: the trace emits ~90 labels and all but these are
@@ -1906,7 +1916,7 @@
     markScroll();
     // flash traces open with a bold heading then a blank line; the blank
     // renders as <br> and reads as a hole between heading and body — collapse
-    // it 
+    // it (the owner 2026-09-12)
     text = String(text).replace(/^(\s*\*\*[^\n]+\*\*)\s*\n\s*\n+/, '$1\n');
     const e=document.createElement('div'); e.className='op-task-step';
     e.innerHTML = _mdToHtml(text);   // _mdToHtml escapes first → XSS-safe
@@ -1949,7 +1959,7 @@
     const steps = _task.querySelector('.op-task-steps');
     // COALESCE consecutive identical actions: if the last step is an act-step with
     // the SAME label+detail, bump an animated ×N badge in place instead of spitting
-    // out a new line .
+    // out a new line (the owner — repeated clicks/screenshots shouldn't flood the trace).
     const _last = steps && steps.lastElementChild;
     const _sig = (label||'') + '' + (detail||'');
     const _noCoalesce = /^(Browsing|Navigating|Going back|Going forward)$/.test(label||'');   // navigations are milestones — never merge
@@ -1988,9 +1998,9 @@
     // search verbs; the query rides right after the label in muted quotes.
     const _isSearch = /search|searching|grep|finding|looking up/.test((label||'').toLowerCase());
     if (detail && _isSearch) {
-      // op-act-query rides on op-act-coord's look (Anthropic Sans, muted, inline)
+      // op-act-query rides on op-act-coord's look (DM Sans, muted, inline)
       // but opts OUT of the label row's nowrap — a search query is arbitrarily
-      // long and was clipping at the rail edge .
+      // long and was clipping at the rail edge (the owner 2026-07-29).
       const c=document.createElement('span'); c.className='op-act-coord op-act-query';
       c.textContent = '("' + detail.trim() + '")';
       lab.appendChild(c);
@@ -1998,9 +2008,9 @@
       return;
     }
     // coordinate-click detail e.g. "(420, 315)" or a drag "(120, 80) → (300, 240)":
-    // show it INLINE after the label in lighter, smaller, muted text .
+    // show it INLINE after the label in lighter, smaller, muted text (the owner's preferred).
     const _isCoord = detail && /^\(\s*-?\d/.test(detail.trim());
-    // a short duration like '2s' / '1m 3s' also goes INLINE 
+    // a short duration like '2s' / '1m 3s' also goes INLINE (the owner: Waiting matches Clicking)
     const _isDur = detail && /^\d+(\.\d+)?\s*(ms|s|m|h)(\s+\d+\s*(s|m))?$/.test(detail.trim());
     // a short element label (e.g. "Button", "Submit") also goes inline — not a URL/path/command, not long.
     const _dt = (detail||'').trim();
@@ -2107,7 +2117,8 @@
   // Manual steering fires one silent act() per gesture (move / wheel tick / drag
   // segment), so a disconnected browser used to spam one error line per gesture.
   // Coalesce: while this error is still the last chat message, leave the single
-  // line as-is — no ×N counter . The lastElementChild
+  // line as-is — no ×N counter (the owner 2026-07-21: keep it as one line until a
+  // DIFFERENT warning fires or normal conversation resumes). The lastElementChild
   // guard is what gives "until something else happens": once any other message is
   // appended, _failEl is no longer the tail, so the next failure starts a fresh line.
   const FAIL_TEXT = 'Action failed — browser disconnected';
@@ -2159,8 +2170,35 @@
 
 
   const _clearBtn = document.getElementById('op-clear');
-  if (_clearBtn) _clearBtn.addEventListener('click', () => {
+  if (_clearBtn) _clearBtn.addEventListener('click', async () => {
     if (_clearBtn.dataset.busy === '1') return;          // ignore double-tap mid-animation
+    if (!demoReadOnly && _conversationId) {
+      _clearBtn.dataset.busy = '1';
+      _clearBtn.disabled = true;
+      try {
+        const response = await fetch(OP_URLS.session_one.replace('__S__',
+          encodeURIComponent(_conversationId)) + '?fresh=1', {method: 'DELETE'});
+        const result = await response.json();
+        if (!response.ok || !result.ok) {
+          throw new Error(result.error || 'Could not delete conversation');
+        }
+        // The durable transcript is now deleted. Prevent a queued cache write
+        // or an old polling response from carrying it into a new conversation.
+        _canControl = false;
+        _sessDirty = false;
+        if (_sessPushT) clearTimeout(_sessPushT);
+        localStorage.setItem(LS_KEY, JSON.stringify({
+          _conversation_id: result.active, mode: 'auto', log: ''
+        }));
+        sessionStorage.setItem(CONVERSATION_KEY, result.active);
+        window.location.reload();
+      } catch (error) {
+        window.alert(error.message || 'Could not delete conversation');
+        _clearBtn.dataset.busy = '0';
+        _clearBtn.disabled = false;
+      }
+      return;
+    }
     _clearedAgentRun = _lastAgentRun;  // reject the discarded run, without comparing clocks across devices
     _historyEpoch++; _historyPages.delete(_conversationId || 'legacy');
     const finishClear = () => {
@@ -2170,7 +2208,8 @@
       setFollowUp();
       _clearBtn.dataset.busy='0';
       // back to a fresh idle stage → bring the launchpad back as the SOLID
-      // splash .
+      // splash (the owner 2026-07-18, superseding the 07-17 over-the-feed blur;
+      // the .op-lp-over CSS stays for now in case the presentation returns).
       try { initLaunchpad(); } catch(e){ console.error('operator: launchpad init failed', e); }
       try { const _lp = document.getElementById('op-lp');
         if (_lp) { _lp.classList.remove('op-lp-over'); _lp.hidden = false; } } catch(_){}
@@ -2435,7 +2474,7 @@
       setTimeout(() => { b.disabled = false; }, 900);   // app needs a beat to map
     });
   });
-  // taskbar auto-minimize : after a few idle seconds the
+  // taskbar auto-minimize (the owner 2026-07-11): after a few idle seconds the
   // button labels drop away (icons stay tappable); pointer over the bar
   // brings them back, leaving re-arms the timer.
   (function(){
@@ -2539,7 +2578,7 @@
     });
   }
 
-  // Code-block scroll trap fix : scrolling STICKS
+  // Code-block scroll trap fix (the owner 2026-07-21, round 2): scrolling STICKS
   // whenever the cursor/finger lands on a code block — the earlier delegate
   // (forward only when the <pre> lacks its own vertical scroll) missed cases,
   // and on iPad a touch that starts on the pre's selectable text initiates
@@ -2665,7 +2704,7 @@
     'vivino.com':'Vivino', 'strava.com':'Strava', 'fandango.com':'Fandango',
     'offerup.com':'OfferUp', 'bookshop.org':'Bookshop.org',
     'amazon.ca':'Amazon', 'ebay.com':'eBay', 'walmart.ca':'Walmart',
-    'bestbuy.ca':'Best Buy', 'tool.com':'Interactive Brokers', 'gmail.com':'Gmail',
+    'bestbuy.ca':'Best Buy', 'ibkr.com':'Interactive Brokers', 'gmail.com':'Gmail',
     'docs.google.com':'Google Docs', 'expedia.ca':'Expedia', 'x.com':'X',
     'netflix.com':'Netflix', 'weather.com':'Weather.com',
     'dominos.com':'Domino’s', 'toasttab.com':'Toast', 'gopuff.com':'Gopuff',
@@ -2835,7 +2874,7 @@
     { name: 'Compare vegetarian meal boxes', prompt: 'On Blue Apron, compare the current vegetarian meal options for two people — price per serving, prep time, and variety — against a typical grocery run.', sites: ['blueapron.com'], category: 'delivery', isExample: true },
     { name: 'Order a meeting catering box', prompt: 'On Panera, build a catering order for an eight-person morning meeting — coffee, pastries, and a bagel pack — and stop before placing it.', sites: ['panerabread.com'], category: 'delivery', isExample: true },
     { name: 'Send a birthday bouquet', prompt: 'On 1-800-Flowers, find three bouquets under $70 that can deliver tomorrow to a zip code I’ll give you, and compare what’s in each.', sites: ['1800flowers.com'], category: 'delivery', isExample: true },
-    { name: 'Join the waitlist at a hot spot', prompt: 'On Resy, check availability for a buzzy restaurant I name this weekend, add me to the notify list for a 7–8pm two-top, and show what’s bookable now.', sites: ['resy.com'], category: 'delivery', isExample: true },   // Resy waitlist is Food 
+    { name: 'Join the waitlist at a hot spot', prompt: 'On Resy, check availability for a buzzy restaurant I name this weekend, add me to the notify list for a 7–8pm two-top, and show what’s bookable now.', sites: ['resy.com'], category: 'delivery', isExample: true },   // Resy waitlist is Food (the owner 2026-07-26 audit)
     { name: 'Find a deal on a local experience', prompt: 'On Groupon, find three well-reviewed local experience deals — spa, class, or activity — under $60 and summarize the fine print on each.', sites: ['groupon.com'], category: 'local', isExample: true },
     { name: 'Find a hobby group meeting this week', prompt: 'On Meetup, find three active groups near me meeting this week around a hobby I name, and summarize when, where, and typical turnout.', sites: ['meetup.com'], category: 'local', isExample: true },
     { name: 'See what neighbors recommend', prompt: 'On Nextdoor, look through recent recommendation threads in my area for a service I name — handyman, plumber, tutor — and list the names that keep coming up.', sites: ['nextdoor.com'], category: 'local', isExample: true },
@@ -2908,7 +2947,7 @@
     { name: 'Find newsletters worth reading', prompt: 'On Substack, find three well-regarded newsletters on a topic I name, and summarize each writer’s angle and posting cadence.', sites: ['substack.com'], isExample: true },
     { name: 'Review my last chess game', prompt: 'On Lichess, open my most recent game, run the analysis, and explain my two biggest mistakes and the ideas I missed.', sites: ['lichess.org'], isExample: true },
     { name: 'Survey takes on a topic', prompt: 'On Medium, find three thoughtful recent essays on a topic I name from different viewpoints, and summarize where they agree and clash.', sites: ['medium.com'], isExample: true },
-    // ── 2026-07-26 expansion  ──
+    // ── 2026-07-26 expansion (the owner: +6 per category, Cathay Pacific in travel) ──
     { name: 'Skim buy-it-for-life picks', prompt: 'On Quora, find well-argued recommendations for three durable, buy-once everyday items, and summarize the consensus reasons.', sites: ['quora.com'], isExample: true },
     { name: 'Check the week\u2019s weather ahead', prompt: 'On Weather.com, pull the 7-day forecast for my area and flag the best two days for outdoor plans.', sites: ['weather.com'], isExample: true },
     { name: 'Cook from pantry staples', prompt: 'On Allrecipes, find three well-rated dinners built from pantry staples like canned tomatoes, beans, rice, and pasta, and list what little I\u2019d need to buy fresh.', sites: ['allrecipes.com'], isExample: true },
@@ -3013,7 +3052,7 @@
     function _taskCategory(t){
       if (t.category) return t.category;
       const sites = (t.sites || []).join(' ').toLowerCase();
-      if (/(ubereats|doordash|instacart|grubhub|opentable|resy|yelp|vivino|allrecipes)/.test(sites)) return 'delivery';   // restaurant booking/discovery is Food, not Local 
+      if (/(ubereats|doordash|instacart|grubhub|opentable|resy|yelp|vivino|allrecipes)/.test(sites)) return 'delivery';   // restaurant booking/discovery is Food, not Local (the owner 2026-07-26)
       if (/(kayak|booking|airbnb|expedia|tripadvisor|flights\.google)/.test(sites)) return 'travel';
       if (/(wikipedia|arxiv|stackoverflow|wolframalpha|coursera|wikihow|nih\.gov|investopedia|khanacademy|pubmed|docs\.python|consumerreports|nasa\.gov|loc\.gov|glassdoor|duolingo)/.test(sites)) return 'research';
       if (/(spotify|imdb|goodreads|espn|nytimes|reddit|rottentomatoes|bandcamp|fandango|justwatch|seatgeek|ticketmaster)/.test(sites)) return 'media';
@@ -3056,7 +3095,7 @@
       grid.textContent = '';
       grid.classList.toggle('op-lp-examples', showExamples);
       items.forEach(t => grid.appendChild(buildLpCard(t, lp)));
-      // Heading follows the active category  — expanded copy,
+      // Heading follows the active category (the owner 2026-07-19) — expanded copy,
       // not the pill's terse label; Browse keeps the classic line.
       const _CAT_TITLES = {
         delivery: 'Order food and groceries',
@@ -3098,7 +3137,7 @@
       clearTimeout(_gridSwapTimer);
       grid.classList.add('op-lp-fading');
       // the heading rides the same cross-fade — its text swaps mid-fade in
-      // renderGrid, so it glides instead of snapping 
+      // renderGrid, so it glides instead of snapping (the owner 2026-07-22)
       if (lpTitle) lpTitle.classList.add('op-lp-fading');
       _gridSwapTimer = setTimeout(() => {
         if (seq !== _gridSwapSeq) return;
@@ -3106,7 +3145,7 @@
         renderGrid(showExamples);
         // height morph: empty ↔ cards changes the block height in one frame —
         // pin the old height, flip to the new one next frame so the container
-        // glides instead of jumping 
+        // glides instead of jumping (the owner 2026-07-22 "jumpy")
         if (_lpInner) {
           const h1 = _lpInner.offsetHeight;
           if (h0 && h1 && h1 !== h0) {
@@ -3141,7 +3180,7 @@
     }
 
     function syncSavedToggle(){
-      // Saved is a PERMANENT category  — an empty list shows
+      // Saved is a PERMANENT category (the owner 2026-07-19) — an empty list shows
       // a minimal "No saved tasks" state instead of hiding the tab. If tasks
       // vanish while the saved view is open, repaint in place (no jarring
       // bounce back to Browse).
@@ -3242,7 +3281,7 @@
             if (!heroInput.offsetWidth) return;   // splash display:none — nothing to measure
             if (!heroInput.value) {
               // EMPTY: same reset as the rail autoGrow — a stale inline height
-              // survives the placeholder clamp on iPad Safari .
+              // survives the placeholder clamp on iPad Safari (the owner 2026-07-27).
               heroInput.style.height = '';
               heroInput.style.marginBottom = '';
               heroInput.style.overflowY = 'hidden';
@@ -3302,7 +3341,8 @@
             // opening from collapsed: render the target cards FIRST (they're
             // invisible at 0fr — no crossfade needed), THEN expand, so the
             // 0fr→1fr animation targets the REAL height. Expanding against the
-            // stale grid overshot to its height and fell back .
+            // stale grid overshot to its height and fell back (the owner 2026-07-27,
+            // "opens too much before falling back down").
             renderGrid(true);
             lp.classList.remove('op-lp-collapsed');
           } else {
@@ -3326,11 +3366,11 @@
           // Home works from MANUAL too: manual force-hides .op-lp, so the button
           // used to be hidden there (and would have been dead anyway). Flip back
           // to auto first, then open — home = "leave manual, go to the splash"
-          // .
+          // (the owner 2026-07-22 "house icon disappears in manual").
           if (MODE !== 'auto') { MODE = 'auto'; try { applyMode(); } catch(_){} }
           lp.classList.remove('op-lp-over');
           // PHONES land on the BARE splash — wordmark + composer + pills, cards
-          // only on a pill tap . Desktop keeps the open grid.
+          // only on a pill tap (the owner 2026-07-26). Desktop keeps the open grid.
           if (window.matchMedia('(max-width: 820px)').matches) {
             lp.classList.add('op-lp-collapsed');
           } else {
@@ -3348,7 +3388,7 @@
           catBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
           tasksTgl.classList.add('active'); tasksTgl.setAttribute('aria-pressed', 'true');
           if (wasCollapsed) {
-            // same render-then-expand as the category pills 
+            // same render-then-expand as the category pills (the owner 2026-07-27)
             renderGrid(false);
             lp.classList.remove('op-lp-collapsed');
           } else {
@@ -3394,7 +3434,7 @@
       // cross-fade. Examples advance the shuffle bucket; saved tasks page through
       // in windows of 6. Frozen while the user is searching or hovering a card, or
       // when the tab is backgrounded — never yank a card out from under a click. ──
-      const CYCLE_MS = 20000;   // 15s -> 20s linger 
+      const CYCLE_MS = 20000;   // 15s -> 20s linger (the owner 2026-07-26)
       let _hovered = false;
       grid.addEventListener('pointerenter', () => { _hovered = true; });
       grid.addEventListener('pointerleave', () => { _hovered = false; });
@@ -3416,7 +3456,7 @@
       if (!grid._cycle) grid._cycle = setInterval(_cycleTick, CYCLE_MS);
       // Pill taps RESET the clock: without this, a tap landing near the end of
       // a cycle showed the fresh category for a beat before rotating it away
-      // . Exposed for the pill handler below.
+      // (the owner 2026-07-26). Exposed for the pill handler below.
       window._opCycleReset = () => {
         if (!grid._cycle) return;
         clearInterval(grid._cycle);
@@ -3533,7 +3573,8 @@
     }
     // Go launches; a tap anywhere else on the card ONLY pastes the prompt into
     // the composer — the launchpad stays open and keeps browsing, tapping
-    // another card just swaps the draft . Never auto-fires. Go/Edit stopPropagation.
+    // another card just swaps the draft (the owner 2026-07-11; supersedes the
+    // 2026-07-09 close-on-tap). Never auto-fires. Go/Edit stopPropagation.
     c.addEventListener('click', () => {
       input.value = t.prompt || '';
       const heroInput = document.getElementById('op-lp-input');
@@ -3542,7 +3583,7 @@
         // The VISIBLE composer on the splash is the hero input, not #op-input. It
         // grows via its own autoGrowHero (wired to its 'input' event, out of scope
         // here). Setting .value programmatically fires no event, so a long pasted
-        // prompt stayed clamped to one row and clipped . Dispatch
+        // prompt stayed clamped to one row and clipped (the owner 2026-07-21). Dispatch
         // the event to run the grow-to-fit exactly as typing would.
         heroInput.dispatchEvent(new Event('input', { bubbles: true }));
       }
@@ -3596,11 +3637,11 @@
     // Enter pills anything; Backspace on empty pops the last.
     const COMMON = [
       // MCPs / tools first
-      {v:'playwright', tool:true}, {v:'github-mcp', tool:true}, {v:'notion-mcp', tool:true},
-      {v:'memory-search', tool:true}, {v:'discord', tool:true},
+      {v:'playwright', tool:true}, {v:'ibkr-mcp', tool:true}, {v:'host-app', tool:true},
+      {v:'vecgrep', tool:true}, {v:'discord', tool:true},
       // finance / work
       {v:'bloomberg.com'}, {v:'reuters.com'}, {v:'finviz.com'},
-      {v:'wsj.com'}, {v:'github.com'},
+      {v:'ibkr.com', ico:'interactivebrokers.com'}, {v:'github.com'},
       {v:'gmail.com', ico:'mail.google.com'}, {v:'docs.google.com'},
       // shopping / food
       {v:'amazon.ca'}, {v:'ebay.com'}, {v:'walmart.ca'}, {v:'bestbuy.ca'},
@@ -3621,7 +3662,7 @@
       {v:'strava.com'}, {v:'bookshop.org'},
     ];
     // Every site the example cards use joins the pick list with its real name
-    //  — derived from the pool so the two can't drift apart.
+    // (the owner 2026-07-22) — derived from the pool so the two can't drift apart.
     // MCPs + the hand-picked entries above keep their pinned order; the pool
     // sites append alphabetized by display label.
     _LP_EXAMPLE_POOL
@@ -3983,12 +4024,12 @@
   // expose so the +/- zoom (applyScale, defined earlier) can RE-measure the
   // model picker after a font-scale change — otherwise the width pinned at the
   // old scale stayed fixed while the bigger text needed more room, clipping the
-  // name at higher zooms .
+  // name at higher zooms (the owner 2026-07-21).
   window._opFitModel = () => {
     fitMini(document.getElementById('op-model'));
     fitMini(document.getElementById('op-effort'));
   };
-  // A cold page can receive the model roster before Anthropic Sans finishes
+  // A cold page can receive the model roster before DM Sans finishes
   // loading. fitMini then measures the narrower fallback face and pins that
   // width, leaving "GPT-5.6 Te…" in a row with acres of unused space. Refit on
   // both the current font set's completion and every later font-loading batch;
@@ -4023,7 +4064,7 @@
     opts.forEach(v => { const o=document.createElement('option');
       o.value=v; o.textContent = v; _effortSel.appendChild(o); });
     // default when nothing meaningful was chosen (prev blank/unavailable): GPT
-    // models default to 'low' , everything
+    // models default to 'low' (the owner — GPT default is 5.6 Sol low), everything
     // else to 'medium'.
     if (prev && opts.includes(prev)) _effortSel.value = prev;
     else if (m.startsWith('gpt-') && opts.includes('low')) _effortSel.value = 'low';
@@ -4075,7 +4116,7 @@
   }
   function applyMode() {
     // keep the chat fixed across AUTO⇄MAN: toggling the "Manual mode" banner changes
-    // the rail height and reflows the log, shoving it up . Capture the log's
+    // the rail height and reflows the log, shoving it up (the owner). Capture the log's
     // position before the change, restore it after the synchronous reflow.
     const _atBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 24;
     const _fromBottom = log.scrollHeight - log.scrollTop;
@@ -4108,7 +4149,7 @@
       // Finish-up hand-back: only when Operator kicked control to the user.
       // Preserve an OPEN expand across re-applies — the old blind reset
       // re-showed the trigger while the expand was open, so tapping Finish up
-      // left two "Finish up" buttons on screen . Trigger and
+      // left two "Finish up" buttons on screen (the owner 2026-07-11). Trigger and
       // expand are mutually exclusive by construction now.
       { const fin=document.getElementById('op-finish'), exp=document.getElementById('op-finish-expand'),
             fbtn=document.getElementById('op-finish-btn');
@@ -4185,7 +4226,7 @@
                        if (finBtn) finBtn.hidden = false; }, 330);
     }
     // tap/click anywhere outside the Finish-up block → minimize it back to the
-    // trigger . Capture-phase so popover handlers can't eat it.
+    // trigger (the owner 2026-07-11). Capture-phase so popover handlers can't eat it.
     document.addEventListener('click', (e)=>{
       const fin = document.getElementById('op-finish');
       if (!fin || fin.hidden || !finExp || finExp.hidden) return;
@@ -4233,7 +4274,7 @@
   // ^ guards re-emitting a turn that COMPLETED before the page loaded: on refresh the
   // server still reports the last turn's terminal state, which would otherwise re-append
   // its reply (the "last 2 messages duplicate on every refresh" bug, the owner).
-  let _errShown = false;     // one error card per turn — suppress the stacking 
+  let _errShown = false;     // one error card per turn — suppress the stacking (the owner)
   // show at most ONE error card per turn. A failing turn otherwise stacks 3-4:
   // the stderr 'error' message + the 120s watchdog + the 'error' state handler.
   // Prefer a specific reason; ignore generic follow-ups once one is shown.
@@ -4278,7 +4319,7 @@
       // the agent narrates between every tool call, so setting the verb per
       // message left the header stuck on "Thinking…" through whole action
       // streaks — the trailing narration stomped each action verb within the
-      // same poll . A narration-only batch still reads
+      // same poll (the owner 2026-07-22). A narration-only batch still reads
       // Thinking; any action in the batch wins with its own verb.
       let batchVerb = null;
       msgs.forEach((m, i) => {
@@ -4301,7 +4342,7 @@
           // the trace same as 'assistant', but NEVER let it become the reply bubble: a
           // turn that ends (or is cut off mid-loop) without a real answer should fall
           // through to the "no summary" card below, not leak a raw work-summary/checklist
-          // .
+          // (the owner 2026-06-30, #37/#40).
           taskStep(m.text);
           if (!batchVerb) batchVerb = 'Thinking';
         } else if (m.role === 'notice') {
@@ -4373,7 +4414,7 @@
       // used only a 1500ms window (_postSteerUntil) which raced: if the killed
       // run's `done` landed after the window but before the new run started, it
       // fired finishTask() with the default "Worked for 1s" — an orphan card
-      // alongside the "Steered after Xs" one . _steering is the
+      // alongside the "Steered after Xs" one (the owner 2026-07-21). _steering is the
       // real signal; the timer is only a belt-and-suspenders backstop now.
       if ((d.state === 'done' || d.state === 'error')
           && (_steering || Date.now() < _postSteerUntil)) { _handledState = d.state; return; }  // swallow the killed run's tail after a steer
@@ -4398,7 +4439,8 @@
         // on 120s of no new *message*, but a healthy agent legitimately goes quiet for
         // >2min: a long reasoning step, a slow page load, a cold start spinning up the
         // subprocess+MCP, or a natural pause mid-conversation. Those were all getting
-        // false-killed with "the agent stalled" . The server now reports `alive` (subprocess poll()==None); we gate the
+        // false-killed with "the agent stalled" (the owner: happens mid-flight, not just at
+        // start). The server now reports `alive` (subprocess poll()==None); we gate the
         // watchdog on it. A long timeout (8min) stays as a backstop for a process that's
         // alive but truly hung, so we never spin forever — but a working agent is never
         // killed for being quiet.
@@ -4424,7 +4466,7 @@
         // the list markers and the fence — while `reply` still carries them. The
         // old raw-vs-rendered compare therefore matched only plain-prose answers;
         // any answer with bold, a list or a code block failed both guards and got
-        // drawn twice, as the last trace step AND the bubble .
+        // drawn twice, as the last trace step AND the bubble (the owner 2026-08-31).
         // Whitespace is collapsed because a <li> and a <p> space out differently.
         // don't re-append a reply that's already the last bot bubble (e.g. after a
         // refresh restores the log, or repeated 'done' polls) — that caused the
@@ -4774,7 +4816,8 @@
     if (_favPop) return _favPop;
     _favPop = document.createElement('div'); _favPop.className = 'op-favpop';
     _favPop.innerHTML = '<img alt=""><span class="fp-txt"><span class="fp-t"></span><span class="fp-h"></span></span>';
-    // body, NOT .op-browser . .op-browser is `overflow: hidden` with a border-radius,
+    // body, NOT .op-browser (the owner 2026-07-25: the card was hidden under the
+    // browser window). .op-browser is `overflow: hidden` with a border-radius,
     // so it CLIPS any descendant that reaches past the pane — no z-index can
     // escape a clipping ancestor. Anchored with position:fixed off the
     // favicon's viewport rect instead.
@@ -4894,7 +4937,7 @@
           el.classList.add('op-tab-closing');   // play the close-out animation first
           // Was this the last one? Then the strip itself is about to go, and
           // :empty would cut it dead. Send it out with the same fade the
-          // toggle uses .
+          // toggle uses (the owner 2026-08-22).
           const last = el.parentNode.querySelectorAll('.op-tab:not(.op-tab-closing)').length === 0;
           setTimeout(async () => {
             try { await fetch(OP_URLS.tab_close.replace('/0','/'+t.i), {method:'POST'}); } catch {}
@@ -4943,7 +4986,7 @@
     // Keep the cursor PRESENT for the whole run. The old 5s timer hid it during
     // any stretch without a click — a typing or scrolling passage — so it read
     // as absent exactly when you were watching to see where the bot was
-    // . Re-arm while the run is live; hide once it ends, so an
+    // (the owner 2026-08-31). Re-arm while the run is live; hide once it ends, so an
     // idle stage still clears. MAN is unaffected: CSS hides this cursor there.
     clearTimeout(_agentCursor._fade);
     const _keepAlive = () => {
@@ -5001,7 +5044,7 @@
       if (d.click) showAgentClick(d.click);   // draw the agent cursor where it clicked
       // Chrome reachability, independent of the feed. On the launchpad the feed
       // rests at 'idle' whether the browser is healthy or dead, so this is the
-      // ONLY signal that distinguishes them . null = not probed
+      // ONLY signal that distinguishes them (the owner 2026-08-02). null = not probed
       // yet — leave the mark alone rather than flash a false "down".
       if (d.browser_up === false) op.classList.add('op-browser-down');
       else if (d.browser_up === true) op.classList.remove('op-browser-down');
@@ -5787,7 +5830,7 @@
       // Pin the wrap to the PAINTED height explicitly. The picker row's
       // position used to ride the negative-margin math, and iPad Safari's
       // rounding let a 3+-line draft spill onto the model picker
-      // . An explicit wrap height makes the flow
+      // (the owner 2026-07-27). An explicit wrap height makes the flow
       // engine-independent; on desktop (paintScale 1) it equals the input
       // height, i.e. a no-op.
       if (_gw) _gw.style.height = (layoutHeight * paintScale) + 'px';

@@ -115,6 +115,61 @@ def test_finished_runner_releases_room_for_another_conversation() -> None:
     assert runners.start("gpt", "three", conversation_id="conv-c")["ok"]
 
 
+def test_tab_cleanup_requires_observed_completion_not_idle_or_handoff() -> None:
+    runners = _registry()
+    r = runners.get("finished")
+    r.state, r.started_ts, r.ended_ts = "done", 10, 20
+    assert runners.tab_cleanup_candidates() == {"finished": (10, 20)}
+    for state, handoff, cancelled in [("idle", None, False),
+                                      ("running", None, False),
+                                      ("interrupted", None, True),
+                                      ("done", {"reason": "take over"}, False),
+                                      ("error", None, True)]:
+        r.state, r.handoff, r._cancel_requested = state, handoff, cancelled
+        assert runners.tab_cleanup_candidates() == {}
+
+
+def test_tab_cleanup_guard_rechecks_run_generation() -> None:
+    runners = _registry()
+    r = runners.get("finished")
+    r.state, r.started_ts, r.ended_ts = "done", 10, 20
+    closed = []
+    action = lambda: closed.append(True) or True
+    assert not runners.with_tab_cleanup_lease("unknown", (10, 20), action)
+    assert not runners.with_tab_cleanup_lease("finished", (5, 6), action)
+    assert runners.with_tab_cleanup_lease("finished", (10, 20), action)
+    r.running = True
+    assert not runners.with_tab_cleanup_lease("finished", (10, 20), action)
+    assert closed == [True]
+
+
+def test_tab_cleanup_serializes_close_with_dispatch() -> None:
+    runners = _registry()
+    r = runners.get("finished")
+    r.state, r.started_ts, r.ended_ts = "done", 10, 20
+    entered, release, started = threading.Event(), threading.Event(), threading.Event()
+
+    def close():
+        entered.set()
+        assert release.wait(2)
+        return True
+
+    cleanup = threading.Thread(target=lambda: runners.with_tab_cleanup_lease(
+        "finished", (10, 20), close))
+    dispatch = threading.Thread(target=lambda: (runners.start(
+        "gpt", "next", conversation_id="finished"), started.set()))
+    cleanup.start()
+    assert entered.wait(2)
+    dispatch.start()
+    try:
+        assert not started.wait(0.05)
+    finally:
+        release.set()
+        cleanup.join(2)
+        dispatch.join(2)
+    assert started.is_set()
+
+
 def test_deployment_drain_refuses_a_new_dispatch(tmp_path, monkeypatch) -> None:
     marker = tmp_path / "operator-deploy-drain"
     marker.write_text("deploying\n")

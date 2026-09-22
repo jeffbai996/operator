@@ -78,6 +78,11 @@ def test_unknown_tool_falls_back_to_code_chip():
         ("Using `frobnicate_widget`", "")
 
 
+def test_vecgrep_connector_preserves_brand_casing():
+    assert OT.action_label("vecgrep_mcp.list_corpora", {}) == \
+        ("Using vecgrep MCP", "Listing corpora")
+
+
 def test_booking_connector_is_a_friendly_provider_action():
     assert OT.action_label("booking_com.accommodations_search_v2", {}) == \
         ("Using Booking.com", "Searching accommodations")
@@ -201,6 +206,9 @@ def test_pure_scaffold_is_left_alone():
     beats an empty bubble."""
     scaffold_only = "Plan:\n1. Do a thing.\nStatus: Step 1 in progress."
     assert OT.strip_plan_scaffold(scaffold_only) == scaffold_only
+    assert OT.strip_plan_scaffold(scaffold_only, reject_running_plan=True) == ''
+    requested_plan = 'Plan:\n1. Choose dates.\n2. Compare hotels.'
+    assert OT.strip_plan_scaffold(requested_plan, reject_running_plan=True) == requested_plan
 
 
 def test_answer_mentioning_a_plan_mid_text_is_untouched():

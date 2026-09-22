@@ -1,13 +1,13 @@
 """operator_agent.py — run a headless Claude Code agent that drives the browser.
 
-Option 1 : the operator IS the agent. We spawn `claude -p` in a
+Option 1 (the owner 2026-06-26): the operator IS the agent. We spawn `claude -p` in a
 background thread, as the chosen persona, with the Playwright MCP pointed at the
 SAME logged-in Chrome the operator views — authenticated on the Max SUBSCRIPTION
 (claude reads ~/.claude/.credentials.json), zero metered API spend. We parse its
 stream-json output live: assistant text → the operator chat, browser tool calls
 → the action trail. No Discord, no live-session dependency, no spam.
 
-Only the host personas that can drive: claude-a + claude-b.
+Only host personas that can drive: claude-a + claude-b.
 """
 from __future__ import annotations
 
@@ -45,21 +45,21 @@ from operator_prompts import (
 # a SessionStart hook that loads the shared host-app; codex has neither, so gpt
 # was running with no idea who/what it is. Keep this short — it's prepended every turn.
 def _squad_boot_context(bot: str = "gpt") -> str:
-    """Slim the app context for Operator runs (browser tasks don't need the full digest).
+    """Slim squad context for Operator runs (browser tasks don't need the full digest).
 
     Loads:
     - SQUAD.md rulebook (behavioral rules, ~5.7k tokens)
     - SYSTEM.md roster + endpoints (~731 tokens)
     - Feedback memories — full bodies (behavioral rules must be pre-loaded)
     - Memory INDEX only for everything else (names + tags, ~2k tokens)
-    - Instruction to use host-app recall / search for deeper lookup
+    - Instruction to use host-app recall / vecgrep for deeper lookup
 
     The full digest (format_store_digest) loads ~18.9k tokens of memory bodies that
-    a browser-task agent rarely needs. Index + search covers it at ~1/10th the cost.
+    a browser-task agent rarely needs. Index + vecgrep covers it at ~1/10th the cost.
     Fail-soft: if host-app isn't importable, gpt/gemma runs without it."""
     try:
         import sys as _sys
-        _ss = os.path.expanduser("~/.host-app")
+        _ss = os.path.expanduser("~/agents/host-app")
         if _ss not in _sys.path:
             _sys.path.insert(0, _ss)
         import store as _store  # type: ignore
@@ -101,7 +101,7 @@ def _squad_boot_context(bot: str = "gpt") -> str:
         parts.append(
             "MEMORY ACCESS: The above is an index. To read a specific memory's full "
             "text: `host-app memory show <id>`. To search by topic: "
-            "`host-app recall \"<query>\"` (semantic) or search MCP tool if available."
+            "`host-app recall \"<query>\"` (semantic) or vecgrep MCP tool if available."
         )
         return "\n\n".join(parts)
     except Exception:
@@ -114,29 +114,29 @@ AGENT_BOTS = {
     "claude-a": {"label": "claude-a", "runtime": "claude",
                "config_dir": os.path.expanduser("~/.claude"),
                "cwd": os.path.expanduser("~/.operator-sessions/claude-a"),
-               "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
+               "persona": "You are Claude-a — West-coast, direct, dry." + _BROWSER_MANDATE},
     "claude-b": {"label": "claude-b", "runtime": "claude",
               "config_dir": os.path.expanduser("~/.config/claude-b"),
-              "cwd": os.path.expanduser("~/.operator-sessions/claude-b"),
-              "persona": "You are a helpful, capable computer-using assistant." + _BROWSER_MANDATE},
+              "cwd": os.path.expanduser("~/.operator-sessions/jiabanya"),
+              "persona": "You are claude-b — bilingual, efficient." + _BROWSER_MANDATE},
     # gpt-bot drives via codex (ChatGPT-sub token, NOT an API key). Its
     # ~/.codex-operator/config.toml wires playwright (Operator-only home); the
     # Unlike the Claude bots, codex has no CLAUDE.md / SessionStart hook loading
-    # host-app, so we hand gpt its the app self-context inline via _GPT_SELF.
+    # host-app, so we hand gpt its squad self-context inline via _GPT_SELF.
     "gpt": {"label": "gpt", "runtime": "codex",
             "config_dir": os.path.expanduser("~/.codex-operator"),  # Operator-only CODEX_HOME: has playwright; the interactive gpt Discord bot uses ~/.codex (no playwright) — clean platform separation
             "cwd": os.path.expanduser("~/.operator-sessions/gpt"),
-            "persona": ("You are a helpful, capable computer-using assistant." + _GPT_SELF + _BROWSER_MANDATE)},
-    # gemma drives via agy (Google Antigravity CLI) on the owner flat Google sub —
+            "persona": ("You are GPT — concise, capable." + _GPT_SELF + _BROWSER_MANDATE)},
+    # gemma drives via agy (Google Antigravity CLI) on the owner's flat Google sub —
     # the agy analog of the codex/ChatGPT-sub path. agy `-p` returns PLAIN TEXT
     # (no JSON event stream), so the live action-trace is unavailable; we surface
     # the final text only. Like gpt/codex, agy has no CLAUDE.md / SessionStart
-    # hook, so gemma gets its the app self-context inline (host-app digest if
+    # hook, so gemma gets its squad self-context inline (host-app digest if
     # reachable, else _GEMMA_SELF).
     "gemma": {"label": "gemma", "runtime": "agy",
               "config_dir": os.path.expanduser("~/.gemini"),
               "cwd": os.path.expanduser("~/.operator-sessions/gemma"),
-              "persona": ("You are a helpful, capable computer-using assistant." + _GEMMA_SELF + _BROWSER_MANDATE)},
+              "persona": ("You are Gemma — concise, capable, decisive." + _GEMMA_SELF + _BROWSER_MANDATE)},
 }
 
 # Operator's headless agent runs use dedicated cwds (above) so their sessions don't
@@ -164,7 +164,7 @@ def _ensure_steer_hook_settings(cwd: str) -> None:
     PRUNES stale entries too (2026-07-22): _STEER_HOOK_CMD is derived from
     __file__ at import time, so any earlier run of this module from a
     different checkout (a git worktree, a /tmp scratchpad copy, an old
-    the host repo clone) wrote a DIFFERENT absolute path here — and the old
+    agents-repo clone) wrote a DIFFERENT absolute path here — and the old
     match-by-exact-string dedup let those stale commands pile up forever
     instead of being replaced, since a new path never string-equals an old
     one. Every stale entry then failed on every single tool call once its
@@ -215,7 +215,7 @@ def _ensure_steer_hook_settings(cwd: str) -> None:
         hooks["PostToolUse"] = kept
 
         # The restart guard must live here too. Claude drivers may use their
-        # own user config (notably claude-b's ~/.config/claude-b), so installing it
+        # own user config (notably jiabanya's ~/.config/claude-b), so installing it
         # only in ~/.claude/settings.json leaves those Operator runs unguarded.
         # Keep exactly one canonical Bash hook and preserve every foreign hook.
         pre_groups = hooks.setdefault("PreToolUse", [])
@@ -354,7 +354,7 @@ def _resolve_claude() -> str | None:
 
 
 def _resolve_agy() -> str | None:
-    """Google Antigravity CLI (`agy`). Drives the browser on the owner flat Google
+    """Google Antigravity CLI (`agy`). Drives the browser on the owner's flat Google
     sub (no metered API key) — the agy analog of the codex/ChatGPT-sub path."""
     from shutil import which
     a = which("agy")
@@ -463,7 +463,7 @@ class AgentRunner:
                            _conversation_path(_stop_base, self.conversation_id,
                                               ".json"))
         self._session_ids: dict = {}      # bot -> last claude session id (resume)
-        self._boot_sent: dict = {}        # bot -> the app boot context DELIVERED (see dispatch)
+        self._boot_sent: dict = {}        # bot -> squad boot context DELIVERED (see dispatch)
         # NB: _boot_sent is a claim about a THREAD, not about a bot. Any path
         # that throws a thread away must go through _forget_session so the
         # claim goes with it — see that method for what happened when it did
@@ -709,14 +709,14 @@ class AgentRunner:
         self._browser_tool_calls = 0
         self._browser_contract_failed = False
         self.model, self.effort = (model or '').strip(), (effort or '').strip()
-        self.demo = bool(demo)   # demo=True → sandboxed: no the app context/identity
+        self.demo = bool(demo)   # demo=True → sandboxed: no squad context/identity
         # default the claude runtime to Sonnet 5 / medium when nothing was picked
         # (empty model would otherwise drop the flag and use the CLI's own default).
         if b.get("runtime") == "claude":
             if not self.model:  self.model = "claude-sonnet-5"
             if not self.effort: self.effort = "medium"
         elif b.get("runtime") == "codex":
-            # gpt/codex default: 5.6 Sol / low , matching the UI
+            # gpt/codex default: 5.6 Sol / low (the owner 2026-07-09), matching the UI
             # picker default. Without the effort default, an unset effort drops the
             # -c flag and codex falls back to its config.toml default (xhigh) —
             # needless token burn for browser tasks.
@@ -773,7 +773,7 @@ class AgentRunner:
             cwd = os.path.join(parent, _conversation_slug(self.conversation_id))
         os.makedirs(cwd, exist_ok=True)
         if b.get("runtime") == "claude":
-            # The base session directory can carry the bot's CLAUDE.md (claude-a
+            # The base session directory can carry the bot's CLAUDE.md (Claude-a
             # does in production). A blank scoped cwd would silently drop those
             # instructions, so project the stable instruction file while every
             # conversation keeps its own writable directory and hook settings.
@@ -853,7 +853,7 @@ class AgentRunner:
         self._agy_answer_steps = set()
         self._agy_noprogress_streak = 0  # consecutive thinking-only planner steps (no
                                           # tool_calls, no content) — the "overthink loop"
-                                          # counter 
+                                          # counter (the owner 2026-06-30, #40)
         self._agy_loop_warned = False    # one-shot stuck-in-a-loop warning per run
         # §2.1 runtime-agnostic repeat-action guard (per-run counters)
         self._last_action_key = ""
@@ -891,7 +891,7 @@ class AgentRunner:
             task, _surface, getattr(self, "demo", False), model=self.model,
             conversation_only=getattr(self, "_conversation_only", False))
         env = dict(os.environ)
-        env["OPERATOR_BOT"] = self.bot or ""   # action-tap stamps the right bot
+        env["SQUAD_STORE_BOT"] = self.bot or ""   # action-tap stamps the right bot
         env["OPERATOR_SURFACE"] = _surface        # control MCP reads the surface
         env["OPERATOR_CONVERSATION_ID"] = self.conversation_id
         env["OPERATOR_STOP_PATH"] = self._stop_path
@@ -931,10 +931,10 @@ class AgentRunner:
         # codex/agy have no hook, so their first turn folds it into the prompt
         # (resumes already carry it — don't re-send).
         _boot_bot = {"codex": "gpt", "agy": "gemma"}.get(self._runtime)
-        # A resume alone is NOT proof the thread ever received the app
+        # A resume alone is NOT proof the thread ever received the squad
         # context: a thread created before this wiring existed resumes
         # context-less forever — which is why gemma behaved like a naive bot
-        # with no the app priors . Delivery is tracked per bot
+        # with no squad priors (the owner 2026-07-26). Delivery is tracked per bot
         # in state; a resumed thread that never got it gets the context folded
         # into THIS turn's prompt instead of never.
         _boot = ""
@@ -975,7 +975,7 @@ class AgentRunner:
         _errf = _tf.TemporaryFile(mode="w+", encoding="utf-8")
         try:
             self._proc = subprocess.Popen(
-                cmd, cwd=(os.path.expanduser(os.environ.get("OPERATOR_SANDBOX_WORKSPACE", "~/.operator-sandbox/workspace"))
+                cmd, cwd=(os.path.expanduser("~/local-projects/operator-demo/workspace")
                           if getattr(self, "demo", False)
                           else self.cwd_for(self.bot or "")), env=env,
                 stdin=subprocess.PIPE if native_codex else subprocess.DEVNULL,
@@ -988,7 +988,7 @@ class AgentRunner:
                 operator_workspace.correction_status(message_id, 'delivered')
             self._steer_delivery_ids = []
             if _boot and _boot_bot:
-                # the app context is in this run's prompt — record delivery so
+                # squad context is in this run's prompt — record delivery so
                 # resumes stop re-sending ~26k chars every turn
                 self._boot_sent[_boot_bot] = True
                 self._save_state()
@@ -1246,7 +1246,7 @@ class AgentRunner:
     # Never auto-kills the run (same policy as the agy guard, the owner 2026-06-30).
     _REPEAT_ACTION_STREAK = 3
 
-    # Rolling-window loop detection . The exact-key streak
+    # Rolling-window loop detection (the owner 2026-08-02). The exact-key streak
     # above only fires on IDENTICAL, STRICTLY CONSECUTIVE calls, which misses
     # the failure that actually happens: a run clicking DIFFERENT wrong
     # coordinates, with a screenshot between each, so every call resets the
@@ -1351,7 +1351,7 @@ class AgentRunner:
         acts the same way, reads, acts the same way. That is what ran on the
         desktop surface: perceive / game_macro alternating fourteen times and
         then a 123-step macro, typing into a field it never cleared, with
-        neither detector able to see it .
+        neither detector able to see it (the owner 2026-08-31).
 
         So keep a coarse SHAPE per acting call that reads do not erase: the
         tool plus its target bucket, never the payload — retyped text differs
@@ -1730,6 +1730,17 @@ class AgentRunner:
                 if not waiting:
                     return  # already injected by the runtime hook
                 self._steer_delivery_ids.extend(s['id'] for s in waiting if s.get('id'))
+                # Carry the interrupted run's own words into the durable
+                # transcript BEFORE killing it. This branch drops the resume
+                # id, so the replacement starts a fresh session and is briefed
+                # from `_transcript` — and assistant text only ever landed
+                # there on a CLEAN finish, which an interrupted run never
+                # reaches. Without this the replacement inherits the original
+                # task and the steer and nothing in between, so it re-plans
+                # from the top: the owner steered mid-booking and watched it go
+                # back to comparing hotels (2026-09-16, "completely lost the
+                # thread outta nowhere").
+                self._carry_progress_forward()
                 self._redirect_prompt = (operator_steer.followup_prompt(waiting)
                     + '\nThe previous run was interrupted for this correction. Keep the existing job. '
                       'An in-flight external action may have completed: inspect its outcome before '
@@ -1749,6 +1760,22 @@ class AgentRunner:
         except Exception:
             operator_workspace.correction_status(message_id, 'failed')
             _log.warning('steering acknowledgement unavailable for run %s', run_id)
+
+    def _carry_progress_forward(self) -> None:
+        """Put what this run last said into the shared transcript.
+
+        Only the run's own assistant text, and only if it said anything — an
+        interrupted run that produced nothing adds nothing, rather than a
+        placeholder the next turn would have to interpret."""
+        said = [m.get("text") for m in self.messages
+                if m.get("role") == "assistant" and (m.get("text") or "").strip()]
+        if not said:
+            return
+        self._transcript.append({
+            "role": "assistant",
+            "text": ("[interrupted mid-task. This is how far it had got.]\n"
+                     + said[-1])[:1500]})
+        self._transcript = self._transcript[-40:]
 
     def _steer_followup_check(self) -> str:
         """Exit-seam steer delivery (1.0.12): a clean exit with steers still
@@ -1935,15 +1962,16 @@ class AgentRunner:
     def _forget_session(self, bot: str) -> None:
         """Drop a bot's resumable thread AND the record of having briefed it.
 
-        These two have to move together. The the app boot context is folded into
+        These two have to move together. The squad boot context is folded into
         a runtime's FIRST turn (codex/agy have no SessionStart hook), gated on
         `resume_id and boot_sent` — the point being not to re-send it down a
         thread that already has it. But a user stop pops the resume id so the
         next turn starts FRESH, and boot_sent stayed True: the fresh thread was
         judged already-briefed and got nothing. No task memory, because it is a
-        new thread; no the app priors, because we thought we had already sent
+        new thread; no squad priors, because we thought we had already sent
         them. Gemma answered "what would you like me to look up?" instead of
-        searching the app memory as its own prompt instructs .
+        searching squad memory as its own prompt instructs (the owner 2026-07-30,
+        "doesn't seem to have any context whatsoever").
         """
         self._session_ids.pop(bot or "", None)
         # _boot_sent is keyed by BOT name ("gemma"/"gpt") — the same key

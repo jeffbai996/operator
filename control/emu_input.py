@@ -11,10 +11,10 @@ A GBA game is button-driven, not click-addressable — so this is a distinct
 tool from click_target, exposed only on the desktop-sandbox surface.
 
 Connection: chromium in the sandbox binds --remote-debugging-port on loopback;
-sandbox_container's in-container bridge re-exposes it on the container IP
-(sandbox_cdp_url()). We connect_over_cdp there and find the tab whose page has
-window.EJS_emulator. A dedicated event-loop thread owns the attach (same shape
-as BrowserSurface) so a wedged page fails one call, never the controller.
+the MCP owns a host-loopback docker-exec tunnel to that endpoint. We
+connect_over_cdp there and find the tab whose page has window.EJS_emulator. A
+dedicated event-loop thread owns the attach (same shape as BrowserSurface) so a
+wedged page fails one call, never the controller.
 """
 from __future__ import annotations
 

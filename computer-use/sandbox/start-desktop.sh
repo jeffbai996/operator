@@ -1,12 +1,11 @@
 #!/bin/bash
 # Boot the isolated desktop: Xvfb :1 → dbus → a full XFCE4 session → chromium.
 set -e
-# Compact 5:4 geometry; keep in sync with sandbox_container.GEOMETRY;
-# keep in sync with sandbox_container.GEOMETRY
+# Compact 5:4 geometry; keep in sync with sandbox_container.GEOMETRY.
 # A stale X lock survives an unclean stop (same persistence class as the
 # chromium SingletonLock below) and makes Xvfb refuse to start ("Server is
-# already active for display 1") -> the whole desktop wedges on restart.
-# Clear it -- it's only meaningful within one boot.
+# already active for display 1") → the whole desktop wedges on restart
+# (hit live 2026-07-11). Clear it — it's only meaningful within one boot.
 rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
 Xvfb :1 -screen 0 960x768x24 -nolisten tcp &
 # clients all read DISPLAY from env — never pass a --display flag (openbox 3.6
@@ -52,14 +51,26 @@ dbus-launch --exit-with-session startxfce4 &
 for i in $(seq 1 40); do xdotool search --class xfdesktop >/dev/null 2>&1 && break; sleep 0.25; done
 # belt-and-braces: pin to one workspace even if an old xfconf survives
 xdotool set_num_desktops 1 || true
-# The home volume PERSISTS across container restarts, and so does chromium's
-# SingletonLock — it points at the *previous* run's PID+hostname. On restart
-# that PID is gone but chromium sees the lock and refuses to start ("profile
-# appears to be in use by another Chromium process on another computer") → the
-# in-VM browser silently never launches. Clear the stale lock on every boot;
-# it's only meaningful within one live session.
+# The home volume PERSISTS across container restarts (v1.0.3), and so does
+# chromium's SingletonLock — it points at the *previous* run's PID+hostname.
+# On restart that PID is gone but chromium sees the lock and refuses to start
+# ("profile appears to be in use by another Chromium process on another
+# computer") → the in-VM browser silently never launches. Clear the stale lock
+# on every boot; it's only meaningful within one live session (2026-07-09).
 rm -f "$HOME/.config/chromium/Singleton"* 2>/dev/null || true
-# boot with a visible app so a fresh sandbox never reads as a dead feed
-chromium --no-sandbox --test-type --no-first-run --start-maximized https://www.google.com >/dev/null 2>&1 &
+# boot with a visible app so a fresh sandbox never reads as a dead feed.
+# SwiftShader flags: the container has no GPU and Chrome 139+ refuses software
+# WebGL without the explicit opt-in — without these, any WebGL page (EmulatorJS
+# game harness: mGBA aborted on GLctx, "Failed to start game", 2026-07-21)
+# dies while normal 2D pages mask the gap.
+# --remote-debugging-port: a loopback CDP endpoint the emu_input tool drives
+# EmulatorJS through (gameManager.simulateInput) — the emulator ignores X11
+# keys, so button input has to go via the page's own JS API. Chrome only binds
+# CDP stays on container loopback; the host-side MCP reaches it through a
+# short-lived docker-exec stdio tunnel bound only to host loopback.
+chromium --no-sandbox --test-type --no-first-run --start-maximized \
+  --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader \
+  --remote-debugging-port=9223 \
+  https://www.google.com >/dev/null 2>&1 &
 # keep the container alive
 sleep infinity

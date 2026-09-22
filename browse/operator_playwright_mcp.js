@@ -17,12 +17,35 @@ function moduleRoot() {
     path.join(__dirname, 'node_modules');
 }
 
+const VIEWPORT_LOCK = Symbol('operatorViewportLock');
+
+function lockViewport(page) {
+  if (!page || page[VIEWPORT_LOCK]) return page;
+  // Playwright exposes browser_resize for ordinary private contexts. Operator
+  // is different: every conversation shares one visible Chrome target and the
+  // cockpit alone maps that target to the viewer's stage. A resize tool call
+  // leaves Emulation.setDeviceMetricsOverride behind even after MCP exits
+  // (live reproduction: 1280 -> 1024 device px / 819 CSS px), so the streamer
+  // later restoring 1280 looks exactly like a zoom-in/zoom-out spasm. Keep the
+  // tool schema for client compatibility, but make Page.setViewportSize inert
+  // on this process's page objects. The cockpit remains the single writer.
+  Object.defineProperty(page, 'setViewportSize', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: async () => null,
+  });
+  Object.defineProperty(page, VIEWPORT_LOCK, { value: true });
+  return page;
+}
+
 function createOwnedContext(real, initialPage, onAdopt = null) {
   const owned = new Set();
   const ownedEvents = new EventEmitter();
 
   const adopt = (page, emit = false) => {
     if (!page || owned.has(page)) return page;
+    lockViewport(page);
     owned.add(page);
     if (typeof page.once === 'function') page.once('close', () => owned.delete(page));
     if (typeof onAdopt === 'function') {
@@ -128,7 +151,11 @@ async function main() {
   const { createConnection } = require(path.join(root, '@playwright/mcp'));
   const { StdioServerTransport } = require(path.join(root, 'playwright-core/lib/utilsBundle'));
 
-  const browser = await chromium.connectOverCDP(endpoint, { timeout: 30000 });
+  // Workspace downloads belong to the persistent bridge, not Playwright's
+  // short-lived artifacts directory. Keep legacy/demo connections unchanged.
+  const browser = await chromium.connectOverCDP(endpoint, {
+    timeout: 30000, ...(process.env.OPERATOR_RUN_ID ? { noDefaults: true } : {})
+  });
   const real = browser.contexts()[0];
   if (!real) throw new Error('Operator Chrome has no browser context');
   const initialPage = await findTarget(real, wanted);
@@ -146,7 +173,7 @@ async function main() {
   await connection.connect(new StdioServerTransport());
 }
 
-module.exports = { createOwnedContext, findTarget, targetId };
+module.exports = { createOwnedContext, findTarget, lockViewport, targetId };
 
 if (require.main === module) {
   main().catch(error => {

@@ -47,6 +47,8 @@ class FakeSess:
             return {"data": _JPEG_B64}
         if method == "Page.getLayoutMetrics":
             return {"visualViewport": {"clientWidth": 1280, "clientHeight": 800}}
+        if method == "Page.addScriptToEvaluateOnNewDocument":
+            return {"identifier": f"zoom-{len(self.sent)}"}
         return {}
 
     async def detach(self):
@@ -95,12 +97,13 @@ class FakeCtx:
         self.pages = [FakePage(self) for _ in range(n_pages)]
         self.sess = FakeSess()
         self.new_pages = 0
+        self.init_scripts = []
 
     async def new_cdp_session(self, page):
         return self.sess
 
     async def add_init_script(self, script):
-        pass
+        self.init_scripts.append(script)
 
     async def new_page(self):
         self.new_pages += 1
@@ -198,9 +201,51 @@ def test_first_viewer_demand_starts_closed_chrome(monkeypatch):
     assert s._user_closed is False
 
 
+def test_demand_launcher_pins_the_streamers_cdp_port(monkeypatch, tmp_path):
+    """The generic browser launcher defaults to the bots' :9224 Chrome.
+
+    Operator must pass the port from its own CDP URL or a healthy bot browser
+    makes the launcher return successfully while the cockpit's :9222 remains
+    dead.
+    """
+    launcher = tmp_path / "chrome-attach.sh"
+    launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(OV, "CDP_URL", "http://127.0.0.1:9222")
+    monkeypatch.setattr(
+        OV._Streamer, "_chrome_attach_script", staticmethod(lambda: str(launcher)))
+
+    import subprocess
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    OV._Streamer()._launch_chrome()
+
+    assert calls[0][1]["env"]["BROWSE_CHROME_PORT"] == "9222"
+
+
+def test_demand_start_waits_for_chrome_to_bind_cdp(monkeypatch):
+    """Windows `start` returns before Chrome opens its debugging socket."""
+    s = OV._Streamer()
+    probes = iter([False, False, False, True])
+    launches = []
+    monkeypatch.setattr(s, "_cdp_alive", lambda: next(probes))
+    monkeypatch.setattr(s, "_launch_chrome", lambda: launches.append("launch"))
+    monkeypatch.setattr(OV.time, "sleep", lambda _seconds: None)
+
+    s._ensure_chrome_alive()
+
+    assert launches == ["launch"]
+    assert s._user_closed is False
+
+
 def test_chrome_attach_script_honors_launcher_override(monkeypatch):
-    """operator-fam's :9333 Windows profile uses its own scheduled-task
-    launcher; the standalone override must win over every default."""
+    """A standalone instance's custom launcher must win over every default."""
     monkeypatch.setenv("OPERATOR_CHROME_LAUNCHER", "~/local-projects/operator-fam/opfam-chrome.sh")
     import os
     assert OV._Streamer._chrome_attach_script() == os.path.expanduser(
@@ -231,10 +276,22 @@ def test_closed_chrome_stays_closed_without_operator_demand(monkeypatch):
     assert "operator-chrome-boot" not in source
 
 
+def test_passive_tab_poll_does_not_launch_closed_chrome(monkeypatch):
+    """The cockpit polls /tabs every 2.5s even before a task is started."""
+    s = OV._Streamer()
+    monkeypatch.setattr(
+        s, "ensure_running",
+        lambda: pytest.fail("passive tab inventory launched Chrome"),
+    )
+
+    assert s.list_tabs() == []
+
+
 def test_failed_demand_start_aborts_before_playwright(monkeypatch):
     """If the launcher cannot restore CDP, fail clearly instead of leaking a
     Playwright driver that can never attach."""
     s = OV._Streamer()
+    monkeypatch.setattr(OV, "_CHROME_START_TIMEOUT", 0.0)
     monkeypatch.setattr(s, "_cdp_alive", lambda: False)
     monkeypatch.setattr(s, "_launch_chrome", lambda: None)
 
@@ -357,7 +414,10 @@ def test_attach_existing_real_page_is_left_alone(monkeypatch, streamer):
 def test_attach_prefers_restored_real_page_over_launcher_blank(monkeypatch, streamer):
     """A persistent profile can restore useful tabs while Chrome also creates
     a synthetic about:blank launcher tab. The cockpit must show the restored
-    work, not promote the synthetic blank and stream a black rectangle."""
+    work, not promote the synthetic blank and stream a black rectangle.
+    With no front-tab signal the newest restored page wins (2026-09-22:
+    creation order used to promote the oldest, which on a re-attach is
+    Chrome's original New Tab)."""
     ctx = FakeCtx(n_pages=3)
     ctx.pages[1].url = "https://example.com/dashboard"
     ctx.pages[2].url = "https://example.com/reports"
@@ -366,7 +426,7 @@ def test_attach_prefers_restored_real_page_over_launcher_blank(monkeypatch, stre
 
     asyncio.run(streamer._attach())
 
-    assert streamer._page is ctx.pages[1]
+    assert streamer._page is ctx.pages[2]
     assert streamer._page.fronted == 1
     navs = [p for m, p in ctx.sess.sent if m == "Page.navigate"]
     assert not navs, "restored pages must be preserved, not replaced with home"
@@ -415,8 +475,32 @@ def test_attach_applies_persisted_nondefault_zoom_to_current_page(monkeypatch, s
 
     asyncio.run(streamer._attach())
 
-    assert any("document.documentElement.style.zoom" in expr and args == (0.7,)
-               for expr, args in ctx.pages[0].evaluated)
+    zoom_scripts = [params for method, params in ctx.sess.sent
+                    if method == "Page.addScriptToEvaluateOnNewDocument"]
+    assert zoom_scripts, "page zoom must be pinned on the target before navigation"
+    assert "0.7" in zoom_scripts[-1]["source"]
+    assert zoom_scripts[-1]["runImmediately"] is True
+    assert "DOMContentLoaded" not in zoom_scripts[-1]["source"], \
+        "waiting for DOMContentLoaded paints one frame at 100% before zooming"
+
+
+def test_zoom_change_replaces_the_navigation_script(monkeypatch, streamer):
+    """Menu zoom must survive the next navigation without accumulating a
+    stale neutral script that can win in an undefined init-script order."""
+    ctx = FakeCtx(n_pages=1)
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+
+    asyncio.run(streamer._force_desktop_page(streamer._page))
+    streamer.zoom = 0.9
+    asyncio.run(streamer._pin_page_zoom(streamer._page, ctx.sess))
+
+    adds = [p for m, p in ctx.sess.sent
+            if m == "Page.addScriptToEvaluateOnNewDocument"]
+    assert len(adds) == 2 and "1.0" in adds[0]["source"] and "0.9" in adds[1]["source"]
+    assert any(m == "Page.removeScriptToEvaluateOnNewDocument"
+               for m, _ in ctx.sess.sent), \
+        "the old zoom script must be removed before the new one is installed"
 
 
 def test_teardown_preserves_error_status(streamer):
@@ -470,6 +554,32 @@ def test_clear_emulation_keeps_active_metrics_session_attached(streamer):
     assert ctx.sess.detached == 0
     assert any(method == "Emulation.setDeviceMetricsOverride"
                for method, _ in ctx.sess.sent)
+
+
+def test_run_end_restore_never_clears_the_visible_page(streamer):
+    """A run boundary is routine, not a repair gesture. Clearing the active
+    target before re-applying Operator's viewport paints a native-width frame
+    between the two calls — the visible zoom-in/zoom-out pulse."""
+    class PerPageCtx(FakeCtx):
+        def __init__(self):
+            super().__init__(n_pages=2)
+            self.by_page = {page: FakeSess() for page in self.pages}
+
+        async def new_cdp_session(self, page):
+            return self.by_page[page]
+
+    ctx = PerPageCtx()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+
+    result = asyncio.run(streamer._restore_operator_view())
+
+    active_calls = [m for m, _ in ctx.by_page[ctx.pages[0]].sent]
+    background_calls = [m for m, _ in ctx.by_page[ctx.pages[1]].sent]
+    assert result["ok"] is True
+    assert "Emulation.setDeviceMetricsOverride" in active_calls
+    assert "Emulation.clearDeviceMetricsOverride" not in active_calls
+    assert "Emulation.clearDeviceMetricsOverride" in background_calls
 
 
 def test_capture_and_metrics_share_the_same_persistent_target_session(streamer):
@@ -617,6 +727,7 @@ def test_capture_repairs_collapsed_viewport(streamer):
     ctx.sess = CollapsedSess()
     streamer._browser = FakeBrowser(ctx)
     streamer._page = ctx.pages[0]
+    streamer._page.url = "https://example.test/"
     streamer._cdp = ctx.sess
     streamer._cdp_for = streamer._page
 
@@ -631,6 +742,134 @@ def test_capture_repairs_collapsed_viewport(streamer):
     assert streamer.vw >= 320
     assert any(method == "Emulation.setDeviceMetricsOverride"
                for method, _ in ctx.sess.sent)
+
+
+@pytest.mark.parametrize("foreign_width", [1024, 1250])
+def test_capture_repairs_foreign_viewport_without_clear_flash(
+        streamer, foreign_width):
+    """Playwright/browser clients can replace Operator's width override.
+
+    1024 is the obvious browser_resize case. 1250 is the subtler live failure:
+    a 30px drift from Operator's 1280px layout survived the old 48px deadband,
+    changed the capture regime, and made the browser pulse while navigating.
+    Both are plausible desktop CSS widths, so device-width ownership must
+    catch them without a clear-first flash.
+    """
+    class ForeignSess(FakeSess):
+        def __init__(self):
+            super().__init__()
+            self.width = foreign_width
+
+        async def send(self, method, params=None):
+            self.sent.append((method, params))
+            if method == "Emulation.setDeviceMetricsOverride":
+                self.width = params["width"]
+                return {}
+            if method == "Page.getLayoutMetrics":
+                return {
+                    "layoutViewport": {"clientWidth": self.width,
+                                       "clientHeight": 768},
+                    "cssLayoutViewport": {"clientWidth": self.width,
+                                          "clientHeight": 768},
+                }
+            if method == "Page.captureScreenshot":
+                return {"data": _JPEG_B64}
+            return {}
+
+    ctx = FakeCtx(n_pages=1)
+    ctx.sess = ForeignSess()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer._page.url = "https://example.test/"
+    streamer._cdp = ctx.sess
+    streamer._cdp_for = streamer._page
+
+    for _ in range(OV.REPAIR_AFTER_MISSES):
+        asyncio.run(streamer._grab(streamer._page))
+
+    methods = [method for method, _ in ctx.sess.sent]
+    assert "Emulation.setDeviceMetricsOverride" in methods
+    assert "Emulation.clearDeviceMetricsOverride" not in methods
+    assert ctx.sess.width >= OV.DESKTOP_LAYOUT_MIN_W
+
+
+@pytest.mark.parametrize("healthy_width", [1265, 1280, 1295])
+def test_scrollbar_compensation_widths_are_not_foreign(healthy_width):
+    """The ownership deadband still admits the real +/-15px scrollbar band."""
+    assert not OV.device_metrics_drifted(healthy_width, 1280)
+
+
+def test_privileged_chrome_page_does_not_enter_viewport_repair_loop(streamer):
+    """Chrome's own pages ignore emulation; retrying only creates a pulse.
+
+    The live recorder showed chrome://new-tab-page stuck at 1190px and a
+    force-desktop repair every ~30 seconds. Operator cannot own those pixels,
+    so it must leave them alone until an ordinary web target is active.
+    """
+    class ChromePageSess(FakeSess):
+        async def send(self, method, params=None):
+            self.sent.append((method, params))
+            if method == "Page.getLayoutMetrics":
+                return {
+                    "layoutViewport": {"clientWidth": 1190,
+                                       "clientHeight": 768},
+                    "cssLayoutViewport": {"clientWidth": 1190,
+                                          "clientHeight": 768},
+                }
+            if method == "Page.captureScreenshot":
+                return {"data": _JPEG_B64}
+            return {}
+
+    ctx = FakeCtx(n_pages=1)
+    ctx.sess = ChromePageSess()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer._page.url = "chrome://new-tab-page/"
+    streamer._cdp = ctx.sess
+    streamer._cdp_for = streamer._page
+
+    for _ in range(3 * OV.REPAIR_AFTER_MISSES):
+        asyncio.run(streamer._grab(streamer._page))
+
+    assert not any(method == "Emulation.setDeviceMetricsOverride"
+                   for method, _ in ctx.sess.sent)
+
+
+def test_foreign_viewport_dud_repairs_go_dormant(streamer):
+    """A competing metrics writer must not trigger a visible repair forever."""
+    class ForeignWedgedSess(FakeSess):
+        async def send(self, method, params=None):
+            self.sent.append((method, params))
+            if method == "Page.getLayoutMetrics":
+                return {
+                    "layoutViewport": {"clientWidth": 1190,
+                                       "clientHeight": 768},
+                    "cssLayoutViewport": {"clientWidth": 1190,
+                                          "clientHeight": 768},
+                }
+            if method == "Page.captureScreenshot":
+                return {"data": _JPEG_B64}
+            # Deliberately ignore setDeviceMetricsOverride: this models an
+            # active foreign session immediately replacing Operator's write.
+            return {}
+
+    ctx = FakeCtx(n_pages=1)
+    ctx.sess = ForeignWedgedSess()
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer._page.url = "https://example.test/"
+    streamer._cdp = ctx.sess
+    streamer._cdp_for = streamer._page
+    streamer._repair_backoff = 0.0
+
+    for _ in range(3 * OV.REPAIR_AFTER_MISSES + 2):
+        asyncio.run(streamer._grab(streamer._page))
+        streamer._repair_ts = 0.0
+
+    repairs = sum(method == "Emulation.setDeviceMetricsOverride"
+                  for method, _ in ctx.sess.sent)
+    assert repairs == 3
+    assert streamer._repair_dormant is True
 
 
 def test_idle_stage_resize_publishes_a_fresh_frame_before_return(monkeypatch, streamer):
@@ -659,7 +898,7 @@ def test_idle_stage_resize_publishes_a_fresh_frame_before_return(monkeypatch, st
     assert streamer.frame_ts > 0
 
 
-def test_agent_run_falling_edge_triggers_one_sweep(monkeypatch, streamer):
+def test_agent_run_falling_edge_triggers_one_restore(monkeypatch, streamer):
     """While an agent runs the streamer must NOT touch emulation (it would
     fight a run that resized deliberately); the moment the run ends, exactly
     one sweep fires."""
@@ -669,12 +908,12 @@ def test_agent_run_falling_edge_triggers_one_sweep(monkeypatch, streamer):
     monkeypatch.setattr(OV, "IDLE_STOP_AFTER", 30.0)
     monkeypatch.setattr(OV, "FRAME_INTERVAL", 0.01)
 
-    sweeps = []
+    restores = []
 
-    async def _fake_sweep():
-        sweeps.append(time.monotonic())
+    async def _fake_restore():
+        restores.append(time.monotonic())
         return {"ok": True, "cleared": 1, "failed": 0}
-    monkeypatch.setattr(streamer, "_clear_emulation", _fake_sweep)
+    monkeypatch.setattr(streamer, "_restore_operator_view", _fake_restore)
 
     # busy for 2 polls, then idle; stop the loop a few iterations later
     seq = iter([True, True, False, False, False])
@@ -690,7 +929,8 @@ def test_agent_run_falling_edge_triggers_one_sweep(monkeypatch, streamer):
 
     streamer._running = True
     streamer._run()
-    assert len(sweeps) == 1, f"exactly one sweep on run end, got {len(sweeps)}"
+    assert len(restores) == 1, \
+        f"exactly one non-flashing restore on run end, got {len(restores)}"
 
 
 def test_reset_view_steer_action(streamer):
@@ -773,8 +1013,15 @@ def test_walked_zone_never_repairs_only_collapse_band_does(streamer):
             if method == "Page.captureScreenshot":
                 return {"data": _JPEG_B64}
             if method == "Page.getLayoutMetrics":
-                return {"layoutViewport": {"clientWidth": self.width,
-                                           "clientHeight": 634}}
+                # The historic walk was in CSS space while Operator still
+                # owned the 1280px device canvas. Do not conflate that with a
+                # foreign browser_resize, which the dedicated test covers.
+                return {
+                    "layoutViewport": {"clientWidth": 1280,
+                                       "clientHeight": 800},
+                    "cssLayoutViewport": {"clientWidth": self.width,
+                                          "clientHeight": 634},
+                }
             return {}
 
     ctx = FakeCtx(n_pages=1)
@@ -998,9 +1245,13 @@ def test_onepassword_popup_is_brought_to_a_visible_tab_once(monkeypatch, streame
 
     An unlock prompt therefore needs a normal tab for the streamed browser
     surface. It must happen once per popup target, not steal focus every poll.
+
+    busy=True since 2026-09-16: mirroring only happens while a run is driving,
+    because bringing the mirror to the front closes the popup, which broke the
+    owner's own clicks. The once-per-target property is what this still pins.
     """
     ctx = _follow_setup(monkeypatch, streamer, n_pages=1, active_index=0,
-                        busy=False)
+                        busy=True)
     unlock = FakePage(ctx)
     opens = []
 
@@ -1112,3 +1363,193 @@ def test_failed_cdp_session_rebuild_reapplies_viewport_metrics(streamer):
     assert rebuilt is ctx.sess and rebuilt is not stale
     assert any(method == "Emulation.setDeviceMetricsOverride"
                for method, params in rebuilt.sent)
+
+
+def test_a_1password_popup_is_only_mirrored_while_a_run_is_driving(monkeypatch):
+    """the owner 2026-09-16: clicking the 1Password autofill button did nothing,
+    "even if i hop onto the desktop and click it myself".
+
+    The mirror exists so that an unlock the AGENT triggered is visible to
+    whoever is watching the stream — Chrome exposes the extension popup as a
+    target Playwright will not list, so we copy it into an ordinary tab and
+    bring that tab to the front. Chrome closes an extension popup the instant
+    it loses focus. The check ran on every tick regardless of whether a run
+    was live, so a human clicking the button at the keyboard had the popup
+    yanked out from under them within 0.8s by a mirror nobody needed.
+
+    While a run is driving, mirror as before. While idle, leave the popup
+    alone: there is no agent to watch and the person clicking can see it.
+    """
+    import operator_view
+
+    calls = []
+
+    class _Streamer:
+        _onepassword_seen: set = set()
+        def _onepassword_popup_targets(self):
+            return {"target-1"}
+        async def _open_onepassword_tab(self):
+            calls.append("mirrored")
+            return object()
+
+    assert operator_view.should_mirror_onepassword(
+        _Streamer(), fresh={"target-1"}, busy=True) is True
+    assert operator_view.should_mirror_onepassword(
+        _Streamer(), fresh={"target-1"}, busy=False) is False
+    # nothing fresh is nothing to do, whatever the run is doing
+    assert operator_view.should_mirror_onepassword(
+        _Streamer(), fresh=set(), busy=True) is False
+
+
+# ------------------------------------------------ tab selection + follow ----
+# the owner 2026-09-22: the cockpit re-attached after an idle stop and streamed
+# Chrome's original New Tab while the agent's Marriott tab sat behind it.
+# _attach picked pages in CREATION order and treated chrome://new-tab-page/
+# as content; the follow loop then read Chrome's front tab back, which the
+# streamer itself had just forced, and agreed with its own mistake. During a
+# live run the busy enforcement pinned the streamed tab in front BEFORE the
+# front-tab check, so a same-URL workload (an SPA) could never escape.
+
+def _ids(monkeypatch, pages: dict, front: "str | None"):
+    """Give each fake page a stable target id and pin Chrome's front target."""
+    async def _tid(self, pg):
+        return pages.get(pg)
+    monkeypatch.setattr(OV._Streamer, "_page_target_id", _tid)
+    monkeypatch.setattr(OV._Streamer, "_active_target_id", lambda self: front)
+    monkeypatch.setattr(OV._Streamer, "_onepassword_popup_targets",
+                        lambda self: set())
+
+
+def _run_state(monkeypatch, running: bool, owned: "list[str] | None" = None):
+    monkeypatch.setattr(OV.operator_agent.runner, "is_running", lambda: running)
+    # `runner` is a RunnerRegistry whose `state` is a read-only property
+    monkeypatch.setattr(type(OV.operator_agent.runner), "state",
+                        property(lambda self: "running" if running else "idle"))
+    monkeypatch.setattr(OV, "_live_run_targets", lambda busy: list(owned or []) if busy else [])
+
+
+def test_attach_picks_chromes_front_tab_over_creation_order(monkeypatch, streamer):
+    """Two real tabs; Chrome says the NEWER one is in front. The cockpit must
+    stream that one, not the first tab in creation order."""
+    ctx = FakeCtx(n_pages=2)
+    ctx.pages[0].url = "https://example.com/old"
+    ctx.pages[1].url = "https://example.com/front"
+    _ids(monkeypatch, {ctx.pages[0]: "T-old", ctx.pages[1]: "T-front"}, "T-front")
+    _run_state(monkeypatch, False)
+    _install(monkeypatch, [FakePW(ctx=ctx)])
+
+    asyncio.run(streamer._attach())
+
+    assert streamer._page is ctx.pages[1]
+    assert ctx.pages[1].fronted == 1 and ctx.pages[0].fronted == 0
+
+
+def test_attach_treats_chromes_new_tab_page_as_blank(monkeypatch, streamer):
+    """chrome://new-tab-page/ is Chrome's own empty tab. It must lose to any
+    page with content even when it is older AND Chrome reports it in front."""
+    ctx = FakeCtx(n_pages=2)
+    ctx.pages[0].url = "chrome://new-tab-page/"
+    ctx.pages[1].url = "https://www.example.com/reservation"
+    _ids(monkeypatch, {ctx.pages[0]: "T-ntp", ctx.pages[1]: "T-work"}, "T-ntp")
+    _run_state(monkeypatch, False)
+    _install(monkeypatch, [FakePW(ctx=ctx)])
+
+    asyncio.run(streamer._attach())
+
+    assert streamer._page is ctx.pages[1]
+    navs = [p for m, p in ctx.sess.sent if m == "Page.navigate"]
+    assert not navs, "a real page must not be navigated on attach"
+
+
+def test_attach_falls_back_to_the_newest_real_page(monkeypatch, streamer):
+    """No front-tab signal at all: prefer the most recently opened real page,
+    which is the one the human or agent was last working in."""
+    ctx = FakeCtx(n_pages=3)
+    ctx.pages[1].url = "https://example.com/dashboard"
+    ctx.pages[2].url = "https://example.com/reports"
+    _ids(monkeypatch, {}, None)
+    _run_state(monkeypatch, False)
+    _install(monkeypatch, [FakePW(ctx=ctx)])
+
+    asyncio.run(streamer._attach())
+
+    assert streamer._page is ctx.pages[2]
+
+
+def test_attach_picks_the_live_runs_owned_tab(monkeypatch, streamer):
+    """While a run is live its registered tab wins over whatever Chrome
+    happens to have in front, so reopening the cockpit mid-run lands on the
+    agent's work."""
+    ctx = FakeCtx(n_pages=2)
+    ctx.pages[0].url = "https://www.example.com/agent-work"
+    ctx.pages[1].url = "https://example.com/somewhere-else"
+    _ids(monkeypatch, {ctx.pages[0]: "T-agent", ctx.pages[1]: "T-other"}, "T-other")
+    _run_state(monkeypatch, True, owned=["T-agent"])
+    _install(monkeypatch, [FakePW(ctx=ctx)])
+
+    asyncio.run(streamer._attach())
+
+    assert streamer._page is ctx.pages[0]
+    assert ctx.pages[0].fronted == 1
+
+
+def _attached(streamer, ctx):
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]
+    streamer.status = "live"
+    return streamer
+
+
+def test_busy_enforcement_fronts_the_owned_tab_not_the_streamed_one(monkeypatch, streamer):
+    """Mid-run the streamer holds the wrong tab. The enforcement must push
+    the run's OWNED tab forward and follow it, never re-pin its own guess."""
+    ctx = FakeCtx(n_pages=2)
+    ctx.pages[0].url = "chrome://new-tab-page/"
+    ctx.pages[1].url = "https://www.example.com/reservation"
+    _attached(streamer, ctx)
+    _ids(monkeypatch, {ctx.pages[0]: "T-ntp", ctx.pages[1]: "T-work"}, "T-ntp")
+    _run_state(monkeypatch, True, owned=["T-work"])
+
+    asyncio.run(streamer._follow_active_tab())
+
+    assert streamer._page is ctx.pages[1]
+    assert ctx.pages[1].fronted >= 1
+    assert ctx.pages[0].fronted == 0, "the stale tab must never be re-pinned"
+    assert any(e["kind"] == "tab-follow-owned" for e in streamer._vp_events)
+
+
+def test_busy_enforcement_without_an_owned_tab_does_not_pin_the_streamed_tab(monkeypatch, streamer):
+    """No registry entry for the run: the front-tab check must still be able
+    to move the view. Same URL the whole time, so only the front check can."""
+    ctx = FakeCtx(n_pages=2)
+    ctx.pages[0].url = "chrome://new-tab-page/"
+    ctx.pages[1].url = "https://www.example.com/reservation"
+    _attached(streamer, ctx)
+    _ids(monkeypatch, {ctx.pages[0]: "T-ntp", ctx.pages[1]: "T-work"}, "T-work")
+    _run_state(monkeypatch, True, owned=[])
+
+    asyncio.run(streamer._follow_active_tab())
+
+    assert streamer._page is ctx.pages[1]
+    assert ctx.pages[0].fronted == 0
+
+
+def test_every_page_switch_path_leaves_a_viewport_event(monkeypatch, streamer):
+    """Three writers of _page used to switch silently; reconstructing the
+    2026-09-22 minute was impossible. Each must leave a trace."""
+    ctx = FakeCtx(n_pages=2)
+    ctx.pages[0].url = "https://example.com/a"
+    ctx.pages[1].url = "https://example.com/b"
+    _attached(streamer, ctx)
+    _ids(monkeypatch, {}, None)
+    _run_state(monkeypatch, False)
+
+    asyncio.run(streamer._switch_tab_locked(1))
+    streamer._page = ctx.pages[0]
+    asyncio.run(streamer._reattach_soft())
+    streamer._page = ctx.pages[0]
+    streamer._live_n = 1                      # a count change → refresh switches
+    asyncio.run(streamer._refresh_active_page())
+
+    kinds = {e["kind"] for e in streamer._vp_events}
+    assert {"tab-switch-user", "tab-reattach-soft", "tab-refresh"} <= kinds, kinds

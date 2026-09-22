@@ -3,7 +3,7 @@
 # Prints "<width> <height>" on success so the caller learns the real geometry.
 #
 # DPI-AWARE (fix 2026-06-25): a DPI-unaware process sees Windows' *logical*
-# resolution — on a ~175%-scaled display that's 1609x1109 vs the true
+# resolution — on the owner's ~175%-scaled display that's 1609x1109 vs the true
 # 2816x1940 framebuffer, so an un-aware grab captures only the top-left ~57% and
 # cuts off half the screen. SetProcessDPIAware() (called BEFORE reading bounds)
 # makes Screen.Bounds report physical pixels, so we capture the whole desktop.

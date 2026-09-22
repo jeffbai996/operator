@@ -77,7 +77,7 @@ def test_planning_narration_with_tool_calls_is_not_assistant():
     # attached (other agy models put it in `thinking`, content empty until the
     # final answer). That narration is CoT — it must surface as role="thinking"
     # (trace only), never as an assistant message / reply-bubble candidate
-    # .
+    # (the owner 2026-07-22: Flash CoT leaked into the chat with the reply).
     r = make_runner()
     path = write_traj([
         planner_step(0, content="I will list the open browser tabs.",

@@ -8,8 +8,8 @@ PowerShell — `win_capture.ps1` (System.Drawing screen grab) for screenshots an
 `win_input.ps1` (Win32 SetCursorPos + mouse_event + SendKeys) for input, both
 exec'd through powershell.exe across the WSL→Windows boundary.
 
-INVASIVE BY NATURE: this moves the owner's actual cursor and types into their live
-session — they can't use the machine while a loop runs, and a misclick acts on their
+INVASIVE BY NATURE: this moves the owner's actual cursor and types into his live
+session — he can't use the machine while a loop runs, and a misclick acts on his
 real desktop. That's the option-A tradeoff (vs the safe-but-isolated Linux
 sandbox). The vision loop itself is identical to option B — only capture+inject
 differ, which is the whole reason B was built first.
@@ -39,6 +39,13 @@ POWERSHELL = (shutil.which("powershell.exe")
               or (_PS_CANONICAL if os.path.exists(_PS_CANONICAL)
                   else "powershell.exe"))
 
+# Every powershell spawn pins cwd to a drvfs path: on this box (WSL2 mirrored
+# networking, observed 2026-07-20) interop exec of powershell.exe fails EINVAL
+# when the calling process's cwd is a Linux-only path (\\wsl UNC translation) —
+# cmd.exe tolerates that cwd, powershell.exe does not, and the server + MCP run
+# from ~/repos/... so every capture died. /mnt/c always translates cleanly.
+_PS_CWD = "/mnt/c" if os.path.isdir("/mnt/c") else None
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CAPTURE_PS1 = os.path.join(_HERE, "win_capture.ps1")
 _INPUT_PS1 = os.path.join(_HERE, "win_input.ps1")
@@ -46,8 +53,8 @@ _INPUT_PS1 = os.path.join(_HERE, "win_input.ps1")
 # Input is intentionally NOT launched through WSL interop.  Windows will let an
 # interop child capture the live screen but denies its window-station write
 # access, so SetCursorPos/keybd_event silently do nothing.  A tiny PowerShell
-# broker is registered as an InteractiveToken scheduled task and consumes this
-# user-private file queue from the real input desktop.
+# broker is launched by Explorer from the per-user Startup folder and consumes
+# this user-private file queue from the real input desktop.
 _BROKER_DIR_CACHE: str | None = None
 _BROKER_HEARTBEAT_MAX_AGE = 3.0
 
@@ -106,7 +113,7 @@ def _interop_reaches_session(sock: str) -> bool:
     try:
         r = subprocess.run([POWERSHELL, "-NoProfile", "-Command", _INTEROP_PROBE],
                            capture_output=True, text=True, timeout=8,
-                           stdin=subprocess.DEVNULL, env=env)
+                           stdin=subprocess.DEVNULL, env=env, cwd=_PS_CWD)
         out = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
         pos = out[-1] if out else ""
         return bool(pos) and pos != "0,0"
@@ -123,7 +130,7 @@ def _live_interop(reprobe: bool = False) -> str | None:
     detached window station: GDI screen CAPTURE still works (it reads the display
     regardless), but SetCursorPos / mouse_event / SendKeys hit the wrong station
     and NOTHING moves. That's the "desktop control silently does nothing, yet the
-    feed looks fine" break (2026-07-12).
+    feed looks fine" break (the owner 2026-07-12).
 
     NOT every live socket reaches the session — a detached/dead session leaves a
     live socket whose spawns land nowhere (verified: newest-by-mtime grabbed a
@@ -166,10 +173,55 @@ def _live_interop(reprobe: bool = False) -> str | None:
     return None
 
 
+_STAGE_CACHE: dict[str, tuple[str, str]] = {}   # ps1 → (staged WSL path, staged Win path)
+
+
+def _staged_ps1(ps1: str) -> str:
+    """Windows path of a Windows-LOCAL copy of a vendored .ps1, refreshed
+    whenever the WSL source changes.
+
+    powershell -File cannot read a script over \\\\wsl.localhost when the P9
+    redirector is down (observed 2026-07-20: share dead machine-wide, capture
+    spawns returned just the banner + '-File ... does not exist'), and the
+    share's health is outside our control. The input broker already runs from
+    a staged copy under AppData\\Local\\Operator for the same reason; capture
+    now does the same. WSL→Windows writes ride drvfs, which does not touch
+    the 9p server. Falls back to the \\\\wsl.localhost translation only if
+    staging itself fails."""
+    cached = _STAGE_CACHE.get(ps1)
+    if cached and os.path.exists(cached[0]):
+        try:
+            if os.path.getmtime(ps1) <= os.path.getmtime(cached[0]):
+                return cached[1]
+        except OSError:
+            pass
+    try:
+        local_u = os.path.join(os.path.dirname(_win_temp()), "Operator")
+        local_w = _win_temp_win().rsplit("\\", 1)[0] + "\\Operator"
+        os.makedirs(local_u, exist_ok=True)
+        name = os.path.basename(ps1)
+        dst_u = os.path.join(local_u, name)
+        with open(ps1, "rb") as f:
+            src_bytes = f.read()
+        try:
+            with open(dst_u, "rb") as f:
+                stale = f.read() != src_bytes
+        except OSError:
+            stale = True
+        if stale:
+            with open(dst_u, "wb") as f:
+                f.write(src_bytes)
+        dst_w = local_w + "\\" + name
+        _STAGE_CACHE[ps1] = (dst_u, dst_w)
+        return dst_w
+    except (OSError, subprocess.SubprocessError):
+        return subprocess.run(["wslpath", "-w", ps1], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+
 def _pwsh(args: list[str], ps1: str) -> str:
-    """Run a vendored .ps1 (Windows path) via powershell.exe and return stdout."""
-    win_ps1 = subprocess.run(["wslpath", "-w", ps1], check=True,
-                             capture_output=True, text=True).stdout.strip()
+    """Run a vendored .ps1 (via its staged Windows-local copy) and return stdout."""
+    win_ps1 = _staged_ps1(ps1)
     cmd = [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-File", win_ps1, *args]
     # Ensure the Windows child lands in the INTERACTIVE session so input actually
@@ -181,7 +233,8 @@ def _pwsh(args: list[str], ps1: str) -> str:
         _env["WSL_INTEROP"] = _sock
     try:
         r = subprocess.run(cmd, check=True, capture_output=True, text=True,
-                           timeout=30, stdin=subprocess.DEVNULL, env=_env)
+                           timeout=30, stdin=subprocess.DEVNULL, env=_env,
+                           cwd=_PS_CWD)
     except subprocess.CalledProcessError as e:
         raise WinBackendError(f"powershell {os.path.basename(ps1)} {args}: "
                               f"{e.stderr.strip()}") from e
@@ -197,7 +250,7 @@ def _win_temp() -> str:
         win = subprocess.run(
             [POWERSHELL, "-NoProfile", "-Command", "$env:TEMP"],
             check=True, capture_output=True, text=True,
-            stdin=subprocess.DEVNULL).stdout.strip()
+            stdin=subprocess.DEVNULL, cwd=_PS_CWD).stdout.strip()
         _WIN_TEMP_CACHE = subprocess.run(["wslpath", "-u", win], check=True,
                                          capture_output=True, text=True).stdout.strip()
     return _WIN_TEMP_CACHE
@@ -224,19 +277,83 @@ def _broker_dir() -> str:
     return _BROKER_DIR_CACHE
 
 
-def ensure_input() -> None:
-    """Fail closed unless the interactive broker has a fresh heartbeat."""
-    heartbeat = os.path.join(_broker_dir(), "heartbeat.json")
+def _kick_broker() -> None:
+    """Ask Explorer to launch the per-user broker only when input is needed.
+
+    The shortcut keeps its child on the logged-in user's WinSta0 desktop;
+    starting the PowerShell broker directly through WSL would lose input
+    permission again."""
+    command = (
+        "$link=Join-Path $env:LOCALAPPDATA 'Operator\\OperatorInputBroker.lnk'; "
+        "if (Test-Path -LiteralPath $link) { "
+        "& (Join-Path $env:WINDIR 'explorer.exe') $link }"
+    )
     try:
-        age = time.time() - os.path.getmtime(heartbeat)
-    except OSError as e:
+        subprocess.run([POWERSHELL, "-NoProfile", "-Command", command],
+                       capture_output=True, timeout=15, cwd=_PS_CWD,
+                       stdin=subprocess.DEVNULL)
+    except (subprocess.SubprocessError, OSError):
+        pass
+
+
+def _heartbeat_mtime() -> float | None:
+    try:
+        return os.path.getmtime(os.path.join(_broker_dir(), "heartbeat.json"))
+    except OSError:
+        return None
+
+
+def _heartbeat_age() -> float | None:
+    mtime = _heartbeat_mtime()
+    return None if mtime is None else time.time() - mtime
+
+
+def _heartbeat_alive() -> bool:
+    """True when the broker is actually beating.
+
+    Absolute age is trusted only when it reads FRESH. A "stale" reading can be
+    pure Windows↔WSL clock skew: the mtime is stamped by the WINDOWS clock and
+    compared against the WSL clock, and on 2026-07-26 Windows sat ~7s behind
+    NTP (W32Time service stopped), so every heartbeat looked ~7s old from WSL
+    and desktop-real failed closed while the broker was fine. When age looks
+    stale, watch the mtime instead: the broker rewrites heartbeat.json every
+    ~50ms loop pass, so any ADVANCE within 0.8s proves it is alive no matter
+    what either clock says."""
+    age = _heartbeat_age()
+    if age is not None and age <= _BROKER_HEARTBEAT_MAX_AGE:
+        return True
+    first = _heartbeat_mtime()
+    if first is None:
+        return False
+    deadline = time.monotonic() + 0.8
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+        cur = _heartbeat_mtime()
+        if cur is not None and cur > first:
+            return True
+    return False
+
+
+def ensure_input() -> None:
+    """Fail closed unless the interactive broker is beating.
+
+    A dead broker gets one on-demand launch through Explorer, then waits for a
+    beat. The broker exits after five idle minutes."""
+    if _heartbeat_alive():
+        return
+    _kick_broker()
+    deadline = time.monotonic() + 6.0
+    while time.monotonic() < deadline:
+        if _heartbeat_alive():
+            return
+        time.sleep(0.25)
+    age = _heartbeat_age()
+    if age is None:
         raise WinBackendError(
-            "Windows input broker is not running; start the "
-            "OperatorInputBroker scheduled task") from e
-    if age > _BROKER_HEARTBEAT_MAX_AGE:
-        raise WinBackendError(
-            f"Windows input broker heartbeat is stale ({age:.1f}s); restart "
-            "the OperatorInputBroker scheduled task")
+            "Windows input broker did not start on demand")
+    raise WinBackendError(
+        f"Windows input broker heartbeat is stale ({age:.1f}s) and not "
+        "advancing — the broker loop is wedged")
 
 
 def _broker_request(action: dict, timeout: float = 6.0) -> None:
@@ -299,7 +416,7 @@ def _win_temp_win() -> str:
     """Windows %TEMP% in Windows form (C:\\...), for passing to the .ps1."""
     return subprocess.run([POWERSHELL, "-NoProfile", "-Command", "$env:TEMP"],
                           check=True, capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL).stdout.strip()
+                          stdin=subprocess.DEVNULL, cwd=_PS_CWD).stdout.strip()
 
 
 # Downscale captures to this long-edge width (preserve aspect). 1280 is the

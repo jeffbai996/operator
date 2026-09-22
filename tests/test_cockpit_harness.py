@@ -100,6 +100,7 @@ class _Harness:
         # /operator/agent reports state=running, say/stop/dispatch POSTs are
         # recorded instead of reaching the real runner.
         self.agent_mode = None
+        self.agent_handoff = None
         self.agent_messages: list = []
         self.say_posts: list = []
         self.stop_posts: list = []
@@ -150,7 +151,7 @@ class _Harness:
                         "state": "running", "started_ts": _t.time() - 30,
                         "ended_ts": 0, "messages": msgs, "final": "",
                         "alive": True, "stalled": False, "stalled_for": 0,
-                        "handoff": None, "surface": "browser",
+                        "handoff": self.agent_handoff, "surface": "browser",
                         "steer_pending": pend})
             if self.mode == "real":
                 return None
@@ -209,6 +210,7 @@ def _fresh_session_store(monkeypatch, harness):
     fresh context (log swap + mode re-apply mid-test = flaky sampling)."""
     harness.mode = "real"
     harness.agent_mode = None
+    harness.agent_handoff = None
     harness.agent_messages.clear()
     harness.say_posts.clear()
     harness.stop_posts.clear()
@@ -307,6 +309,35 @@ def _transitions(values: list) -> int:
     return sum(1 for a, b in zip(values, values[1:]) if a != b)
 
 
+def test_hidden_cockpit_stops_status_polling_and_resumes(page, harness):
+    harness.mode = "live"
+    requests = []
+    page.on("request", lambda req: requests.append(req.url)
+            if req.url.endswith("/operator/status") else None)
+    page.goto(harness.base + "/operator", wait_until="domcontentloaded")
+    page.wait_for_timeout(1800)
+    assert requests
+    page.evaluate("""() => {
+        window.__testHidden = true;
+        Object.defineProperty(document, 'hidden', {configurable: true,
+            get: () => window.__testHidden});
+        Object.defineProperty(document, 'visibilityState', {configurable: true,
+            get: () => window.__testHidden ? 'hidden' : 'visible'});
+        document.dispatchEvent(new Event('visibilitychange'));
+    }""")
+    page.wait_for_timeout(500)
+    hidden_count = len(requests)
+    page.wait_for_timeout(2000)
+    assert len(requests) == hidden_count
+    page.evaluate("""() => {
+        window.__testHidden = false;
+        document.dispatchEvent(new Event('visibilitychange'));
+    }""")
+    page.wait_for_timeout(500)
+    assert len(requests) > hidden_count
+    assert page._errors == []
+
+
 def test_boot_clean_fresh_session(page, harness):
     page.goto(harness.base + "/operator", wait_until="domcontentloaded")
     page.wait_for_timeout(3000)
@@ -394,6 +425,9 @@ def test_stream_quality_override_is_visible_persisted_and_beats_network(browser,
         assert pg.locator("#op-ham-quality").input_value() == "auto"
         assert pg.locator("#op-ham-quality-effective").inner_text() == "Auto · Low"
 
+        # Exercise the browser menu in its visible half-sheet state. Tall test
+        # phones classify the initial fit detent as `full`, which deliberately
+        # folds all browser chrome away.
         pg.evaluate("""() => {
           const op = document.getElementById('op');
           op.dataset.sheet = 'half'; op.style.setProperty('--sheet-h', '50dvh');
@@ -446,6 +480,33 @@ def test_stream_quality_override_is_visible_persisted_and_beats_network(browser,
         ctx.close()
 
 
+def test_hamburger_shortcuts_match_the_viewers_platform(browser, harness):
+    """Shortcut hints describe the viewer's keyboard; they are not decorative
+    glyphs. The Linux harness exercises the non-Apple branch so a Windows
+    cockpit can never regress to showing Command-key instructions."""
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        hints = pg.evaluate("""() => Object.fromEntries(
+          [...document.querySelectorAll('[data-shortcut]')]
+            .map(el => [el.dataset.shortcut, el.textContent.trim()]))""")
+        assert hints == {
+            "reload": "Ctrl R",
+            "hard-reload": "Ctrl Shift R",
+            "zoom-in": "Ctrl +",
+            "zoom-out": "Ctrl -",
+            "zoom-reset": "Ctrl 0",
+            "find": "Ctrl F",
+            "select-all": "Ctrl A",
+            "escape": "Esc",
+            "next-tab": "Ctrl Tab",
+        }
+    finally:
+        ctx.close()
+
+
 @pytest.mark.parametrize(("preference", "tier"), [
     ("low", "eco"),
     ("medium", "lo"),
@@ -493,6 +554,9 @@ def test_stream_quality_migrates_legacy_saved_names(browser, harness, legacy, cu
 
 
 def test_slow_frame_delivery_falls_back_to_eco_and_recovers(browser, harness):
+    """Safari exposes no useful radio type. Three genuinely slow response-body
+    transfers must still push the tab into eco; the decision is based on body
+    throughput, not the server's long-poll wait."""
     harness.mode = "live"
     ctx = _connection_context(browser, connection={}, slow_body_ms=160)
     pg = ctx.new_page()
@@ -501,7 +565,7 @@ def test_slow_frame_delivery_falls_back_to_eco_and_recovers(browser, harness):
         pg.wait_for_function(
             "document.getElementById('op').dataset.feedTier === 'eco'",
             timeout=8000, polling=50)
-        pg.wait_for_timeout(500)
+        pg.wait_for_timeout(500)  # allow the next pull to carry the new tier
         assert harness.frame_tiers.count("hi") >= 3
         assert "eco" in harness.frame_tiers
         pg.evaluate("window.__opSlowBodyMs = 0")
@@ -749,6 +813,47 @@ def test_open_device_adopts_a_remote_thread_update_without_reload(browser, harne
         ctx.close()
 
 
+@pytest.mark.parametrize("has_history", [False, True])
+def test_observer_focus_preserves_explicit_launchpad_navigation(browser, harness, has_history):
+    """Presence may finish boot, but must not undo Home or dismissal afterward."""
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    session = dict(_SEEDED_SESSION, log=_SEEDED_LOG if has_history else "")
+    ctx.add_init_script("localStorage.setItem('operator-session-v2', "
+                        + json.dumps(json.dumps(session)) + ");")
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda exc: errors.append(str(exc)))
+    pg.route("**/presence", lambda route: route.fulfill(json={
+        "ok": True, "can_control": False, "controller_label": "iPad"}))
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function("""() => {
+          const op = document.getElementById('op');
+          return op.dataset.threadControl === 'observer' && !op.classList.contains('op-booting');
+        }""", timeout=7000)
+        # Wait for the async boot restore as well as the early presence response.
+        pg.wait_for_function("document.querySelectorAll('.op-lp-card').length > 0")
+        if has_history:
+            pg.wait_for_selector("#op-lp", state="hidden")
+            pg.locator("#op-lp-open").click()
+        else:
+            pg.wait_for_selector("#op-lp", state="visible")
+            pg.locator("#op-lp-x").click()
+        assert pg.locator("#op-lp").is_visible() == has_history
+
+        # Entering the app can restore focus before delivering pointer movement.
+        with pg.expect_response(lambda r: r.url.endswith('/presence')):
+            pg.evaluate("window.dispatchEvent(new Event('focus'))")
+        # An awaited heartbeat also covers the recurring five-second poll path.
+        pg.evaluate("window._opThreadHeartbeat(false)")
+        pg.mouse.move(1100, 450)
+        assert pg.locator("#op-lp").is_visible() == has_history
+        assert errors == []
+    finally:
+        ctx.close()
+
+
 def test_second_device_observes_until_it_takes_over(browser, harness):
     """The same thread may be watched anywhere, but only one device edits it."""
     import json as _json
@@ -804,6 +909,75 @@ def test_second_device_observes_until_it_takes_over(browser, harness):
     finally:
         first.close()
         second.close()
+
+
+def test_ipados_desktop_user_agent_is_labeled_ipad_and_takeover_is_prominent(
+        browser, harness):
+    """Modern iPad Safari identifies as Macintosh; touch capability unmasks it."""
+    ipad = browser.new_context(
+        viewport={"width": 1024, "height": 768},
+        user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) "
+                    "AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15"))
+    ipad.add_init_script(
+        "Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 5})")
+    other = browser.new_context(viewport={"width": 1280, "height": 800})
+    a, b = ipad.new_page(), other.new_page()
+    try:
+        a.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        a.wait_for_function(
+            "document.getElementById('op').dataset.threadControl === 'controller'",
+            timeout=7000, polling=100)
+        b.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        b.wait_for_function(
+            "document.getElementById('op').dataset.threadControl === 'observer'",
+            timeout=7000, polling=100)
+
+        assert b.locator("#op-thread-observer-text").inner_text() == "iPad has control"
+        style = b.locator("#op-thread-takeover").evaluate("""el => {
+          const s = getComputedStyle(el), r = el.getBoundingClientRect();
+          return {background:s.backgroundColor, height:r.height,
+            weight:s.fontWeight, opacity:s.opacity};
+        }""")
+        assert style["background"] not in ("transparent", "rgba(0, 0, 0, 0)")
+        assert style["height"] >= 28
+        assert int(style["weight"]) >= 700
+        assert float(style["opacity"]) == 1
+    finally:
+        ipad.close()
+        other.close()
+
+
+def test_mobile_handoff_take_control_opens_remote_keyboard(browser, harness):
+    """The Take control tap is the iOS user gesture; spend it on the keyboard."""
+    harness.mode = "live"
+    harness.agent_mode = "running"
+    import time as _time
+    harness.agent_handoff = {"reason": "sign in, then continue", "ts": _time.time()}
+    ctx = browser.new_context(
+        viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        # A fresh live cockpit deliberately starts in MAN. Put the synthetic
+        # running turn into AUTO, matching the real state in which an agent can
+        # emit a handoff request and the polling loop can surface its card.
+        pg.locator("#op-mode .op-mode-btn[data-mode='auto']").dispatch_event("click")
+        card = pg.locator(".op-handoff")
+        card.wait_for(state="visible", timeout=7000)
+        # Inspect synchronously inside the click handler. Headless Chromium may
+        # blur a transparent textarea after the synthetic gesture returns, but
+        # iOS decides whether to raise its keyboard during that gesture itself.
+        takeover = card.locator(".op-takeover-btn").evaluate("""button => {
+          button.click();
+          return {
+            active: document.activeElement && document.activeElement.id,
+            keyboardOpen: document.getElementById('op').classList.contains(
+              'op-keyboard-open')
+          };
+        }""")
+        assert takeover == {"active": "op-key-capture", "keyboardOpen": True}
+    finally:
+        ctx.close()
         # Let already-issued presence POSTs finish, then remove this synthetic
         # two-device lease. Otherwise a late request from a closing context can
         # reclaim `legacy` after the autouse fixture cleared it for the next
@@ -879,12 +1053,60 @@ def test_connector_action_uses_a_provider_favicon(page, harness):
         harness.agent_messages = []
 
 
-def test_midrun_message_interrupt_steers(browser, harness):
-    """Interrupt-steer (restored 2026-07-12, the owner): a message sent while a run
-    is LIVE STOPS the current turn and immediately re-dispatches with the new
-    text — barge-in, not the 1.0.12 soft-steer queue. So a mid-run message must
-    POST /operator/agent/stop then /operator/dispatch, and must NOT POST
-    /operator/agent/say. The user bubble renders exactly once."""
+def test_agent_action_label_is_rendered_as_text_in_status(browser, harness):
+    """Agent trace labels must stay text when copied into the live subline."""
+    harness.agent_mode = "running"
+    hostile_verb = (
+        '<img id="agent-action-xss" src="missing" '
+        'onerror="document.body.id=\'agent-action-xss-fired\'">'
+    )
+    harness.agent_messages = [{
+        "ts": 2_000_000_001,
+        "role": "action",
+        "text": hostile_verb,
+        "detail": "",
+    }]
+    ctx = browser.new_context()
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op-action-sub').textContent"
+            ".includes('agent-action-xss')",
+            timeout=8000,
+            polling=50,
+        )
+
+        sub = pg.locator("#op-action-sub")
+        assert pg.locator("#agent-action-xss").count() == 0
+        assert pg.locator("body").get_attribute("id") != "agent-action-xss-fired"
+        assert sub.locator(":scope > .sub-bot").text_content() == "claude-a"
+        assert sub.locator(":scope > .sub-emo").text_content() == "⚙️"
+        assert sub.text_content() == f"claude-a · {hostile_verb.lower()} ⚙️"
+
+        # Repeated identical status polls must keep the old no-strobe contract.
+        pg.evaluate("""() => {
+          window.__sublineClassMutations = 0;
+          new MutationObserver(ms => { window.__sublineClassMutations += ms.length; })
+            .observe(document.getElementById('op-action-sub'), {
+              attributes: true, attributeFilter: ['class']
+            });
+        }""")
+        pg.wait_for_timeout(1000)
+        assert pg.evaluate("window.__sublineClassMutations") == 0
+    finally:
+        ctx.close()
+        harness.agent_mode = None
+        harness.agent_messages = []
+
+
+def test_midrun_message_uses_owned_steering_without_client_restart(browser, harness):
+    """1.2: native/boundary steering is server-owned; the browser must never
+    race a replacement against the still-running process. Stop stays separate."""
     harness.agent_mode = "running"
     harness.say_posts.clear()
     harness.stop_posts.clear()
@@ -912,17 +1134,182 @@ def test_midrun_message_interrupt_steers(browser, harness):
             timeout=8000, polling=100)
         pg.fill("#op-input", "switch to the CAD listing")
         pg.press("#op-input", "Enter")
-        pg.wait_for_timeout(2500)   # stop → 350ms settle → re-dispatch
-        assert harness.stop_posts, "interrupt-steer must STOP the live run"
-        assert len(harness.dispatch_posts) == 1, "interrupt-steer must re-dispatch once"
-        assert harness.dispatch_posts[0].get("task") == "switch to the CAD listing", \
-            "interrupt-steer must re-dispatch the new text"
-        assert harness.say_posts == [], "interrupt-steer must NOT soft-queue via say"
+        pg.wait_for_timeout(1500)
+        assert harness.stop_posts == [], 'steering must not use the Stop endpoint'
+        assert harness.dispatch_posts == [], 'the client must not launch a replacement'
+        assert harness.say_posts == ['switch to the CAD listing']
         assert pg.locator("#op-log .op-msg.user").count() == 1
         assert errors == [], f"JS errors during steer: {errors}"
     finally:
         harness.agent_mode = None
         ctx.close()
+
+
+def test_workbench_jobs_files_and_diagnostics_are_compact(browser, harness):
+    ctx = browser.new_context(viewport={'width': 390, 'height': 844})
+    page = ctx.new_page()
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    import operator_workspace as ws
+    run = ws.start_run('legacy', 'Find a tasting')
+    ws.update_job(run['run_id'], run['credential'], {'constraints': ['Two adults'],
+        'checkpoints': [{'step': 'Compare opening times', 'status': 'inProgress'}]})
+    try:
+        page.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        # This fixture's minimal host template has no theme tokens. Supply the
+        # actual host's midnight palette for visual QA (not geometry overrides).
+        page.add_style_tag(content=':root {--fg:#e7ecf3;--muted:#7e8a9a;--border:#292b30;--border-2:#30343b} body {color:var(--fg);background:#000}')
+        page.wait_for_function('!!window.OperatorWorkbench')
+        page.wait_for_function("document.getElementById('op-files-open').hidden === false")
+        assert page.locator('#op-health-open').is_hidden()
+        # Project a fixture state through the real endpoint and module; no agent dispatch.
+        page.route('**/operator/workspace?*', lambda route: route.fulfill(json= dict(ok=True, **ws.snapshot('legacy'))))
+        page.evaluate("window.OperatorWorkbench.update({alive:true, run_id:'fixture'}, window.OperatorWorkbenchBridge.context().conversation_id || 'legacy')")
+        page.wait_for_timeout(2000)
+        page.evaluate('window.OperatorWorkbench.toggleJob()')
+        assert 'Two adults' in page.locator('#op-job-panel').inner_text()
+        # showModal is a top-layer overlay, never a launchpad flex child.
+        page.evaluate("document.getElementById('op-files-open').click()")
+        page.wait_for_selector('#op-files-dialog[open]')
+        bounds = page.locator('#op-files-dialog').bounding_box()
+        assert bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= 391
+        text = page.locator('#op-files-dialog').inner_text()
+        # The add control is the drop zone; the footer is a bare meter, not a sentence.
+        assert 'Add files' in text and 'per file' in text
+        assert 'drop it' not in text and 'Files stay' not in text
+        page.get_by_role('button', name='Close', exact=True).last.click()
+        assert errors == []
+    finally:
+        ws.finish_run(run['run_id'], 'done')
+        ctx.close()
+
+
+@pytest.mark.parametrize('width,height', [(390, 844), (1440, 900)])
+def test_workbench_results_approvals_and_recipe_choices(browser, harness, width, height):
+    import operator_workspace as ws
+    from pathlib import Path
+    run = ws.start_run('legacy', 'Find a tasting')
+    ws.update_job(run['run_id'], run['credential'], {'constraints': ['Two adults, Tuesday'],
+        'checkpoints': [{'step': 'Compare tasting times', 'status': 'completed'},
+                        {'step': 'Prepare the booking', 'status': 'inProgress'}]})
+    ev = ws.observe(run['run_id'], 'browser_snapshot', 'Fixture availability', ['https://example.com/tastings'])
+    ws.publish_result(run['run_id'], run['credential'], {'title': 'Tuesday tasting', 'status': 'prepared',
+        'summary': 'Two places at 10:00. Ready for your approval.', 'evidence_ids': [ev['id']]})
+    ws.request_approval(run['run_id'], run['credential'], {'kind': 'booking', 'destination': 'example.com',
+        'description': 'Reserve two places for Tuesday at 10:00', 'amount': 60, 'currency': 'CAD'})
+    ctx = browser.new_context(viewport={'width': width, 'height': height})
+    harness.mode = 'live'
+    ctx.add_init_script("localStorage.setItem('operator-session-v2', JSON.stringify({log:'',mode:'auto'}))")
+    page = ctx.new_page(); errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    try:
+        page.route('**/operator/workspace?*', lambda route: route.fulfill(json=dict(ok=True, **ws.snapshot('legacy'))))
+        page.route('**/operator/steer', lambda route: route.fulfill(json={'ok': True}))
+        page.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        page.add_style_tag(content=':root {--fg:#e7ecf3;--muted:#7e8a9a;--border:#292b30;--border-2:#30343b} body {color:var(--fg);background:#000}')
+        page.wait_for_function('!!window.OperatorWorkbench')
+        if page.locator('#op-lp-x').is_visible():
+            page.locator('#op-lp-x').click()
+        page.wait_for_selector('.op-wb-approval', state='visible')
+        page.evaluate('window.OperatorWorkbench.toggleJob()')
+        assert 'CAD 60.00' in page.locator('.op-wb-approval').inner_text()
+        box = page.locator('.op-wb-approval').bounding_box()
+        assert box['x'] >= 0 and box['x'] + box['width'] <= width + 1
+        page.evaluate("window.OperatorWorkbench.recipeFill({authorization:{mode:'bounded', actions:['booking','message'], destinations:['example.com'],max_amount:60,currency:'CAD'}})")
+        assert page.evaluate('window.OperatorWorkbench.recipeFields().authorization.actions') == ['booking', 'message']
+        output = os.environ.get('OPERATOR_QA_OUTPUT')
+        if output:
+            Path(output).mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(Path(output) / f'workbench-{width}.png'), full_page=True)
+            page.locator('.op-wb-approval').scroll_into_view_if_needed()
+            page.screenshot(path=str(Path(output) / f'approval-{width}.png'), full_page=True)
+        assert not errors
+    finally:
+        ws.finish_run(run['run_id'], 'done'); ctx.close()
+
+
+def test_mobile_attachment_and_send_share_center_at_all_composer_sizes(browser, harness):
+    harness.mode = 'live'
+    ctx = browser.new_context(viewport={'width': 390, 'height': 844})
+    page = ctx.new_page()
+    try:
+        page.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        page.wait_for_function('!!window.OperatorWorkbench')
+        for scale in (.8, 1.05, 1.6):
+            for text in ('', 'Hello', 'A longer message\nwith several lines\nand one more line'):
+                geometry = page.evaluate('''([scale,text]) => {
+                  document.querySelector('.op').style.setProperty('--chat-scale', scale);
+                  const input = document.getElementById('op-input'); input.value=text;
+                  input.dispatchEvent(new Event('input', {bubbles:true}));
+                  const a=document.getElementById('op-files-open').getBoundingClientRect();
+                  const b=document.getElementById('op-send').getBoundingClientRect();
+                  const icon=document.querySelector('#op-files-open svg').getBoundingClientRect();
+                  return {delta:Math.abs(a.y+a.height/2-b.y-b.height/2),height:Math.abs(a.height-b.height),iconSize:icon.height,expectedIconSize:a.height-2};
+                }''', [scale, text])
+                assert geometry['delta'] <= .5, (scale, text, geometry)
+                assert geometry['height'] <= .5, (scale, text, geometry)
+                assert abs(geometry['iconSize'] - geometry['expectedIconSize']) <= .5, (scale, text, geometry)
+    finally:
+        ctx.close()
+
+
+def test_result_markdown_and_delayed_transcript_stay_in_turn(browser, harness):
+    import operator_workspace as ws
+    initial = ws.start_run('legacy', 'Find hotels')
+    ws.finish_run(initial['run_id'], 'done')
+    run = ws.start_run('legacy', 'Compare rates')
+    ev = ws.observe(run['run_id'], 'browser_snapshot', 'Rates', ['https://example.com'])
+    ws.publish_result(run['run_id'], run['credential'], {'title': 'Rates', 'status': 'found',
+        'summary': '**Verified**\n\n| Date | Price |\n| --- | --- |\n| Friday | $288 |\n\n```python\nprint(288)\n```\n\n<img src=x onerror=alert(1)>', 'evidence_ids': [ev['id']]})
+    harness.mode = 'live'
+    ctx = browser.new_context(viewport={'width': 390, 'height': 844})
+    page = ctx.new_page()
+    page.route('**/operator/workspace?*', lambda r: r.fulfill(json=dict(ok=True, **ws.snapshot('legacy'))))
+    try:
+        page.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        page.wait_for_selector('[data-workbench-job]', state='attached')
+        page.evaluate('''() => {
+          const log = document.getElementById('op-log');
+          const user = document.createElement('div'); user.className='op-msg user';
+          user.innerHTML='<span class="bubble">Compare rates</span>'; log.prepend(user);
+          const earlier = document.createElement('div'); earlier.className='op-msg user';
+          earlier.innerHTML='<span class="bubble">Find hotels</span>'; log.prepend(earlier);
+          const late = document.createElement('div'); late.className='op-msg bot'; late.id='late-plan';
+          late.innerHTML='<span class="bubble">Earlier plan, delivered late</span>'; log.append(late);
+        }''')
+        page.wait_for_function("document.getElementById('late-plan').nextElementSibling?.hasAttribute('data-workbench-job')")
+        card = page.locator('[data-workbench-job]')
+        assert card.locator('.op-wb-tag').text_content() == 'Result'
+        assert card.locator('table tbody tr').count() == 1
+        assert card.locator('pre code').inner_text() == 'print(288)'
+        assert card.locator('.op-copy').count() == 1
+        assert card.locator('img').count() == 0
+        for scale in (.8, 1.05, 1.6):
+            typography = page.evaluate('''scale => {
+              document.querySelector('.op').style.setProperty('--chat-scale',scale);
+              const result=document.querySelector('[data-workbench-job]');
+              return {body:parseFloat(getComputedStyle(result.querySelector('.op-wb-rich')).fontSize),
+                reply:parseFloat(getComputedStyle(document.querySelector('#late-plan .bubble')).fontSize),
+                title:getComputedStyle(result.querySelector('h3')).fontWeight,
+                label:getComputedStyle(result.querySelector('.op-wb-tag')).textTransform};
+            }''', scale)
+            assert abs(typography['body'] - typography['reply']) < .1
+            assert typography['title'] == '700'
+            assert typography['label'] == 'none'
+        page.evaluate("document.querySelector('.op').style.setProperty('--chat-scale',1.05)")
+        page.evaluate('''() => {
+          const user = document.createElement('div'); user.className='op-msg user'; user.id='next-turn';
+          user.innerHTML='<span class="bubble">Different task</span>'; document.getElementById('op-log').append(user);
+        }''')
+        page.wait_for_timeout(100)
+        assert page.evaluate("document.querySelector('[data-workbench-job]').nextElementSibling.id") == 'next-turn'
+        page.add_style_tag(content=':root{--fg:#e7ecf3;--muted:#79828d;--border:#282a30;--border-2:#34363d} *{animation:none!important;transition:none!important}')
+        if page.locator('#op-lp-x').is_visible(): page.locator('#op-lp-x').click()
+        card.scroll_into_view_if_needed()
+        assert card.evaluate('el => el.scrollWidth <= el.clientWidth')
+        page.screenshot(path='/tmp/operator-rich-result.png')
+    finally:
+        ws.finish_run(run['run_id'], 'done'); ctx.close()
 
 
 def test_manual_mode_waits_for_server_takeover_boundary(browser, harness):
@@ -1125,6 +1512,30 @@ def _expand_launchpad(pg):
     pg.wait_for_timeout(500)   # grid crossfade + gap transition settle
 
 
+def test_launchpad_card_copy_and_go_use_intentional_typefaces(browser, harness):
+    """Card body copy is DM Sans; the compact Go action stays Jakarta."""
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        _expand_launchpad(pg)
+        card = pg.locator(".op-lp-card").first
+        faces = card.evaluate("""el => ({
+          body: getComputedStyle(el.querySelector('.op-lp-prompt')).fontFamily,
+          go: getComputedStyle(el.querySelector('.op-lp-go')).fontFamily
+        })""")
+        assert faces["body"].lstrip('"').startswith("DM Sans")
+        assert faces["go"].lstrip('"').startswith("Plus Jakarta Sans")
+    finally:
+        harness.mode = "real"
+        ctx.close()
+
+
 def test_launchpad_wordmark_and_corner_controls_are_centered(browser, harness):
     """Rendered geometry protects the launchpad's two visible centerlines."""
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
@@ -1266,6 +1677,93 @@ def test_chat_picker_is_launchpad_only_and_uses_the_corner_control_row(browser, 
         ctx.close()
 
 
+def test_chat_picker_search_empty_state_and_launchpad_icon_are_visually_finished(
+        browser, harness):
+    """The picker should look intentional, not like a native search field in a flex accident."""
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        _expand_launchpad(pg)
+        pg.add_style_tag(content="*{transition:none!important;animation:none!important}")
+        # _base.html gives every otherwise-unstyled input a themed border and
+        # background. Reproduce that selector here: the chat search owns one
+        # visual shell, not a second native-looking field inside it.
+        pg.add_style_tag(content="""
+          input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]) {
+            border: 1px solid red; border-radius: 8px; background: red;
+          }
+        """)
+        pg.locator("#op-lp-chats").dispatch_event("click")
+        pg.wait_for_selector("#op-chats", state="visible", timeout=8000)
+
+        polish = pg.evaluate("""() => {
+          const dialog = document.getElementById('op-chats');
+          const search = document.querySelector('.op-chat-search');
+          const input = document.getElementById('op-chat-search');
+          const empty = document.getElementById('op-chat-empty');
+          const list = document.getElementById('op-chat-list');
+          const icon = document.querySelector('#op-lp-chats svg');
+          const bubble = icon.querySelector('path:first-child').getBBox();
+          const bars = icon.querySelector('path:nth-child(2)');
+          const sr = search.getBoundingClientRect();
+          const ir = input.getBoundingClientRect();
+          const er = empty.getBoundingClientRect();
+          const dr = dialog.getBoundingClientRect();
+          const ds = getComputedStyle(dialog);
+          const is = getComputedStyle(input);
+          const usableBottom = dr.bottom - parseFloat(ds.paddingBottom || 0);
+          const toolsBottom = document.querySelector('.op-chat-tools').getBoundingClientRect().bottom;
+          const usableCenter = (toolsBottom + usableBottom) / 2;
+          return {
+            appearance: is.appearance,
+            webkitAppearance: is.webkitAppearance,
+            inputType: input.type,
+            inputRole: input.getAttribute('role'),
+            inputMode: input.inputMode,
+            fontFamily: is.fontFamily,
+            inputBorderWidth: is.borderTopWidth,
+            inputBorderRadius: is.borderRadius,
+            inputBackground: is.backgroundColor,
+            inputBoxShadow: is.boxShadow,
+            inputCenterDelta: Math.abs((ir.top + ir.bottom - sr.top - sr.bottom) / 2),
+            listDisplay: getComputedStyle(list).display,
+            emptyCenterDelta: Math.abs((er.top + er.bottom) / 2 - usableCenter),
+            bubbleWidth: bubble.width,
+            bubbleCenterDelta: Math.abs(bubble.x + bubble.width / 2 - 10),
+            interiorStrokes: (bars.getAttribute('d').match(/M/g) || []).length
+          };
+        }""")
+        assert polish["appearance"] == "none"
+        assert polish["webkitAppearance"] == "none"
+        assert polish["inputType"] == "text"
+        assert polish["inputRole"] == "searchbox"
+        assert polish["inputMode"] == "search"
+        assert polish["fontFamily"].lstrip('"').startswith("DM Sans")
+        assert polish["inputBorderWidth"] == "0px"
+        assert polish["inputBorderRadius"] == "0px"
+        assert polish["inputBackground"] == "rgba(0, 0, 0, 0)"
+        assert polish["inputBoxShadow"] == "none"
+        assert polish["inputCenterDelta"] <= 0.75
+        assert polish["listDisplay"] == "none"
+        assert polish["emptyCenterDelta"] <= 12
+        assert polish["bubbleWidth"] <= 14.5
+        assert polish["bubbleCenterDelta"] <= 0.25
+        assert polish["interiorStrokes"] == 2
+
+        new_chat = pg.locator("#op-chat-new")
+        new_chat.hover()
+        assert new_chat.evaluate("el => getComputedStyle(el).filter") == "none"
+    finally:
+        harness.mode = "real"
+        ctx.close()
+
+
 def test_chat_library_becomes_a_phone_sheet_without_reflowing_the_launchpad(
         browser, harness):
     harness.mode = "live"
@@ -1351,6 +1849,21 @@ def test_chat_library_searches_and_manages_server_backed_threads(
         rows.nth(1).locator(
             ".op-chat-menu button", has_text="Rename").dispatch_event("click")
         rename = rows.nth(1).locator(".op-chat-rename input")
+        # Reproduce the parent shell's generic input styling, which used to
+        # override the compact rename field but not its surrounding buttons.
+        pg.add_style_tag(content=".wrap input[type=text]{font-size:16px;background:#111}")
+        geometry = rename.evaluate("""el => {
+            const cs = getComputedStyle(el);
+            const save = el.closest('form').querySelector('button[type=submit]');
+            return {font: parseFloat(cs.fontSize), line: parseFloat(cs.lineHeight),
+                height: el.getBoundingClientRect().height,
+                buttonHeight: save.getBoundingClientRect().height,
+                family: cs.fontFamily};
+        }""")
+        assert geometry["font"] < 14, geometry
+        assert geometry["height"] - geometry["line"] >= 10, geometry
+        assert abs(geometry["height"] - geometry["buttonHeight"]) < 1, geometry
+        assert "DM Sans" in geometry["family"]
         rename.fill("Japan fare research")
         rows.nth(1).locator(".op-chat-rename").evaluate("form => form.requestSubmit()")
         pg.wait_for_selector("text=Japan fare research", timeout=5000)
@@ -1486,7 +1999,7 @@ def test_header_brand_metadata_and_surface_badges_are_visually_aligned(browser, 
             })(),
           };
         }""")
-        assert metrics["version"] == "1.1.0"
+        assert metrics["version"] == "1.2.1"
         assert metrics["family"].startswith("Urbanist")
         assert metrics["wordmarkGap"] <= 1.5
         assert metrics["chip"] == "sandbox"
@@ -1680,6 +2193,32 @@ def test_launchpad_controls_work_while_model_discovery_is_stalled(browser, harne
         ctx.close()
 
 
+@pytest.mark.parametrize("width", [1024, 1440])
+def test_desktop_launchpad_placeholder_matches_draft_size(browser, harness, width):
+    """Desktop hint copy should not be larger than the text it is replacing."""
+    ctx = browser.new_context(viewport={"width": width, "height": 900})
+    ctx.add_init_script("localStorage.setItem('operator-session-v2', "
+                        + json.dumps(json.dumps(dict(_SEEDED_SESSION, log=""))) + ");")
+    pg = ctx.new_page()
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_selector("#op-lp-input", state="visible")
+        field = pg.locator("#op-lp-input")
+        before = field.evaluate("""el => ({
+          font: parseFloat(getComputedStyle(el, '::placeholder').fontSize),
+          height: el.getBoundingClientRect().height,
+          line: parseFloat(getComputedStyle(el).lineHeight)
+        })""")
+        field.fill("A desktop draft")
+        typed_font = field.evaluate("el => parseFloat(getComputedStyle(el).fontSize)")
+        assert before["font"] == pytest.approx(typed_font, abs=0.1)
+        assert before["height"] >= before["line"] - 0.1
+        field.fill("")
+        assert field.evaluate("el => getComputedStyle(el, '::placeholder').opacity") == "0"
+    finally:
+        ctx.close()
+
+
 def test_launchpad_composer_padding_focuses_input_without_selecting_placeholder(browser, harness):
     """Every non-button pixel in the pill focuses input; empty copy is not selectable."""
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
@@ -1867,6 +2406,55 @@ def test_saved_pill_is_permanent_with_a_minimal_empty_state(browser, harness):
         ctx.close()
 
 
+def test_saved_task_bot_is_rendered_as_text_when_run(browser, harness):
+    """Persisted task metadata must never become status-card markup."""
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    ctx.add_init_script(
+        "localStorage.setItem('operator-session-v2', "
+        + json.dumps(json.dumps({"log": "", "mode": "auto",
+                                 "bot": "", "model": "", "effort": ""})) + ");")
+    pg = ctx.new_page()
+    hostile_bot = (
+        '</span><img id="saved-task-xss" src="missing" '
+        'onerror="window.__savedTaskXss = true">'
+    )
+
+    def task_api(route):
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"ok": True, "tasks": [{
+                "slug": "hostile-task",
+                "name": "Hostile metadata",
+                "prompt": "Check the page",
+                "sites": [],
+                "bot": hostile_bot,
+                "model": "",
+                "effort": "",
+                "vars": [],
+            }]}),
+        )
+
+    pg.route("**/operator/tasks", task_api)
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "document.getElementById('op-lp-tasks-toggle')._wired === true",
+            timeout=8000,
+            polling=50,
+        )
+        pg.dispatch_event("#op-lp-tasks-toggle", "click")
+        pg.wait_for_selector(".op-lp-card", state="visible", timeout=3000)
+        pg.dispatch_event(".op-lp-card .op-lp-go", "click")
+        pg.wait_for_timeout(250)
+
+        assert pg.evaluate("window.__savedTaskXss === true") is False
+        assert pg.locator("#saved-task-xss").count() == 0
+        assert hostile_bot in pg.locator("#op-action-sub").text_content()
+    finally:
+        ctx.close()
+
+
 def test_mobile_launchpad_uses_the_full_screen(browser, harness):
     """The mobile splash replaces the bottom sheet instead of sitting behind it."""
     # The harness' deliberately tiny _base.html omits the production viewport
@@ -1897,7 +2485,7 @@ def test_mobile_launchpad_uses_the_full_screen(browser, harness):
 
 def test_touch_stage_requires_explicit_keyboard_control(browser, harness):
     """A browser tap must steer without summoning iOS's keyboard; typing is explicit."""
-    ctx = _restored_ctx(browser,
+    ctx = browser.new_context(
         viewport={"width": 820, "height": 1180},
         has_touch=True,
         is_mobile=True,
@@ -1916,33 +2504,29 @@ def test_touch_stage_requires_explicit_keyboard_control(browser, harness):
         pg.wait_for_function(
             "document.getElementById('op-view').naturalWidth > 0",
             timeout=8000, polling=50)
-        pg.wait_for_selector("#op-lp", state="hidden", timeout=8000)
+        pg.locator("#op-lp").evaluate("el => { el.hidden = true; }")
         # The harness begins in the transitional idle state, whose connection
         # veil correctly sits above every stage control. This test owns the
         # live-browser interaction contract, so clear that unrelated veil.
         pg.locator("#op-overlay").evaluate("el => { el.style.display = 'none'; }")
+        stage = pg.locator("#op-stage").bounding_box()
+        assert stage is not None
 
         # Chromium can wait indefinitely for a compositor frame while
         # Playwright's touchscreen.tap drives a headless mobile context. Send
         # the same DOM touch sequence directly: this test owns the touch
         # handler/focus contract, not Chromium's input-device transport.
-        # Page restoration and font loading can reflow the stage. Sample its
-        # geometry in the same browser task as the touch, never a prior RPC.
-        with pg.expect_request(lambda req: req.url.endswith('/operator/steer')
-                               and req.method == 'POST'
-                               and req.post_data_json.get('kind') == 'click_at'):
-            pg.evaluate("""() => {
-              const el = document.getElementById('op-stage');
-              const r = el.getBoundingClientRect();
-              const x = r.left + r.width / 2, y = r.top + r.height / 2;
-              const touch = new Touch({identifier:1, target:el, clientX:x, clientY:y});
-              el.dispatchEvent(new TouchEvent('touchstart', {
-                bubbles:true, cancelable:true, touches:[touch], targetTouches:[touch],
-                changedTouches:[touch]}));
-              el.dispatchEvent(new TouchEvent('touchend', {
-                bubbles:true, cancelable:true, touches:[], targetTouches:[],
-                changedTouches:[touch]}));
-            }""")
+        pg.evaluate("""([x, y]) => {
+          const el = document.getElementById('op-stage');
+          const touch = new Touch({identifier:1, target:el, clientX:x, clientY:y});
+          el.dispatchEvent(new TouchEvent('touchstart', {
+            bubbles:true, cancelable:true, touches:[touch], targetTouches:[touch],
+            changedTouches:[touch]}));
+          el.dispatchEvent(new TouchEvent('touchend', {
+            bubbles:true, cancelable:true, touches:[], targetTouches:[],
+            changedTouches:[touch]}));
+        }""", [stage["x"] + stage["width"] / 2,
+                 stage["y"] + stage["height"] / 2])
         # A normal browser tap focuses the non-editable stage for hardware-key
         # handling, but must not focus the hidden textarea and make iOS raise
         # the software keyboard over the page the user just tapped.
@@ -2214,6 +2798,68 @@ def test_restored_session_starts_at_chat_bottom(browser, harness):
         ctx.close()
 
 
+@pytest.mark.parametrize('width', [390, 1440])
+def test_launchpad_connection_ring_tracks_demand_start(browser, harness, width):
+    """A down CDP probe while Chrome starts is yellow, not a red failure.
+
+    Real page/CSS, synthetic status and dead CDP: no Chrome or model work.
+    """
+    harness.mode = 'live'
+    status = dict(_STATUS_DEAD, status='connecting', browser_up=False,
+                  detail='starting browser…')
+    ctx = browser.new_context(viewport={'width': width, 'height': 900})
+    pg = ctx.new_page()
+    errors = []
+    pg.on('pageerror', lambda error: errors.append(str(error)))
+    pg.route('**/operator/status', lambda route: route.fulfill(json=status))
+    try:
+        pg.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        pg.add_style_tag(content=':root { --bad: #f85149; --fg: #ffffff; }')
+        pg.wait_for_selector('#op.op-browser-down[data-connection="connecting"]')
+        # Cross both the old 4s branding cutoff and the 6s cold-feed overlay.
+        pg.wait_for_timeout(6600)
+
+        def appearance():
+            return pg.evaluate("""() => ({
+              ring: getComputedStyle(document.querySelector('.op-lp-mark-sweep')).stroke,
+              glyph: getComputedStyle(document.querySelector('.op-lp-mark-glyph')).stroke,
+              animation: getComputedStyle(document.querySelector('.op-lp-mark-glyph')).animationName,
+              copy: getComputedStyle(document.querySelector('.op-lp-mark-tip'), '::before').content,
+              label: document.getElementById('op-lp-mark').getAttribute('aria-label')
+            })""")
+
+        pending = appearance()
+        assert pending['ring'] == 'rgb(231, 185, 62)'
+        assert pending['glyph'] == 'rgb(245, 245, 245)'
+        assert pending['animation'] == 'op-mark-glyph-turn'
+        assert pending['copy'] == '"Connecting…"'
+        assert pending['label'] == 'Connecting…'
+        pg.emulate_media(reduced_motion='reduce')
+        assert appearance()['animation'] == 'none'
+        pg.emulate_media(reduced_motion='no-preference')
+
+        # Backend reports the actual launcher failure/timeout.
+        status.update(status='error', detail='browser could not start: timed out')
+        pg.wait_for_selector('#op[data-connection="error"]')
+        assert appearance()['ring'] == 'rgb(248, 81, 73)'
+        assert appearance()['copy'] == '"Connection error"'
+
+        # A retry must spin again even though the boot animation already settled.
+        status.update(status='connecting')
+        pg.wait_for_selector('#op[data-connection="connecting"]')
+        assert appearance()['animation'] == 'op-mark-glyph-turn'
+
+        # An attached frame outranks the briefly cached negative CDP probe.
+        status.update(_STATUS_LIVE)
+        pg.wait_for_selector('#op[data-connection="live"]')
+        assert appearance()['ring'] == 'rgb(63, 185, 80)'
+        assert appearance()['copy'] == '"Connected"'
+        assert appearance()['animation'] != 'op-mark-glyph-turn'
+        assert not errors, errors
+    finally:
+        ctx.close()
+
+
 def test_restored_session_home_reopens_live_launchpad(browser, harness):
     """After a restored conversation, HOME must reopen the splash with every
     control live: cards populate the splash composer, category pills toggle
@@ -2334,6 +2980,56 @@ def test_restored_session_touch_activation(browser, harness):
 
 
 # ── 2026-07-18 evening polish: trash presentation + iOS composer geometry ───
+
+
+@pytest.mark.parametrize('delete_status', [200, 409, 503])
+def test_header_delete_stays_deleted_after_splash_and_reload(browser, harness, monkeypatch, delete_status):
+    import operator_workspace
+    monkeypatch.setattr(operator_workspace, 'delete_conversation', lambda sid: None)
+    monkeypatch.setattr(harness.mod, '_browser_tab_command', lambda *a, **kw: True)
+    harness.mode = 'live'
+    sid = OS_MOD.create()['id']
+    OS_MOD.save(dict(_SEEDED_SESSION), conversation_id=sid)
+    ctx = browser.new_context(viewport={'width': 1440, 'height': 900})
+    ctx.add_init_script("if (!sessionStorage.getItem('operator-conversation-v2')) "
+                        "sessionStorage.setItem('operator-conversation-v2', " + json.dumps(sid) + ");")
+    pg = ctx.new_page()
+    errors = []
+    pg.on('pageerror', lambda e: errors.append(str(e)))
+    pg.route('**/operator/agent?*', lambda r: r.fulfill(json={'state': 'idle', 'alive': False, 'messages': []}))
+    if delete_status != 200:
+        pg.route('**/operator/sessions/*?fresh=1', lambda r: r.fulfill(
+            status=delete_status, json={'ok': False, 'error': 'Deletion unavailable'}))
+    try:
+        pg.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        pg.wait_for_selector('#op-lp', state='hidden', timeout=8000)
+        if delete_status != 200:
+            dialogs = []
+            pg.on('dialog', lambda d: (dialogs.append(d.message), d.accept()))
+            pg.locator('#op-clear').click()
+            pg.wait_for_function("!document.getElementById('op-clear').disabled")
+            assert dialogs == ['Deletion unavailable']
+            assert pg.locator('#op-log .op-msg').count() > 0
+            assert OS_MOD.load(sid)['data']['log']
+            return
+        with pg.expect_navigation(wait_until='domcontentloaded'):
+            pg.locator('#op-clear').click()
+        pg.wait_for_timeout(1200)
+        assert pg.locator('#op-log').inner_text() == '', pg.locator('#op-log').inner_html()
+        pg.wait_for_selector('#op-lp', state='visible', timeout=8000)
+        replacement = pg.evaluate("sessionStorage.getItem('operator-conversation-v2')")
+        assert replacement != sid
+        with pytest.raises(KeyError):
+            OS_MOD.load(sid)
+        pg.dispatch_event('#op-lp-x', 'click')
+        pg.wait_for_timeout(1800)
+        assert pg.locator('#op-log .op-msg').count() == 0
+        pg.reload(wait_until='domcontentloaded')
+        pg.wait_for_selector('#op-lp', state='visible', timeout=8000)
+        assert pg.locator('#op-log .op-msg').count() == 0
+        assert not errors
+    finally:
+        ctx.close()
 
 
 def test_trash_clear_returns_to_opaque_splash(browser, harness):
@@ -2463,6 +3159,143 @@ def test_splash_composer_ios_scaled_geometry(browser, harness):
         assert shrunk["ch"] <= base["ch"] + 1, f"did not shrink: {shrunk['ch']}"
         assert pg.locator(".op-lp-placeholder").evaluate(
             "el => getComputedStyle(el).display") == "none"
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize('arrival', ['completed', 'running', 'late_final', 'already_saved'])
+def test_observer_reconciles_final_without_replaying_or_taking_control(browser, harness, arrival):
+    harness.mode = 'live'
+    answer = '**Available flights**\n\n- Tuesday\n- Thursday'
+    log_html = '<div class="op-msg user"><div class="bubble">Find flights</div></div>'
+    log_html += '<div class="op-task"><div class="op-task-step">Reading flight results</div></div>'
+    if arrival == 'already_saved':
+        log_html += '<div class="op-msg bot"><div class="bubble"><p><strong>Available flights</strong></p><ul><li>Tuesday</li><li>Thursday</li></ul></div></div>'
+    session = {'log': log_html, 'mode': 'auto', 'bot': '', 'model': '', 'effort': ''}
+    snapshot = {'state': 'running' if arrival == 'running' else 'done',
+                'final': '' if arrival in ('running', 'late_final') else answer,
+                'messages': [], 'bot': 'gpt', 'alive': True,
+                'started_ts': 1, 'ended_ts': 2, 'run_id': 'observer-fixture'}
+    ctx = browser.new_context(viewport={'width': 390 if arrival == 'late_final' else 1440, 'height': 900})
+    ctx.add_init_script("localStorage.setItem('operator-session-v2', " + json.dumps(json.dumps(session)) + ");")
+    pg = ctx.new_page()
+    errors, writes = [], []
+    pg.on('pageerror', lambda error: errors.append(str(error)))
+    pg.on('request', lambda req: writes.append(req.url) if req.method == 'POST' else None)
+    pg.route('**/operator/session', lambda route: route.fulfill(json={
+        'ok': True, 'data': session, 'rev': 1, 'conversation_rev': 1, 'conversation_id': 'legacy'}))
+    pg.route('**/operator/sessions/*/presence', lambda route: route.fulfill(json={
+        'ok': True, 'can_control': False, 'controller_label': 'HOST-B'}))
+    pg.route('**/operator/agent?*', lambda route: route.fulfill(json=snapshot))
+    try:
+        pg.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        pg.wait_for_selector('#op[data-thread-control="observer"]')
+        assert 'HOST-B has control' in pg.locator('.op-thread-observer').inner_text()
+        if arrival == 'running':
+            pg.wait_for_selector('#op[data-busy="1"]')
+        if arrival in ('running', 'late_final'):
+            pg.wait_for_timeout(1700)  # previously-handled terminal state, or running poll
+            snapshot.update(state='done', final=answer)
+        bubble = pg.locator('.op-msg.bot .bubble').filter(has_text='Available flights')
+        bubble.wait_for(timeout=8000)
+        pg.wait_for_timeout(1800)  # repeated done polls must remain idempotent
+        assert bubble.count() == 1
+        assert bubble.locator('li').count() == 2
+        assert 'returned no summary' not in pg.locator('#op-log').inner_text()
+        assert not any('/agent/stop' in url or '/dispatch' in url for url in writes)
+        assert not errors, errors
+        color = pg.locator('.op-thread-observer button').evaluate('el => getComputedStyle(el).backgroundColor')
+        assert color == 'rgb(120, 186, 255)'
+        if arrival == 'already_saved':
+            # Exercise the clear handler with a delayed server reset. Never
+            # send the fixture's reset to an actual runner.
+            pg.route('**/operator/agent/reset', lambda route: route.fulfill(json={'ok': True}))
+            pg.locator('#op-clear').evaluate('el => el.click()')
+            pg.wait_for_timeout(2000)
+            assert pg.locator('.op-msg.bot .bubble').count() == 0
+    finally:
+        ctx.close()
+
+
+def test_chat_library_filters_sort_search_and_mobile_fit(browser, harness):
+    harness.mode = 'live'
+    ctx = browser.new_context(viewport={'width': 390, 'height': 844})
+    pg = ctx.new_page()
+    rows = [
+        {'id': 'a', 'title': 'Airfare', 'model': 'GPT-6 Astra', 'updated_ts': 1, 'presence': {'can_control': True, 'controller_label': 'HOST-B'}},
+        {'id': 'b', 'title': 'Hotel', 'model': 'Gemini', 'updated_ts': 2, 'alive': True},
+        {'id': 'c', 'title': 'Coffee', 'model': 'Sol', 'updated_ts': 3},
+    ]
+    pg.route('**/operator/sessions?*', lambda r: r.fulfill(json={'ok': True, 'sessions': rows}))
+    try:
+        pg.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        # The stub host omits host-app's base stylesheet and color tokens.
+        pg.add_style_tag(content=':root{--fg:#e7ecf3;--muted:#8e99a8;--border-2:#30343b} *{animation:none!important;transition:none!important}')
+        pg.wait_for_function("document.getElementById('op-lp-open')._wired === true")
+        pg.locator('#op-lp-open').dispatch_event('click')
+        pg.wait_for_selector('#op-lp-chats', state='visible')
+        pg.locator('#op-lp-chats').dispatch_event('click')
+        pg.wait_for_function("document.getElementById('op-chat-count').textContent === '3 of 3 chats'")
+        pg.locator('#op-chat-filter').select_option('running')
+        assert pg.locator('.op-chat-title').all_text_contents() == ['Hotel']
+        pg.locator('#op-chat-filter').select_option('here')
+        assert pg.locator('.op-chat-title').all_text_contents() == ['Airfare']
+        pg.locator('#op-chat-filter').select_option('all')
+        pg.locator('#op-chat-sort').select_option('title')
+        assert pg.locator('.op-chat-title').all_text_contents() == ['Airfare', 'Coffee', 'Hotel']
+        pg.locator('#op-chat-search').fill('host-b')
+        assert pg.locator('.op-chat-title').all_text_contents() == ['Airfare']
+        pg.locator('#op-chat-search').fill('astra')
+        assert pg.locator('.op-chat-title').all_text_contents() == ['Airfare']
+        pg.locator('#op-chat-search').fill('')
+        assert pg.locator('#op-chats').evaluate('el => el.scrollWidth <= el.clientWidth')
+        pg.screenshot(path='/tmp/operator-chat-library-mobile.png')
+    finally:
+        ctx.close()
+
+
+def test_retained_history_fills_gaps_and_loads_older_without_duplicates(browser, harness):
+    harness.mode = 'live'
+    session = {'mode': 'auto', 'log': '<div class="op-msg user"><span class="bubble">Question 2</span></div><div class="op-task">Existing thinking trace</div>'}
+    turns = [{'id': i, 'task': f'Question {i}', 'final': f'**Answer {i}**', 'state': 'done'} for i in (1, 2)]
+    ctx = browser.new_context(viewport={'width': 390, 'height': 900})
+    pg = ctx.new_page()
+    errors = []
+    pg.on('pageerror', lambda error: errors.append(str(error)))
+    pg.route('**/operator/session', lambda r: r.fulfill(json={'ok': True, 'data': session, 'rev': 1, 'conversation_rev': 1, 'conversation_id': 'legacy'}))
+    def history(route):
+        if 'before=' in route.request.url:
+            data = {'turns': [{'id': 0, 'task': 'Question 0', 'final': 'Answer 0'}], 'oldest_id': 0, 'has_more': False}
+        elif 'after=2' in route.request.url:
+            data = {'turns': [], 'latest_id': 2, 'has_more': False}
+        else:
+            data = {'turns': turns, 'oldest_id': 1, 'latest_id': 2, 'has_more': True}
+        route.fulfill(json={'ok': True, **data})
+    pg.route('**/operator/history?*', history)
+    try:
+        pg.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        pg.locator('.op-msg.bot').filter(has_text='Answer 2').wait_for()
+        assert pg.locator('.op-msg.user').count() == 2
+        assert 'Existing thinking trace' in pg.locator('#op-log').inner_text()
+        pg.locator('.op-load-earlier').click()
+        pg.locator('.op-msg.bot').filter(has_text='Answer 0').wait_for()
+        assert pg.locator('.op-load-earlier').count() == 0
+        # A stale controller cache arrives again; retained history repairs it.
+        pg.evaluate('data => window._opApplySession(data, 2, true, "legacy", 2)', session)
+        pg.wait_for_timeout(300)
+        assert pg.locator('.op-msg.bot').count() == 3
+        assert pg.locator('.op-msg.user').count() == 3
+        assert pg.locator('.op-msg .bubble').all_text_contents() == [
+            'Question 0', 'Answer 0', 'Question 1', 'Answer 1', 'Question 2', 'Answer 2']
+        # Clear on another device must invalidate this viewer's cached pages.
+        pg.unroute('**/operator/history?*')
+        pg.route('**/operator/history?*', lambda r: r.fulfill(json={
+            'ok': True, 'turns': [], 'cleared_through_id': 2, 'has_more': False}))
+        fresh = {'mode': 'auto', 'log': '<div class="op-msg user"><span class="bubble">Fresh start</span></div>'}
+        pg.evaluate('data => window._opApplySession(data, 3, true, "legacy", 3)', fresh)
+        pg.wait_for_timeout(300)
+        assert pg.locator('.op-msg .bubble').all_text_contents() == ['Fresh start']
+        assert not errors, errors
     finally:
         ctx.close()
 

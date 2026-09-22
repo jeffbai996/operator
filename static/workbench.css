@@ -1,0 +1,92 @@
+/* Operator 1.2: compact, server-owned work; no capture/layout ownership here. */
+.op .op-workbench[hidden], .op .op-attach[hidden] { display: none !important; }
+.op .op-attach { flex: 0 0 auto;
+  width: calc(21px * var(--chat-scale, 1.05) / 1.05);
+  height: calc(21px * var(--chat-scale, 1.05) / 1.05); padding: 0;
+  box-sizing: border-box; align-self: center; display: grid; place-items: center; border: 1px solid transparent; border-radius: .5em;
+  color: var(--muted); background: transparent; }
+/* Grown composer: the row bottom-pins (.op-steer:has rule in operator.css)
+   but this center held the clip mid-air while send sat at the bottom (the owner
+   2026-09-12: "paperclip should stay aligned with the enter button"). */
+.op .op-steer:has(.op-input:not(:placeholder-shown)) .op-attach { align-self: flex-end; }
+/* Align the button boxes without shrinking the glyph inside its viewBox. */
+.op .op-attach svg { width: 100%; height: 100%; }
+.op .op-attach:hover { color: var(--fg); background: var(--bg-3); }
+.op .op-workbench { font: .82em/1.45 var(--chat-font, sans-serif); color: var(--fg); }
+.op .op-job-panel { padding: .7em .9em; border: 1px solid var(--border, #292b30);
+  border-radius: 1em; margin: .25em 0 .6em; max-height: min(36vh, 22em); overflow: auto; flex-shrink: 0; }
+.op[data-status-min="1"] .op-job-panel { display: none; }
+.op .op-job-panel p { margin: .35em 0 .65em; }
+.op .op-job-panel ol { padding-left: 1.4em; margin: .5em 0; }
+.op .op-job-panel li { margin: .35em 0; }
+.op .op-job-panel li[data-state="completed"] { color: var(--muted); }
+.op .op-job-panel li[data-state="inProgress"] { color: #50bf69; }
+.op .op-job-panel h3 { font-size: 1em; margin: .8em 0 .2em; }
+.op .op-workbench button, .op .op-workbench a.op-wb-button { font: inherit;
+  border: 1px solid var(--border, #303239); border-radius: .7em; padding: .45em .8em;
+  background: transparent; color: var(--fg); cursor: pointer; text-decoration: none; }
+.op .op-workbench button:hover, .op .op-workbench a.op-wb-button:hover { background: var(--bg-3, #202125); }
+.op .op-workbench button:disabled { opacity: .45; cursor: default; }
+.op .op-workbench :focus-visible, .op .op-attach:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+.op .op-wb-actions { display: flex; gap: .5em; flex-wrap: wrap; margin-top: .65em; }
+.op .op-wb-card { border: 1px solid var(--border, #292b30); border-radius: 1em; padding: .85em;
+  margin: .7em 0; overflow-wrap: anywhere; background: var(--bg, #000);
+  font: 500 calc(.78rem * var(--chat-scale))/1.5 var(--chat-font); }
+.op .op-wb-card h3 { font: 700 1.05em/1.35 'Plus Jakarta Sans', sans-serif; margin: .35em 0; }
+.op .op-wb-card p { margin: .45em 0; white-space: pre-wrap; }
+.op .op-wb-rich { margin: .45em 0; min-width: 0; user-select: text; -webkit-user-select: text; }
+.op .op-wb-rich pre { position: relative; padding: .8em; padding-right: 2.8em; border-radius: .6em; background: var(--bg-3, #12141a); white-space: pre-wrap; overflow: auto; }
+.op .op-wb-rich code { font: .9em/1.5 ui-monospace, monospace; }
+.op .op-wb-rich button.op-copy { width: 1.65em; height: 1.65em; padding: 0; display: grid; place-items: center; opacity: .8; }
+.op .op-wb-rich table { border-collapse: collapse; width: 100%; font-size: .95em; }
+.op .op-wb-rich .op-md-tablewrap { overflow-x: auto; max-width: 100%; }
+.op .op-wb-rich th, .op .op-wb-rich td { text-align: left; padding: .5em .65em; border-bottom: 1px solid var(--border, #292b30); }
+.op .op-wb-rich th { color: var(--fg); font-weight: 650; background: var(--bg-3, #12141a); }
+.op .op-wb-rich ul, .op .op-wb-rich ol { padding-left: 1.4em; }
+.op .op-wb-rich a { color: var(--accent, #8fc8ff); }
+.op .op-wb-card p, .op .op-wb-card h3, .op .op-wb-source { -webkit-user-select: text; user-select: text; }
+.op .op-wb-tag { font-size: .72em; font-weight: 500; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.op .op-wb-approval { border-color: #ca923e; }
+.op .op-workbench button.op-wb-primary { background: #d8a351; border-color: #d8a351; color: #171109; font-weight: 650; }
+.op .op-workbench button.op-wb-primary:hover { background: #e7b566; }
+.op .op-wb-source { display: block; color: var(--muted); font-size: .86em; margin-top: .4em; }
+.op .op-wb-notice { padding: .2em .6em .35em; color: var(--muted); flex-shrink: 0; }
+.op dialog.op-wb-dialog { width: min(92vw, 42em); max-height: min(82dvh, 52em); box-sizing: border-box;
+  padding: 1.25em; border: 1px solid var(--border, #303239); border-radius: 1.3em;
+  background: var(--bg, #000); color: var(--fg); overflow: auto; }
+.op dialog.op-wb-dialog::backdrop { background: rgb(0 0 0 / .58); backdrop-filter: blur(6px); }
+.op .op-wb-head { display: flex; gap: .8em; align-items: center; justify-content: space-between; margin-bottom: 1em; }
+.op .op-wb-head h2 { margin: 0; font: 650 1.25em 'Plus Jakarta Sans', sans-serif; }
+.op .op-wb-file { display: flex; align-items: center; gap: .6em; padding: .75em 0; border-bottom: 1px solid var(--border, #292b30); }
+.op .op-wb-file a { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+.op .op-wb-file small { color: var(--muted); white-space: nowrap; }
+/* The add control is the drop target. Empty chat: a tall dashed field that is
+   the whole body. With files: a slim dashed row under the list. One control,
+   two heights; no "drop it here" sentence (the owner 2026-09-10: no captain-obvious copy). */
+.op .op-workbench button.op-wb-zone { display: block; width: 100%; margin-top: .6em; padding: .7em 1em;
+  border: 1px dashed var(--border-2, #3a3d44); border-radius: .75em; background: transparent; color: var(--muted); }
+.op .op-workbench button.op-wb-zone:hover, .op .op-workbench button.op-wb-zone:focus-visible { color: var(--fg); border-color: var(--fg-2, #9aa0aa); background: transparent; }
+.op .op-workbench button.op-wb-zone-empty { margin-top: 0; padding: 3.2em 1em; font-size: 1.05em; }
+.op .op-workbench button.op-wb-close { width: 2em; height: 2em; padding: 0; border-color: transparent; border-radius: .5em;
+  font-size: 1.25em; line-height: 1; color: var(--muted); display: grid; place-items: center; }
+.op .op-workbench button.op-wb-close:hover { color: var(--fg); background: var(--bg-3, #202125); }
+.op .op-workbench button:focus { outline: none; }
+.op .op-workbench button:focus-visible { outline: 2px solid var(--fg-2, #9aa0aa); outline-offset: 2px; }
+.op .op-wb-status { color: var(--muted); font-size: .86em; margin: .6em 0 0; min-height: 0; }
+.op .op-wb-status:empty { display: none; }
+.op .op-wb-storage { color: var(--muted); font-size: .8em; margin: .9em 0 0; font-variant-numeric: tabular-nums; }
+.op .op-wb-metrics { display: grid; grid-template-columns: 1fr auto; gap: .5em 1em; margin: 1em 0; }
+.op .op-wb-metrics dt, .op .op-wb-metrics dd { margin: 0; }
+.op .op-wb-metrics dd { font-variant-numeric: tabular-nums; }
+.op .op-recipe-money { display: grid; grid-template-columns: 2fr 1fr; gap: .7em; margin-top: .9em; }
+.op .op-recipe-money label { min-width: 0; }
+.op .op-recipe-money input { width: 100%; box-sizing: border-box; }
+.op .op-recipe-actions { display: flex; flex-wrap: wrap; gap: .9em; border: 0; padding: .6em 0; margin: 0; }
+.op .op-recipe-actions legend { font: inherit; padding: .7em 0 .3em; }
+.op .op-recipe-actions input { accent-color: #52b86b; width: auto; }
+.op .op-wb-drop { outline: 2px dashed #52b86b; outline-offset: -5px; }
+@media (max-width: 820px) {
+  .op dialog.op-wb-dialog { font-size: 16px; width: calc(100vw - 24px); padding: 1em; }
+  .op #op-recipe-options input, .op #op-recipe-options textarea, .op #op-recipe-options select { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .op dialog.op-wb-dialog::backdrop { backdrop-filter: none; } }

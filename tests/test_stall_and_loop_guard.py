@@ -232,7 +232,7 @@ def test_stall_reason_turns_stop_into_error_not_interrupted(runner):
     assert runner.state == "error"
 
 
-# ── read/act loops on the DESKTOP surface  ──────────────────
+# ── read/act loops on the DESKTOP surface (the owner 2026-08-31) ──────────────────
 # The run that prompted these typed a query into a Google box that already held
 # text, read the screen, typed again onto the end of it, read again — fourteen
 # rounds, then a 123-step macro, until it was stopped by hand. Neither detector

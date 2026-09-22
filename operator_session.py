@@ -5,7 +5,7 @@ localStorage, so every device had its own unrelated history. v1.0.11 moved it
 to one shared server-side session: whoever opens the cockpit, on whatever
 device, sees the same conversation.
 
-One was not enough . Every task landed in the same
+One was not enough (the owner 2026-08-06). Every task landed in the same
 transcript, an unrelated errand's context rode along inside it, and the only
 way to get a clean start was the trash can, which destroyed what was there.
 So this module now owns a MAP of conversations plus which one is active, and
@@ -296,7 +296,7 @@ def rename(sid: str, title: str) -> int:
         return _write_unlocked(st)
 
 
-def delete(sid: str) -> dict:
+def delete(sid: str, *, fresh: bool = False) -> dict:
     """Drop a conversation. Deleting the active one falls through to the most
     recent survivor; deleting the last one leaves a fresh empty conversation,
     so the cockpit always has somewhere to write. {active, rev}."""
@@ -305,8 +305,8 @@ def delete(sid: str) -> dict:
         if sid not in st["sessions"]:
             raise KeyError(sid)
         st["sessions"].pop(sid)
-        if st["active"] == sid or st["active"] not in st["sessions"]:
-            if st["sessions"]:
+        if fresh or st["active"] == sid or st["active"] not in st["sessions"]:
+            if st["sessions"] and not fresh:
                 st["active"] = _newest(st["sessions"])
             else:
                 new = _new_id()

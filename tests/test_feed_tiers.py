@@ -372,6 +372,8 @@ def test_sandbox_stream_spawns_with_eco_tier_params():
 
 def test_eco_sandbox_health_floor_tracks_its_lower_configured_rate():
     feed = OV._DesktopFeed
+    # 3fps is healthy for a 4fps eco stream but decayed under the legacy 4fps
+    # absolute floor, which would make eco endlessly restart its own ffmpeg.
     assert feed._stream_decayed(15, 5.0, 60.0, min_fps=2.4) is False
     assert feed._stream_decayed(8, 5.0, 60.0, min_fps=2.4) is True
 
@@ -490,11 +492,12 @@ def test_capture_cadence_falls_to_three_fps_only_after_quiet_window():
     assert 0.3 <= OV.IDLE_FRAME_INTERVAL <= 0.4
 
 
-def test_busy_capture_cadence_keeps_existing_cdp_share_limit():
-    """The data saver must not increase contention with an active agent."""
+def test_busy_capture_cadence_does_not_add_half_a_second_of_input_lag():
+    """captureScreenshot already backpressures; a second throttle made ~1fps."""
     st = OV._Streamer()
     st._motion_until = 999.0
-    assert st._capture_interval(now=1.0, busy=True) == 0.45
+    assert st._capture_interval(now=1.0, busy=True) == OV.BUSY_FRAME_INTERVAL
+    assert 0.05 <= OV.BUSY_FRAME_INTERVAL <= 0.15
 
 
 class _WheelSpyPage:

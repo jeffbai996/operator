@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
 {% block title %}{% if OP_TITLE_STANDALONE %}Operator{% else %}operator — host-app{% endif %}{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1217">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1223">
 <link rel="stylesheet" href="{{ url_for('operator.static', filename='workbench.css') }}?rev=v1221">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
@@ -53,7 +53,7 @@
         <span class="op-fontpill-sep"></span>
         <button type="button" id="op-font-inc" aria-label="larger text">+</button>
       </div>
-      {# Home is the Operator MARK, not a house glyph  — going
+      {# Home is the Operator MARK, not a house glyph (the owner 2026-07-25) — going
          home means going to Operator's own launchpad, and this also puts the
          logo in the persistent cockpit chrome rather than only on the splash. #}
       <button class="op-full-btn op-iconbtn op-home-btn" id="op-lp-open" title="home — task launchpad" aria-label="open task launchpad">{# viewBox 0 0 24 24, NOT the cropped 6.4/11.2 the other marks use: the sibling
@@ -71,7 +71,7 @@
    Seam-free geometry (single circle + off-apex spirals), same as the favicon. #}<svg viewBox="6 6 12 12" width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-clear" title="clear chat" aria-label="clear chat"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"></path><path d="M10 11v6M14 11v6"></path></svg></button>
       {# brow theme button: same fragify 3-icon next-stop pattern as the splash
-         sun/moon  — the shared .op-lp-theme-* visibility rules
+         sun/moon (the owner 2026-07-28) — the shared .op-lp-theme-* visibility rules
          apply to any .op descendant, so the classes carry the logic here too #}
       <button class="op-full-btn op-iconbtn" id="op-flat" title="theme: default → flat → light" aria-label="cycle theme (default, flat, light)"><svg class="op-lp-theme-day" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg><svg class="op-lp-theme-night" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg><svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-full" title="fullscreen" aria-label="fullscreen"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3H3v4M13 3h4v4M17 13v4h-4M7 17H3v-4"></path></svg></button>
@@ -224,7 +224,7 @@
         <div class="op-set-row" id="op-diagnostics-setting" hidden><label for="op-diagnostics-toggle">Diagnostics</label><input id="op-diagnostics-toggle" type="checkbox" role="switch"><button type="button" id="op-health-open" hidden>Health</button></div>
         <div class="op-set-row"><label for="op-set-font">Chat font</label>
           <select id="op-set-font">
-            <option value="'Anthropic Sans', 'DM Sans', 'Plus Jakarta Sans', sans-serif">Anthropic Sans</option>
+            <option value="'DM Sans', 'Plus Jakarta Sans', sans-serif">DM Sans</option>
             <option value="'Plus Jakarta Sans', sans-serif">Jakarta</option>
             <option value="system-ui, sans-serif">System</option>
             <option value="'JetBrains Mono', monospace">Mono</option>
@@ -281,7 +281,7 @@
       </button>
       <!-- ships COLLAPSED: initLaunchpad() runs post-paint (setTimeout 0), so an
            expanded first paint flashed the category tabs + card grid for ~400ms
-           on every splash refresh before the JS collapse landed . -->
+           on every splash refresh before the JS collapse landed (the owner 2026-07-20). -->
       <div class="op-lp op-lp-collapsed" id="op-lp">
         {# Status ring — the Operator mark as a backend-health indicator, sized
            and spaced to sit in the same row as the theme toggle and the X. The
@@ -296,7 +296,7 @@
           <svg viewBox="0 0 64 64" width="26" height="26" fill="none">
             <circle class="op-lp-mark-track" cx="32" cy="32" r="25" stroke-width="7"/>
             {# The sweep is ROTATED by this wrapper, not slid via stroke-dashoffset
-               .
+               (the owner 2026-07-25: the arc flashed once per lap and read stilted).
                A dash pattern whose length equals the circumference seams where
                the round caps overlap at the wrap; a 360deg rotation has no seam
                at all. The circle keeps only dash geometry, so the settle can
@@ -331,7 +331,7 @@
                stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.2 3.8h9.6A2.2 2.2 0 0 1 17 6v5.1a2.2 2.2 0 0 1-2.2 2.2H9.1L5 16.4v-3.1a2.2 2.2 0 0 1-2-2.2V6a2.2 2.2 0 0 1 2.2-2.2Z"></path><path d="M6.4 8h7.2M6.4 10.7h5.1"></path></svg>
           <span class="op-chats-live" id="op-chats-live" hidden></span>
         </button>
-        {# About card : DESKTOP click on the status ring opens
+        {# About card (the owner 2026-07-26): DESKTOP click on the status ring opens
            it (mobile keeps the ring-as-menu). Left-aligned; heading = mark +
            wordmark + version; rights line; Operator · BaiCloud brand foot in
            the Fragify settings style. #}
@@ -342,7 +342,7 @@
             <span class="op-about-word">Operator</span>
             <span class="op-about-ver"><span class="op-about-ver-v">v</span>{{ OP_VERSION }}</span>
           </div>
-          <div class="op-about-rights">© 2026 the owner. All rights reserved.</div>
+          <div class="op-about-rights">© 2026 the owner Bai. All rights reserved.</div>
           <div class="op-about-foot">
             <span class="op-about-brand"><svg class="op-about-foot-mark" viewBox="6.4 6.4 11.2 11.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.8"></circle><path d="M12.743 7.29A3.1 3.1 0 0 1 12 13.4a1.4 1.4 0 0 0 0-2.8"></path><path d="M11.257 16.71A3.1 3.1 0 0 1 12 10.6a1.4 1.4 0 0 0 0 2.8"></path></svg>Operator</span>
             <span class="op-about-dot" aria-hidden="true">·</span>
@@ -352,7 +352,7 @@
         <button type="button" class="op-lp-theme" id="op-lp-theme" aria-label="use light mode" title="use light mode">
           <svg class="op-lp-theme-day" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg>
           <svg class="op-lp-theme-night" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg>
-          {# OLED stop: Fragify's pitch-black moon , filled so
+          {# OLED stop: Fragify's pitch-black moon (the owner 2026-07-28), filled so
              it reads "solid black" next to the outline night crescent #}
           <svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg>
         </button>
@@ -435,7 +435,7 @@
     <div class="op-chat-head">
       <div>
         <h2 id="op-chats-title">Chats</h2>
-        <p id="op-chats-note">Synced across your devices.</p>
+        <p id="op-chats-note">Synced across your devices</p>
       </div>
       <div class="op-chat-actions">
         <button type="button" class="op-chat-newbtn" id="op-chat-new">New chat</button>
@@ -585,6 +585,6 @@
     ,diagnostics: "{{ url_for('operator.operator_diagnostics') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1218"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1223"></script>
 <script src="{{ url_for('operator.static', filename='js/workbench.js') }}?rev=v1218"></script>
 {% endblock %}

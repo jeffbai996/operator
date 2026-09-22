@@ -1,14 +1,14 @@
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.1.0.svg">
-    <img src="docs/img/operator-lockup-light-v1.1.0.svg" height="72" alt="Operator v1.1.0">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.2.1.svg">
+    <img src="docs/img/operator-lockup-light-v1.2.1.svg" height="72" alt="Operator v1.2.1">
   </picture>
 </p>
 <p><b>General-purpose computer using agent</b></p>
 
 <p>
   <img src="https://img.shields.io/github/languages/top/jeffbai996/operator" alt="top language">
-  <img src="https://img.shields.io/badge/version-1.1.0-5965d8" alt="version 1.1.0">
+  <img src="https://img.shields.io/badge/version-1.2.1-5965d8" alt="version 1.2.1">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab" alt="python">
   <img src="https://img.shields.io/badge/agents-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini-8a63d2" alt="agent runtimes">
   <img src="https://img.shields.io/badge/auth-subscription%2C%20no%20API%20keys-2ea44f" alt="subscription auth">
@@ -16,7 +16,7 @@
 </p>
 
 <p>
-  <img src="docs/img/operator-multisession-v1.1.0.png" alt="Operator 1.1 launchpad with its cross-device Chats library open">
+  <img src="docs/img/operator-launchpad-v1.2.1.png" alt="Operator 1.2.1 launchpad with example tasks">
 </p>
 
 <p><sub><i>The launchpad is the one place to find and manage cloud chats: search by title or prompt, see the bot, surface, and live state, then resume, rename, or safely remove a thread. Each conversation owns its runner, transcript, resumed model session, work directory, state, and browser tab. Concurrent agents share cookies and extensions without being able to see, select, navigate, or close each other's tabs.</i></sub></p>
@@ -68,17 +68,17 @@ Operator detects whichever you have and drives the browser with it. An API-key
 fallback is documented in `environment.example`, but driving a browser over the API is
 expensive (a screenshot per step) — the logged-in CLI path is strongly preferred.
 
-> **Status:** **v1.1.0** — conversations now follow you across devices and safely
-> share one logged-in browser through isolated tab leases. Another device can
-> watch a thread live and deliberately take over; stale local state cannot
-> overwrite newer server state. The launchpad Chats library adds search, prompt
-> previews, live metadata, inline rename, guarded delete, and a reusable empty
-> draft. Recovery nudges are amber notices, not false “Turn failed” errors.
+> **Status:** **v1.2.1** — the cockpit streams the tab the agent is actually
+> driving: reopening lands on the live run's own tab, and a same-URL workload
+> can no longer pin the view on the wrong one. 1.2 added durable jobs with
+> checkpoints and evidence-linked result cards, native in-flight steering,
+> chat files and owned-browser downloads, recipe authorization limits, and
+> bounded diagnostics.
 
 ## What a session looks like
 
 <p>
-  <img src="docs/img/operator-takeover-v1.1.0.png" alt="A second device observing an Operator thread with an explicit Take over control">
+  <img src="docs/img/operator-cockpit-v1.2.1.png" alt="Operator 1.2.1 cockpit streaming the tab the agent is driving">
 </p>
 
 <p><sub><i>The same live thread opened on a second device. It adopts the current
@@ -227,7 +227,40 @@ when the token is unset, and a non-loopback `OPERATOR_HOST` refuses to start.
 
 **Explicitly not planned**: twitch-reflex games (physics, not skill — a different control layer), and the real desktop as a default anything — it stays confirm-gated with STOP on screen.
 
+## v1.2.1 — the tab you watch is the tab being driven
+
+On attach the
+streamer prefers the live run's registered tab, then the browser's real front
+tab unless it is an empty New Tab, then the newest page with content; creation
+order is never the tie-break. While a run is live the view follows the
+conversation's owned tab from the tab registry instead of re-asserting its own
+guess, so one SPA page for the whole task can no longer hold the view on the
+wrong tab. Every page switch is written to the viewport flight recorder, which
+now keeps 240 events. Tab titles use the chat face. Also carried under this
+number: steering that no longer loses the run it interrupted, durable chat
+delete and chat metadata, result cards anchored to their producing turn,
+composer drafts that survive refresh, owned-tab reaping with ownership guards,
+a 1Password popup the owner opened is left alone, per-run isolation of sandbox
+transport, downloads and Gemini MCP config, and Gemini Flash 3.8.
+
 ## Changelog
+
+| version | what shipped |
+|---|---|
+| v1.2.1 | the tab you watch is the tab being driven: attach and follow prefer the run's registered tab, then the browser's real front tab, then the newest page with content; every page switch is recorded; tab titles use the chat face |
+| v1.2.0 | jobs, results, files and steering: durable checkpoints and evidence-linked results, native in-flight steering, chat files and owned-browser downloads, recipe authorization limits, bounded diagnostics |
+| v1.1.0 | threads that travel, one browser that does not become a knife fight: server-authoritative conversations, observer mode and take over, per-conversation runners and Chrome tab leases |
+
+**v1.2.0** — **jobs, results, files and steering**. Each conversation keeps a
+durable job: checkpoints in the status card, expandable constraints and
+decisions, and result cards with observed sources and chat files. Saved
+recipes can state success criteria and exact authorization limits; otherwise
+Operator prepares the action and asks. Corrections use Codex's native
+in-flight steering; other runtimes deliver at a tool boundary with an
+interrupt/resume fallback. The paperclip opens Chat files, including completed
+downloads from owned browser tabs. Diagnostics live behind Settings and record
+bounded metadata, not content. See `WORKSPACE.md` for storage, rollback and
+provider boundaries.
 
 **v1.1.0** — **threads that travel, one browser that does not become a knife
 fight**. Conversations are revisioned and server-authoritative across devices;

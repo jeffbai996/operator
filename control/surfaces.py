@@ -169,7 +169,8 @@ class BrowserSurface(_BaseSurface):
     async def _attach(self) -> None:
         from playwright.async_api import async_playwright
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.connect_over_cdp(self._cdp_url)
+        self._browser = await self._pw.chromium.connect_over_cdp(
+            self._cdp_url, **({'no_defaults': True} if os.environ.get('OPERATOR_RUN_ID') else {}))
         await self._pick_page()
 
     async def _pick_page(self) -> None:

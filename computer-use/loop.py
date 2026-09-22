@@ -6,9 +6,9 @@ it screenshots the virtual display, sends the frame to Claude with the
 executes them via xdotool, screenshots the result, and feeds it back — until the
 model stops calling the tool (task done) or a step cap is hit.
 
-This is the "general GUI use" capability (option B, 2026-06-25): the agent can
-be asked to do something that needs a GUI, and it drives the sandboxed Linux
-desktop to do it. The key is never hardcoded — it comes from ANTHROPIC_API_KEY.
+This is the "general GUI use" capability (option B, 2026-06-25): a bot can be
+asked to do something that needs a GUI, and it drives the sandboxed Linux desktop
+to do it. The key is never hardcoded — it comes from the host secrets accessor.
 
 Usage:
     from loop import run
@@ -19,13 +19,14 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import sys
 import time
 
 log = logging.getLogger("computer_use.loop")
 
 # Backend is pluggable: the loop only needs ensure() / screen_size() /
 # screenshot(target, out_dir) / execute(action, target). "linux" (option B) drives
-# an isolated Xvfb display via scrot+xdotool; "windows" (option A) drives the
+# an isolated Xvfb display via scrot+xdotool; "windows" (option A) drives the owner's
 # real desktop via PowerShell. Same vision loop, different screen — selected by
 # COMPUTER_USE_BACKEND (default linux: safe + isolated).
 def _load_backend():
@@ -45,7 +46,7 @@ def _load_backend():
 #   - older (sonnet 4.5, haiku 4.5, 3.5/3.7) → computer_20250124
 #       + beta header computer-use-2025-01-24
 # Passing the wrong version 400s with "does not support tool types: computer_…".
-MODEL = os.environ.get("COMPUTER_USE_MODEL", "claude-opus-4-8")
+MODEL = os.environ.get("COMPUTER_USE_MODEL", "claude-opus-5")
 
 _TOOL_NEW = ("computer_20251124", "computer-use-2025-11-24")
 _TOOL_OLD = ("computer_20250124", "computer-use-2025-01-24")
@@ -63,11 +64,22 @@ def _tool_version_for(model: str) -> tuple[str, str]:
 DEFAULT_MAX_STEPS = int(os.environ.get("COMPUTER_USE_MAX_STEPS", "20"))
 
 
+def _secrets_dir() -> str:
+    return os.path.expanduser("~/agents/shared/secrets")
+
+
 def _api_key() -> str:
-    """Resolve the Anthropic key from the environment — never hardcoded."""
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    """Resolve the Anthropic key via the host secrets accessor — never hardcoded."""
+    sd = _secrets_dir()
+    if sd not in sys.path:
+        sys.path.insert(0, sd)
+    try:
+        from secrets import get_secret  # type: ignore
+        key = get_secret("anthropic")
+    except Exception as e:  # noqa: BLE001 — surface a clear message
+        raise RuntimeError(f"could not load anthropic key via secrets.py: {e}") from e
     if not key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set (see .env.example)")
+        raise RuntimeError("anthropic key resolved empty (set it via secrets.py)")
     return key
 
 

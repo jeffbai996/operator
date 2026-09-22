@@ -37,6 +37,35 @@ def _fake_runner(**over):
     return r
 
 
+def test_conversation_transcript_pages_are_scoped_and_incremental(store):
+    for i in range(35):
+        store.record(_fake_runner(task=f'Question {i}', messages=[
+            {'role': 'thinking', 'text': 'Not a final answer'},
+            {'role': 'assistant', 'text': f'Answer {i}'}]))
+    store.record(_fake_runner(conversation_id='other', task='Other private chat'))
+    store.record(_fake_runner(conversation_id='conv-a', demo=True))
+    store.record(_fake_runner(conversation_id=''))
+    page = store.conversation_turns('conv-a')
+    assert len(page['turns']) == 30 and page['has_more']
+    assert page['turns'][0]['task'] == 'Question 5'
+    assert page['turns'][-1]['final'] == 'Answer 34'
+    older = store.conversation_turns('conv-a', before=page['oldest_id'])
+    assert len(older['turns']) == 5 and not older['has_more']
+    assert store.conversation_turns('conv-a', after=page['latest_id'])['turns'] == []
+    assert store.conversation_turns('legacy')['turns'] == []
+
+
+def test_clear_boundary_blocks_old_rows_and_late_completion(store):
+    old = _fake_runner()
+    store.record(old)
+    store.clear_conversation_history('conv-a')
+    store.record(old)  # an in-flight old run finally flushes after the clear
+    assert store.conversation_turns('conv-a')['turns'] == []
+    store.record(_fake_runner(started_ts=time.time() + 1, task='Fresh start'))
+    assert [t['task'] for t in store.conversation_turns('conv-a')['turns']] == ['Fresh start']
+    assert len(store.recent()) == 3  # audit records were not destroyed
+
+
 def test_record_and_read_back(store):
     rid = store.record(_fake_runner(), reason="exit 0")
     assert isinstance(rid, int)
@@ -115,9 +144,9 @@ def _app(demo, monkeypatch):
     from jinja2 import ChoiceLoader, DictLoader
     import operator_view as OV
     if demo:
-        os.environ["OPERATOR_DEMO"] = "1"
+        monkeypatch.setenv("OPERATOR_DEMO", "1")
     else:
-        os.environ.pop("OPERATOR_DEMO", None)
+        monkeypatch.delenv("OPERATOR_DEMO", raising=False)
     mod = importlib.reload(OV)
     app = Flask(__name__)
     app.config["TESTING"] = True
@@ -148,6 +177,18 @@ def test_history_routes_demo_gated(store, monkeypatch):
     c = app.test_client()
     assert c.get("/operator/history").status_code == 403
     assert c.get("/operator/history/1").status_code == 403
+
+
+def test_transcript_route_rejects_deleted_legacy(store, monkeypatch, tmp_path):
+    import operator_session as sessions
+    monkeypatch.setattr(sessions, '_PATH', str(tmp_path / 'session.json'))
+    store.record(_fake_runner(conversation_id='legacy'))
+    c = _app(False, monkeypatch).test_client()
+    assert c.get('/operator/history?conversation_id=legacy').status_code == 404
+    sessions.save({'log': 'retained'}, conversation_id='legacy')
+    response = c.get('/operator/history?conversation_id=legacy')
+    assert response.status_code == 200 and len(response.get_json()['turns']) == 1
+    assert c.get('/operator/history?conversation_id=legacy&before=bad').status_code == 400
 
 
 def test_runner_terminal_transition_records_once(store, monkeypatch):

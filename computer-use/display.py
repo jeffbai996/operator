@@ -1,12 +1,11 @@
 """display — manage the isolated Xvfb virtual display the computer-use loop drives.
 
-Option B of the computer-use design (2026-06-25): rather than driving the
-owner's real Windows desktop (invasive — moves their live cursor), the agent
-gets its OWN headless Linux X display. Xvfb renders into a memory framebuffer
-(no physical screen), a lightweight WM (openbox) gives windows somewhere to
-live, and scrot/xdotool capture + drive it. Safe and isolated: the agent can't
-touch anything outside this sandbox, and it never fights the owner for the
-mouse.
+Option B of the computer-use design (2026-06-25): rather than driving the owner's real
+Windows desktop (invasive — moves his live cursor), the bot gets its OWN headless
+Linux X display. Xvfb renders into a memory framebuffer (no physical screen), a
+lightweight WM (openbox) gives windows somewhere to live, and scrot/xdotool
+capture + drive it. Safe and isolated: the bot can't touch anything outside this
+sandbox, and it never fights the owner for the mouse.
 
 This module owns the display lifecycle only — start it, confirm it's live, tear it
 down. Capture + input live in `actions.py`; the agentic loop in `loop.py`.

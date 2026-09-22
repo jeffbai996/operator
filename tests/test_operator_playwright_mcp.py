@@ -6,6 +6,38 @@ import subprocess
 MODULE = Path(__file__).resolve().parents[1] / "browse" / "operator_playwright_mcp.js"
 
 
+def test_operator_owned_pages_cannot_resize_the_shared_viewport():
+    """browser_resize must be inert; the cockpit is the sole viewport owner."""
+    script = r"""
+const { EventEmitter } = require('events');
+const { createOwnedContext } = require(process.argv[1]);
+
+class Page extends EventEmitter {
+  constructor() { super(); this.resizeCalls = 0; }
+  isClosed() { return false; }
+  async opener() { return null; }
+  async setViewportSize() { this.resizeCalls++; }
+}
+class Context extends EventEmitter {}
+
+(async () => {
+  const real = new Context();
+  const root = new Page();
+  createOwnedContext(real, root);
+  await root.setViewportSize({width: 1024, height: 768});
+  if (root.resizeCalls !== 0) throw new Error('shared viewport was resized');
+})().catch(error => { console.error(error); process.exit(1); });
+"""
+    result = subprocess.run(
+        ["node", "-e", script, str(MODULE)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_popup_and_new_page_are_owned_without_consumer_page_listener():
     """Popup tracking is intrinsic; MCP internals must not opt into safety."""
     script = r"""

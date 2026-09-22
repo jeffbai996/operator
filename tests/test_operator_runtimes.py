@@ -135,6 +135,18 @@ def test_codex_model_and_effort_flags():
     assert 'model_reasoning_effort="low"' in c
 
 
+def test_codex_operator_disables_invisible_web_browsing() -> None:
+    """The cockpit streams the Playwright Chrome. Codex's separate web-search
+    extension can research invisibly while that Chrome sits untouched, so an
+    Operator run must not receive that second browser."""
+    plan = RT.build_cmd("codex", _spec(surface="browser"))
+    assert 'web_search="disabled"' in plan.cmd
+    # Browser feature flags gate both built-in and external browser families.
+    # Leave them alone so the Playwright bridge remains exposed.
+    assert "browser_use" not in plan.cmd
+    assert "browser_use_external" not in plan.cmd
+
+
 def test_codex_desktop_surface_disables_playwright():
     plan = RT.build_cmd("codex", _spec(surface="desktop-sandbox"))
     assert "mcp_servers.playwright.enabled=false" in plan.cmd
@@ -154,6 +166,21 @@ def test_codex_cockpit_pins_the_operator_chrome():
     plan = RT.build_cmd("codex", _spec())
     assert 'mcp_servers.playwright.env.BROWSE_CHROME_PORT="9222"' in plan.cmd
     assert 'mcp_servers.playwright.env.OPERATOR_REQUIRE_CDP="1"' in plan.cmd
+
+
+def test_codex_cockpit_uses_release_local_playwright_launcher():
+    """Operator must not execute the mutable main-checkout launcher from the
+    user's config.toml. A dirty mode bit there previously removed Playwright
+    from every Codex run without a visible startup error."""
+    plan = RT.build_cmd("codex", _spec())
+    assert 'mcp_servers.playwright.command="bash"' in plan.cmd
+    args_override = next(
+        value for value in plan.cmd
+        if value.startswith("mcp_servers.playwright.args="))
+    args = json.loads(args_override.split("=", 1)[1])
+    expected = os.path.abspath(os.path.join(
+        os.path.dirname(RT.__file__), "..", "browse", "playwright-mcp.sh"))
+    assert args == [expected]
 
 
 # ── agy ──────────────────────────────────────────────────────────────────────
@@ -279,6 +306,16 @@ def test_concurrent_agy_plans_have_independent_surface_configs(fake_home):
     assert not os.path.exists(_agy_cfg(fake_home))
 
 
+def test_agy_workspace_browser_run_has_only_operator_owned_mcps(fake_home):
+    plan = RT.build_cmd("agy", _spec(
+        config_dir=os.path.expanduser("~/.gemini"),
+        run_id="run-123", run_credential="test-credential",
+        workspace_dir=str(fake_home / "workspace")))
+
+    servers = json.load(open(_agy_plan_cfg(plan)))["mcpServers"]
+    assert set(servers) == {"playwright", "operator-control"}
+
+
 def test_agy_cockpit_pins_the_operator_chrome(fake_home):
     """agy pins the cockpit while keeping MCP child home paths functional."""
     plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
@@ -289,11 +326,11 @@ def test_agy_cockpit_pins_the_operator_chrome(fake_home):
 
 
 def test_agy_resume_and_model_flags():
-    plan = RT.build_cmd("agy", _spec(resume_id="conv-3", model="gemini-3.7-flash",
+    plan = RT.build_cmd("agy", _spec(resume_id="conv-3", model="gemini-3.8-flash",
                                      config_dir=os.path.expanduser("~/.gemini")))
     c = plan.cmd
     assert c[c.index("--conversation") + 1] == "conv-3"
-    assert c[c.index("--model") + 1] == "gemini-3.7-flash"
+    assert c[c.index("--model") + 1] == "gemini-3.8-flash"
 
 
 def test_unknown_runtime_raises():

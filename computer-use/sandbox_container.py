@@ -17,7 +17,7 @@ on WSL and made the feed ~1fps and manual steer visibly laggy:
   - agent screenshots: still per-call scrot PNG (`screenshot()`) — the model
     wants full-quality stills, and one exec per model turn is noise.
 
-Lifecycle (design rule): the container is PERSISTENT. It is created on first use
+Lifecycle (the owner's rule): the container is PERSISTENT. It is created on first use
 and survives leaving Operator, restarts, and idle — `--restart unless-stopped`.
 It is only torn down by an EXPLICIT delete (`delete()` / the UI's delete action),
 never by merely switching surfaces or closing the page.
@@ -26,6 +26,7 @@ One job per file: container lifecycle + capture + input for the sandbox surface.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shlex
 import shutil
@@ -132,9 +133,70 @@ def ensure(timeout: float = 30) -> str:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _display_live():
+            _retire_legacy_cdp_bridge()
+            _ensure_host_bridge()
             return CONTAINER
         time.sleep(0.4)
     raise SandboxError("sandbox desktop did not come up in time")
+
+
+# Chromium's CDP stays on container loopback. Host clients reach it only through
+# a per-MCP host-loopback stdio tunnel created by open_cdp_tunnel().
+_CDP_INNER = 9223
+_LEGACY_CDP_PATTERN = "[s]andbox_host_bridge.py 9224"
+_legacy_cdp_retired = False
+_legacy_cdp_lock = threading.Lock()
+
+
+def _retire_legacy_cdp_bridge() -> None:
+    """Remove a detached bridge left alive by an older deployed process."""
+    global _legacy_cdp_retired
+    with _legacy_cdp_lock:
+        if _legacy_cdp_retired:
+            return
+        _run(["exec", "-u", "opuser", CONTAINER, "pkill", "-9", "-f",
+              _LEGACY_CDP_PATTERN], timeout=5, check=False)
+        check = _run(["exec", "-u", "opuser", CONTAINER, "pgrep", "-f",
+                      _LEGACY_CDP_PATTERN], timeout=5, check=False)
+        if check.returncode == 0:
+            raise SandboxError("legacy sandbox CDP bridge is still running")
+        if check.returncode != 1:
+            raise SandboxError("could not verify legacy sandbox CDP bridge removal")
+        _legacy_cdp_retired = True
+
+
+def open_cdp_tunnel():
+    """Create a host-loopback-only tunnel to Chromium's container-local CDP."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "sandbox_cdp_tunnel.py")
+    spec = importlib.util.spec_from_file_location("sandbox_cdp_tunnel", path)
+    if spec is None or spec.loader is None:
+        raise SandboxError("sandbox CDP tunnel module could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.SandboxCDPTunnel(
+        CONTAINER, target_port=_CDP_INNER, docker=_docker())
+
+
+def _ensure_host_bridge() -> None:
+    """Best-effort fraggames bridge, idempotent per container lifetime.
+
+    It lets the sandbox browser use localhost:8091 as the secure-context origin
+    EmulatorJS needs while the host service remains loopback-bound.
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        src = os.path.join(here, "sandbox_host_bridge.py")
+        _run(["cp", src, f"{CONTAINER}:/opt/sandbox_host_bridge.py"])
+        # fraggames leg: 127.0.0.1:8091 -> 172.17.0.1:8091 (host gateway)
+        if _run(["exec", CONTAINER, "sh", "-c",
+                 "pgrep -f 'host_bridge.py 8091' >/dev/null"],
+                check=False).returncode != 0:
+            _run(["exec", "-d", CONTAINER, "python3",
+                  "/opt/sandbox_host_bridge.py",
+                  "8091", "8091", "127.0.0.1", "172.17.0.1"])
+    except Exception:  # noqa: BLE001 — the desktop must come up regardless
+        pass
 
 
 def stop() -> None:
@@ -166,18 +228,20 @@ def open_stream(fps: int = 10, quality: int = 8) -> subprocess.Popen:
     once — e.g. an old image without ffmpeg — so the caller can fall back to scrot.
 
     10fps/q8: ~34KB/frame, ~340 KB/s. MJPEG (multipart/x-mixed-replace) has NO
-    frame-dropping — if a client can't decode as fast as frames arrive, they
-    queue in the connection buffer and playback falls PROGRESSIVELY behind. A
-    desktop is mostly static, so a lower cadence the client can always keep up
-    with beats a high one it can't → the feed stays near-live. Perceived input
-    latency is handled separately by a client-drawn cursor overlay (instant).
-    `-fflags nobuffer -flags low_delay` stop ffmpeg holding a frame in the queue.
+    frame-dropping — if a client (iOS Safari over Tailscale) can't decode as fast
+    as frames arrive, they queue in the connection buffer and playback falls
+    PROGRESSIVELY behind → the 1-2s desktop lag. A desktop is mostly static, so a
+    lower cadence the client can always keep up with beats a high one it can't:
+    fewer/lighter frames → Safari drains in real-time → the feed stays near-live.
+    Perceived input latency is handled separately by a client-drawn cursor overlay
+    (instant, doesn't wait on a frame). `-fflags nobuffer -flags low_delay` stop
+    ffmpeg holding a frame in the mux queue.
 
     LEAK GUARD: reap any prior feed ffmpeg INSIDE the container before starting a
     new one. `docker exec` runs ffmpeg in the container, but a host-side
     Popen.kill() only kills the exec *client* — the container-side ffmpeg orphans
-    and keeps grabbing X11 (N stacked grabs = 'persistent lag'). So we guarantee
-    at-most-one feed here, and stop_stream reaches inside to kill it."""
+    and keeps grabbing X11 (N stacked grabs = the 'persistent lag' we hit). So we
+    guarantee at-most-one feed here, and stop_stream reaches inside to kill it."""
     ensure()
     # kill any orphaned prior feed first (idempotent; no-op if none). -9: a feed
     # ffmpeg has no state worth flushing, and plain SIGTERM makes it do a clean
@@ -186,6 +250,9 @@ def open_stream(fps: int = 10, quality: int = 8) -> subprocess.Popen:
          timeout=5, check=False)
     p = subprocess.Popen(
         [_docker(), "exec", "-u", "opuser", "-e", f"DISPLAY={DISPLAY}", CONTAINER,
+         # -nostdin: don't let ffmpeg try to read the tty. The bare `-<tag>` at the
+         # end is an unused output-URL-adjacent token purely so `pkill -f` can find
+         # this exact process; ffmpeg ignores it (the real output is stdout `-`).
          "ffmpeg", "-nostdin", "-loglevel", "quiet",
          "-fflags", "nobuffer", "-flags", "low_delay",
          "-f", "x11grab", "-draw_mouse", "1",
@@ -427,6 +494,25 @@ def get_file(rel: str, out_dir: str) -> str:
     """Copy '<dir>/<name>' out of the sandbox → a host path (size-capped)."""
     rel = safe_rel(rel)
     ensure()
+    source_dir = f"/home/opuser/{rel.split('/', 1)[0]}"
+    source_path = f"/home/opuser/{rel}"
+    # Reject ordinary unsafe objects before Docker can recursively copy them.
+    # The sandbox can race this probe, so the final host lstat remains the
+    # authoritative boundary before Flask is allowed to open the result.
+    probe = (
+        '[ -d "$1" ] && [ ! -L "$1" ] '
+        '&& [ -f "$2" ] && [ ! -L "$2" ] '
+        '&& stat -c %s -- "$2"'
+    )
+    r = _exec(
+        ["sh", "-c", probe, "sandbox-transfer", source_dir, source_path],
+        timeout=10,
+        check=False,
+    )
+    if r.returncode != 0:
+        raise SandboxError("only regular files can be downloaded")
+    if int(r.stdout.decode().strip() or 0) > MAX_FILE_BYTES:
+        raise SandboxError("file too large to download")
     os.makedirs(out_dir, exist_ok=True)
     staging_dir = tempfile.mkdtemp(prefix=".sandbox-download-", dir=out_dir)
     out_path = os.path.join(staging_dir, os.path.basename(rel))

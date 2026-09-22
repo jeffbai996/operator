@@ -164,6 +164,25 @@ def test_codex_wellformed_message_still_lands(codex):
     assert codex.messages[-1]["text"] == "codex says hi"
 
 
+def test_codex_reasoning_summary_lands_in_thinking_trace(codex):
+    codex._consume(_line({"type": "item.completed", "item": {
+        "type": "reasoning", "text": "Checking the current page state"}}))
+
+    assert codex.messages[-1] == {
+        "ts": codex.messages[-1]["ts"],
+        "role": "thinking",
+        "text": "Checking the current page state",
+    }
+
+
+@pytest.mark.parametrize("text", [None, 42, "", "   "])
+def test_codex_malformed_or_empty_reasoning_is_ignored(codex, text):
+    codex._consume(_line({"type": "item.completed", "item": {
+        "type": "reasoning", "text": text}}))
+
+    assert codex.messages == []
+
+
 def test_codex_completed_tool_releases_pending_manual_takeover(codex, monkeypatch):
     stops = []
     monkeypatch.setattr(codex, "_stop_for_takeover",
@@ -181,10 +200,48 @@ def test_codex_completed_tool_releases_pending_manual_takeover(codex, monkeypatc
     assert stops == ["stop"]
 
 
+def test_codex_js_bridge_playwright_call_counts_as_visible_browser_use(codex):
+    """Modern Codex exposes MCP through its JS exec bridge.  The outer tool is
+    named ``exec``; the Playwright call lives inside the code string and must
+    still reach the evidence ledger and the live action trace."""
+    codex._browser_tool_calls = 0
+    codex._consume(_line({"type": "item.completed", "item": {
+        "type": "custom_tool_call", "name": "exec",
+        "input": "const r = await tools.mcp__playwright__browser_snapshot({});"
+    }}))
+
+    assert codex._browser_tool_calls == 1
+    assert any(m.get("role") == "action" and m.get("text") == "Reading"
+               for m in codex.messages)
+
+
 def test_codex_tool_call_with_garbage_arguments_is_safe(codex):
     codex._consume(_line({"type": "item.completed", "item": {
         "type": "mcp_tool_call", "tool": 42, "arguments": "{broken json"}}))
     # no crash; the trace simply gets no label for it
+
+
+def test_different_codex_browser_code_batches_are_not_identical_retries(codex):
+    for step in range(5):
+        codex._consume(_line({"type": "item.completed", "item": {
+            "type": "custom_tool_call", "name": "exec",
+            "input": "await tools.mcp__playwright__browser_run_code_unsafe("
+                     + json.dumps({"code": f"async page => page.getByText('Step {step}').click()"})
+                     + ");"
+        }}))
+    assert not codex._repeat_warned
+    assert codex._browser_tool_calls == 5
+    assert codex.messages[-1]["text"] == "Using browser"
+    assert "Step 4" not in codex._last_action_key
+
+
+def test_identical_codex_browser_code_batches_still_trigger_repeat_guard(codex):
+    for _ in range(codex._REPEAT_ACTION_STREAK):
+        codex._consume(_line({"type": "item.completed", "item": {
+            "type": "custom_tool_call", "name": "exec",
+            "input": "await tools.mcp__playwright__browser_run_code_unsafe({code:'same'});"
+        }}))
+    assert codex._repeat_warned
 
 
 def test_codex_wellformed_token_count_lands(codex):
