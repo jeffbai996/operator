@@ -96,6 +96,12 @@ Workspace-aware CDP helpers require Playwright 1.61 or newer (`no_defaults` /
 control requirements pin 1.61. The managed job store uses only Python's standard
 library; adding job/file tools does not require Flask in the MCP interpreter.
 
+The delegation MCP (`operator_mcp.py`, operator-mcp.service) is pinned to the
+same published release by a drop-in the publisher writes, and restarted with it;
+it carries no run state, so a caller mid-`operate()` resumes with
+`operate_status`. Its unit file in `systemd/` is the base; the drop-in is the
+release. The browse and computer-use siblings are read from the release too.
+
 Deploy through host-app's immutable-release/drain guard. Before rollout, make
 a consistent SQLite backup of existing session/history stores and retain the
 previous release. The new workspace DB is additive; roll back the service release

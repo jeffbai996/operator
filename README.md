@@ -243,6 +243,16 @@ composer drafts that survive refresh, owned-tab reaping with ownership guards,
 a 1Password popup the owner opened is left alone, per-run isolation of sandbox
 transport, downloads and Gemini MCP config, and Gemini Flash 3.8.
 
+The polish pass under the same label: one table-tested decision picks the
+streamed tab (dead-current, owned, mover, front, new-tab) and a count change
+mid-run is no longer a reason to switch. Delegation chats carry an origin,
+stay out of the Chats library unless the Delegations filter is chosen, never
+become the human's draft, and are pruned after a week untouched. On a
+brand-new cockpit the trash button works again: a fresh delete of the
+implicit conversation is idempotent. The idle-tab reaper's websocket
+dependency is declared, so it can close a tab. The mirror proves this public
+cut collects before it ships.
+
 ## Changelog
 
 | version | what shipped |

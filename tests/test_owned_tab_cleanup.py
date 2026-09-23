@@ -196,19 +196,41 @@ def test_cdp_probe_preserves_visible_and_edited_pages_in_real_chromium(tmp_path)
     pw = pytest.importorskip('playwright.sync_api')
     with pw.sync_playwright() as playwright:
         executable = os.environ.get('OPERATOR_TEST_CHROMIUM') or playwright.chromium.executable_path
-    profile = tmp_path / 'scratch-chrome'
+    if not os.path.exists(executable):
+        pytest.skip(f'no Chromium at {executable}; set OPERATOR_TEST_CHROMIUM')
+    # Chrome will not start a profile on the squad's tmpfs test temp
+    # (/dev/shm, nosuid+nodev): no files, no port, no error. Use the bulk
+    # scratch disk when the box has one, else pytest's temp.
+    import shutil
+    import tempfile
+    scratch_root = os.environ.get('OPERATOR_TEST_CHROME_DIR') or (
+        '/mnt/wsl-storage/scratch' if os.path.isdir('/mnt/wsl-storage/scratch') else str(tmp_path))
+    profile = Path(tempfile.mkdtemp(prefix='op-scratch-chrome-', dir=scratch_root))
+    # --disable-dev-shm-usage: a profile under /dev/shm (the squad's test
+    # temp) starves Chrome's own shm and it never writes DevToolsActivePort
     proc = subprocess.Popen([executable, '--headless=new', '--no-sandbox',
-        '--disable-gpu', '--no-first-run', '--disable-background-networking',
+        '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run',
+        '--disable-background-networking',
         '--remote-debugging-port=0', f'--user-data-dir={profile}', 'about:blank'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         port_file = profile / 'DevToolsActivePort'
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30       # a loaded WSL box takes >10s
         while not port_file.exists() and time.monotonic() < deadline:
             assert proc.poll() is None
             time.sleep(0.05)
         endpoint = 'http://127.0.0.1:' + port_file.read_text().splitlines()[0]
-        client = BT.TabCleanupClient(endpoint)
+        # the port file lands before the HTTP endpoint answers; on a loaded
+        # box the first /json call can outrun the client's own 5s budget
+        import urllib.request
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(endpoint + '/json/version', timeout=2):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        client = BT.TabCleanupClient(endpoint, timeout=15)   # scratch Chrome, loaded box
         owned = BT._new_target(endpoint)
         row = client.pages()[owned]
         assert not client.idle_page(row)
@@ -222,6 +244,13 @@ def test_cdp_probe_preserves_visible_and_edited_pages_in_real_chromium(tmp_path)
         assert not client.idle_page(row)
         client._rpc(row['webSocketDebuggerUrl'], 'Runtime.evaluate', {'expression':
             "document.body.innerHTML = '';"})
+        # every probe above held a debugger session on the page; Chrome reports
+        # it attached until that session is torn down, and the reaper rightly
+        # refuses an attached page. Wait for the detach before sweeping.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and client.pages()[owned].get('attached'):
+            time.sleep(0.2)
+        assert not client.pages()[owned].get('attached'), 'probe session never detached'
         path = tmp_path / 'owned.json'
         BT._write_registry({'done': [owned]}, path)
         reaper = BT.IdleTabReaper(path=path, idle_seconds=60)
@@ -237,3 +266,38 @@ def test_cdp_probe_preserves_visible_and_edited_pages_in_real_chromium(tmp_path)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def test_a_close_that_chrome_confirms_late_still_counts(setup):
+    """/json/close is asynchronous: under load the target is still listed on
+    the very next /json/list. The reaper used to read that as "not closed",
+    kept the registry entry for a dead tab and reported closed=0
+    (2026-09-22, seen on Chrome 153 with the box at load 13)."""
+    path, browser, reaper = setup
+
+    class Lagging(Browser):
+        def __init__(self):
+            super().__init__()
+            self.pending = None
+
+        def close(self, target):
+            self.closed.append(target)
+            self.pending = target             # gone on the NEXT listing, not this one
+
+        def pages(self):
+            rows = super().pages()
+            if self.pending is not None:
+                self.pending = None
+                return rows                    # one stale listing
+            for tid in list(rows):
+                if tid in self.closed:
+                    rows.pop(tid)
+                    self.rows.pop(tid, None)
+            return rows
+    browser = Lagging()
+    sweep(reaper, browser, 0)
+    result = sweep(reaper, browser, 60)
+    assert browser.closed == ["owned"]
+    assert result["closed"] == 1
+    assert BT._read_registry(path) == {}

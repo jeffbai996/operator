@@ -1515,7 +1515,7 @@ def test_busy_enforcement_fronts_the_owned_tab_not_the_streamed_one(monkeypatch,
     assert streamer._page is ctx.pages[1]
     assert ctx.pages[1].fronted >= 1
     assert ctx.pages[0].fronted == 0, "the stale tab must never be re-pinned"
-    assert any(e["kind"] == "tab-follow-owned" for e in streamer._vp_events)
+    assert any(e["kind"] == "tab-owned" for e in streamer._vp_events)
 
 
 def test_busy_enforcement_without_an_owned_tab_does_not_pin_the_streamed_tab(monkeypatch, streamer):
@@ -1547,9 +1547,32 @@ def test_every_page_switch_path_leaves_a_viewport_event(monkeypatch, streamer):
     asyncio.run(streamer._switch_tab_locked(1))
     streamer._page = ctx.pages[0]
     asyncio.run(streamer._reattach_soft())
-    streamer._page = ctx.pages[0]
-    streamer._live_n = 1                      # a count change → refresh switches
+    dead = FakePage(ctx)
+    dead._closed = True
+    streamer._page = dead                      # the streamed page died
     asyncio.run(streamer._refresh_active_page())
 
     kinds = {e["kind"] for e in streamer._vp_events}
-    assert {"tab-switch-user", "tab-reattach-soft", "tab-refresh"} <= kinds, kinds
+    assert {"tab-switch-user", "tab-reattach-soft", "tab-dead-current"} <= kinds, kinds
+
+
+def test_grab_target_picks_the_page_with_the_registered_target(monkeypatch, streamer):
+    ctx = FakeCtx(n_pages=2)
+    ctx.pages[0].url = "https://example.com/human"
+    ctx.pages[1].url = "https://example.com/agent"
+    streamer._browser = FakeBrowser(ctx)
+    streamer._page = ctx.pages[0]                # the streamer shows the human's tab
+    ids = {ctx.pages[0]: "T-h", ctx.pages[1]: "T-a"}
+
+    async def _tid(self, pg):
+        return ids.get(pg)
+    monkeypatch.setattr(OV._Streamer, "_page_target_id", _tid)
+
+    async def _grab(self, pg):
+        return b"jpeg:" + pg.url.encode()
+    monkeypatch.setattr(OV._Streamer, "_grab", _grab)
+
+    shot = asyncio.run(streamer._grab_target(["T-a"]))
+    assert shot["url"] == "https://example.com/agent"
+    assert shot["jpeg"] == b"jpeg:https://example.com/agent"
+    assert asyncio.run(streamer._grab_target(["T-none"])) is None

@@ -572,7 +572,7 @@ def _at_scale(page, scale: float) -> dict:
         // where the CAP BAND sits inside the line box, per row
         const c = document.createElement('canvas').getContext('2d');
         for (const [k, sel, txt] of [['inputCap', '#op-input', 'Message Operator'],
-                                     ['miniCap',  '#op-model', 'GPT-5.6 Luna']]) {
+                                     ['miniCap',  '#op-model', 'GPT-6 Luna']]) {
             const el = document.querySelector(sel), cs = getComputedStyle(el);
             c.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
             const m = c.measureText(txt);
@@ -718,7 +718,7 @@ def test_the_type_is_optically_centred_not_just_box_centred(page, row):
     """Both rows measured dead-centre by box maths and still read high.
 
     A line box centres the font's em square, and these faces reserve more
-    descender room than "Message Operator" or "GPT-5.6 Luna" use, so the cap
+    descender room than "Message Operator" or "GPT-6 Luna" use, so the cap
     band sat 0.5-1.0px above centre at every notch — invisible at 1x, obvious
     at the zoom the owner reads it at. --op-type-nudge moves the type, not the box.
     """

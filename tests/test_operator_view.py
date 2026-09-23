@@ -2209,3 +2209,48 @@ def test_streamer_attach_has_a_hard_timeout(monkeypatch) -> None:
 
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(streamer._grab_loop())
+
+
+# ── operate_look: the machine door's frame grab (2026-09-22) ─────────────
+
+def test_look_for_machine_grabs_the_conversations_own_tab(monkeypatch):
+    """The frame comes from the registry's target for THAT conversation,
+    never from whatever the streamer happens to show."""
+    asked = {}
+    monkeypatch.setattr(OV, "_registry_targets", lambda cid: ["T-agent"] if cid == "c1" else [])
+    monkeypatch.setattr(OV._streamer, "require_ready", lambda: None)
+
+    def grab(targets):
+        asked["targets"] = list(targets)
+        return {"jpeg": b"\xff\xd8jpeg", "url": "https://example.com/x", "title": "X"}
+    monkeypatch.setattr(OV._streamer, "grab_target", grab)
+
+    payload, status = OV.look_for_machine({"conversation_id": "c1"})
+    assert status == 200 and payload["ok"]
+    assert asked["targets"] == ["T-agent"]
+    assert payload["url"] == "https://example.com/x" and payload["title"] == "X"
+    import base64
+    assert base64.b64decode(payload["jpeg_b64"]) == b"\xff\xd8jpeg"
+
+    payload, status = OV.look_for_machine({"conversation_id": "c2"})
+    assert status == 404 and not payload["ok"]
+    payload, status = OV.look_for_machine({})
+    assert status == 400
+
+
+def test_prune_delegated_conversations_releases_tabs_and_workspace(monkeypatch):
+    """The hourly prune drops the chat row, its workspace, and its tab lease,
+    and skips a conversation that is still running."""
+    import operator_session as sess
+    import operator_workspace as ws
+    calls = []
+    monkeypatch.setattr(sess, "prune_candidates", lambda now=None: ["c-old", "c-run"])
+    monkeypatch.setattr(sess, "delete", lambda sid, **kw: calls.append(("delete", sid)) or {})
+    monkeypatch.setattr(ws, "delete_conversation", lambda sid: calls.append(("ws", sid)))
+    monkeypatch.setattr(OV, "_browser_tab_command", lambda action, sid, **kw: calls.append((action, sid)) or True)
+    monkeypatch.setattr(OV.operator_agent.runner, "conversation_summaries",
+                        lambda: {"c-run": {"alive": True}})
+    gone = OV.prune_delegated_conversations()
+    assert gone == ["c-old"]
+    assert ("ws", "c-old") in calls and ("release", "c-old") in calls and ("delete", "c-old") in calls
+    assert not any(sid == "c-run" for _, sid in calls)

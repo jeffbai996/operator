@@ -245,32 +245,92 @@ def listing() -> dict:
                 "bot": _clip_meta(data.get("bot"), META_LIMIT),
                 "model": _clip_meta(data.get("model"), META_LIMIT),
                 "surface": _clip_meta(data.get("surface"), META_LIMIT),
+                "origin": _clip_meta(sess.get("origin"), META_LIMIT),
             })
         rows.sort(key=lambda r: r["updated_ts"], reverse=True)
         return {"rev": st["rev"], "active": st["active"], "sessions": rows}
 
 
-def create(title: str = "") -> dict:
+def create(title: str = "", *, activate: bool = True,
+           reuse_draft: bool = True, origin: str = "") -> dict:
     """Get or create the one reusable empty draft and make it active.
 
     Repeated taps and concurrent devices must not manufacture a trail of blank
     chats. Once the draft has transcript content, the next call creates a new
     identity.
+
+    A machine caller (operator-mcp) passes activate=False, reuse_draft=False:
+    a delegation must not switch the cockpit's active chat under the human
+    or take over the blank draft they have open (2026-09-22 audit).
     """
     with _LOCK:
         st = _read_unlocked()
+        # a bot's empty delegation chat is never the human's draft
         empty = [(sid, sess) for sid, sess in st["sessions"].items()
-                 if _is_empty(sess)]
+                 if _is_empty(sess) and sess.get("origin") != DELEGATION_ORIGIN
+                 ] if reuse_draft else []
         if empty:
             sid, _sess = max(
                 empty, key=lambda item: item[1].get("updated_ts") or 0)
-            st["active"] = sid
+            if activate:
+                st["active"] = sid
             return {"id": sid, "rev": _write_unlocked(st), "reused": True}
         sid = _new_id()
         st["sessions"][sid] = {"rev": 0, "title": _clip_title(title),
-                               "updated_ts": time.time(), "data": None}
-        st["active"] = sid
+                               "updated_ts": time.time(), "data": None,
+                               "origin": _clip_meta(origin, META_LIMIT)}
+        if activate:
+            st["active"] = sid
         return {"id": sid, "rev": _write_unlocked(st), "reused": False}
+
+
+def exists(sid: str) -> bool:
+    with _LOCK:
+        return sid in _read_unlocked()["sessions"]
+
+
+DELEGATION_ORIGIN = "mcp"
+DELEGATION_KEEP_SEC = 7 * 86400
+_HUMAN_TURN = "op-msg user"
+
+
+def _touch_for_test(sid: str, updated_ts: float) -> None:
+    with _LOCK:
+        st = _read_unlocked()
+        st["sessions"][sid]["updated_ts"] = float(updated_ts)
+        _write_unlocked(st)
+
+
+def prune_candidates(now: float | None = None) -> list[str]:
+    """Delegation chats (origin mcp) untouched for DELEGATION_KEEP_SEC with no
+    human turn in their transcript, never the active one. Read-only."""
+    now = time.time() if now is None else now
+    with _LOCK:
+        st = _read_unlocked()
+        out = []
+        for sid, sess in st["sessions"].items():
+            if sess.get("origin") != DELEGATION_ORIGIN or sid == st["active"]:
+                continue
+            if now - float(sess.get("updated_ts") or 0) < DELEGATION_KEEP_SEC:
+                continue
+            data = sess.get("data") if isinstance(sess.get("data"), dict) else {}
+            if _HUMAN_TURN in str(data.get("log") or ""):
+                continue
+            out.append(sid)
+        return out
+
+
+def prune_delegations(now: float | None = None) -> list[str]:
+    """Drop the chat rows prune_candidates names. The cockpit-level prune in
+    operator_view also releases the workspace and the tab lease."""
+    gone = []
+    for sid in prune_candidates(now):
+        try:
+            delete(sid)
+            gone.append(sid)
+        except KeyError:
+            pass
+    return gone
 
 
 def activate(sid: str) -> dict:
@@ -303,8 +363,13 @@ def delete(sid: str, *, fresh: bool = False) -> dict:
     with _LOCK:
         st = _read_unlocked()
         if sid not in st["sessions"]:
-            raise KeyError(sid)
-        st["sessions"].pop(sid)
+            if not fresh:
+                raise KeyError(sid)
+            # a fresh delete of a rowless id (the implicit `legacy` chat of a
+            # brand-new cockpit, or one already deleted elsewhere) is
+            # idempotent: nothing to drop, still hand back a place to land
+        else:
+            st["sessions"].pop(sid)
         if fresh or st["active"] == sid or st["active"] not in st["sessions"]:
             if st["sessions"] and not fresh:
                 st["active"] = _newest(st["sessions"])

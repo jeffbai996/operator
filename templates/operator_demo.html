@@ -3905,7 +3905,7 @@ href="{{ url_for('operator.static', filename='icons/operator-192.png') }}">
              autocomplete="off" placeholder="Search chats" aria-label="search chats">
     </label>
     <div class="op-chat-tools">
-      <select id="op-chat-filter" aria-label="Filter chats"><option value="all">All chats</option><option value="running">Running</option><option value="here">This device</option></select>
+      <select id="op-chat-filter" aria-label="Filter chats"><option value="all">All chats</option><option value="running">Running</option><option value="here">This device</option><option value="delegations">Delegations</option></select>
       <select id="op-chat-sort" aria-label="Sort chats"><option value="recent">Recent first</option><option value="oldest">Oldest first</option><option value="title">Name A–Z</option></select>
       <span id="op-chat-count" role="status"></span>
     </div>
@@ -4034,7 +4034,7 @@ href="{{ url_for('operator.static', filename='icons/operator-192.png') }}">
     ,diagnostics: "{{ url_for('operator.operator_diagnostics') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1223"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1224"></script>
 <script src="{{ url_for('operator.static', filename='js/workbench.js') }}?rev=v1218"></script>
 
 </body>

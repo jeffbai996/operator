@@ -11,6 +11,8 @@ Only host personas that can drive: claude-a + claude-b.
 """
 from __future__ import annotations
 
+from operator_catalog import default_slug, aliases as model_aliases
+
 import json
 import logging
 import os
@@ -713,14 +715,14 @@ class AgentRunner:
         # default the claude runtime to Sonnet 5 / medium when nothing was picked
         # (empty model would otherwise drop the flag and use the CLI's own default).
         if b.get("runtime") == "claude":
-            if not self.model:  self.model = "claude-sonnet-5"
+            if not self.model:  self.model = model_aliases()["sonnet"]
             if not self.effort: self.effort = "medium"
         elif b.get("runtime") == "codex":
             # gpt/codex default: 5.6 Sol / low (the owner 2026-07-09), matching the UI
             # picker default. Without the effort default, an unset effort drops the
             # -c flag and codex falls back to its config.toml default (xhigh) —
             # needless token burn for browser tasks.
-            if not self.model:  self.model = "gpt-5.6-sol"
+            if not self.model:  self.model = default_slug("gpt-codex")
             if not self.effort: self.effort = "low"
         # agy gets a model SLUG (as printed by `agy models`) — an empty model
         # would otherwise build a broken `--model ""`.
@@ -735,7 +737,7 @@ class AgentRunner:
         # the only accepted form for the Claude/GPT-OSS entries — NB `agy models`
         # prints "claude-sonnet-4-6-thinking" but --model rejects it.
         elif b.get("runtime") == "agy":
-            if not self.model:  self.model = "gemini-3.8-flash"
+            if not self.model:  self.model = default_slug("runtime")
             _m = self.model.strip()
             _baked = _m.endswith(("-low", "-medium", "-high")) or "(" in _m
             self.model = _m
@@ -2487,6 +2489,13 @@ class RunnerRegistry:
                     use_legacy_storage=self._uses_legacy_storage_locked(cid))
                 self._runners[cid] = found
             return found
+
+    def peek(self, conversation_id: str | None = None) -> "AgentRunner | None":
+        """The runner for a conversation if one exists; never creates one.
+        get() manufactures a runner on first sight, which is right for a
+        dispatch and wrong for a status probe with a bogus id."""
+        with self._lock:
+            return self._runners.get(_conversation_id(conversation_id))
 
     def _reap_locked(self) -> None:
         for cid in list(self._slots):

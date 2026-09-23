@@ -19,6 +19,7 @@ os.environ["OPERATOR_STEER_PATH"] = os.path.join(_tmp, "steer.ndjson")
 os.environ["OPERATOR_TASKS_PATH"] = os.path.join(_tmp, "tasks.json")
 os.environ["OPERATOR_WORKSPACE_DIR"] = os.path.join(_tmp, "workspace")
 os.environ["OPERATOR_BROWSER_TABS_PATH"] = os.path.join(_tmp, "browser-tabs.json")
+os.environ["OPERATOR_MCP_TRACE"] = os.path.join(_tmp, "operator-mcp-trace.json")
 # Legacy process fixtures do not speak JSON-RPC. Native transport has its own
 # recorded-event tests; never launch a real model from either suite.
 os.environ["OPERATOR_CODEX_APP_SERVER"] = "0"

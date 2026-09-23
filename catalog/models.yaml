@@ -1,0 +1,580 @@
+version: 1
+defaults:
+  runtime: agy-flash
+  gpt-api: codex-luna
+  gpt-codex: codex-sol
+  summarization: qwen-local
+models:
+  codex-astra:
+    slug: gpt-6-astra
+    label: GPT 6 Astra
+    transport: codex
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    - ultra
+    default_effort: medium
+    runtime: true
+    rates:
+      input: 10.0
+      output: 50.0
+      cache_read: 1.0
+      cache_write: 12.5
+      cache_write_1h: 20.0
+  codex-terra:
+    slug: gpt-5.6-terra
+    label: GPT 5.6 Terra
+    transport: codex
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    - ultra
+    default_effort: medium
+    runtime: true
+    rates:
+      input: 2.0
+      output: 12.0
+      cache_read: 0.2
+      cache_write: 2.5
+      cache_write_1h: 4.0
+  codex-sol:
+    slug: gpt-6-sol
+    label: GPT 6 Sol
+    transport: codex
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    - ultra
+    default_effort: high
+    runtime: true
+    rates:
+      input: 2.0
+      output: 10.0
+      cache_read: 0.2
+      cache_write: 2.5
+      cache_write_1h: 4.0
+  agy-flash:
+    slug: gemini-3.8-flash
+    label: Gemini 3.8 Flash
+    transport: agy
+    efforts:
+    - low
+    - medium
+    - high
+    default_effort: high
+    runtime: true
+    rates:
+      input: 0.75
+      output: 3.75
+      cache_read: 0.07500000000000001
+      cache_write: null
+      cache_write_1h: null
+    price_in_ledger: false
+  claude-sonnet:
+    slug: claude-sonnet-5
+    label: Claude Sonnet 5
+    transport: claude
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    default_effort: medium
+    runtime: true
+    alias: sonnet
+    rates:
+      input: 2.0
+      output: 10.0
+      cache_read: 0.2
+      cache_write: 2.5
+      cache_write_1h: 4.0
+    pin_variants:
+    - ''
+  claude-opus:
+    slug: claude-opus-5-5
+    label: Claude Opus 5.5
+    transport: claude
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    default_effort: medium
+    runtime: true
+    alias: opus
+    rates:
+      input: 4.0
+      output: 20.0
+      cache_read: 0.2
+      cache_write: 5.0
+      cache_write_1h: 8.0
+    pin_variants:
+    - ''
+    - '[1m]'
+    runtime_alias: true
+  claude-fable:
+    slug: claude-fable-5-1
+    label: Claude Fable 5.1
+    transport: claude
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    default_effort: high
+    runtime: true
+    alias: fable
+    rates:
+      input: 10.0
+      output: 50.0
+      cache_read: 0.25
+      cache_write: 12.5
+      cache_write_1h: 20.0
+    pin_variants:
+    - ''
+    - '[1m]'
+  qwen-local:
+    slug: qwen3.8:27b
+    label: Qwen 3.8 27B · local
+    transport: ollama
+    efforts:
+    - standard
+    default_effort: standard
+    runtime: true
+  codex-luna:
+    slug: gpt-6-luna
+    label: GPT 6 Luna
+    transport: codex
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    default_effort: high
+    rates:
+      input: 0.1
+      output: 0.5
+      cache_read: 0.010000000000000002
+      cache_write: 0.125
+      cache_write_1h: 0.2
+  codex-daybreak:
+    slug: gpt-daybreak-blue-latest
+    label: Daybreak Blue
+    transport: codex
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    - ultra
+    default_effort: high
+    rates:
+      input: 4.0
+      output: 20.0
+      cache_read: 0.4
+      cache_write: 5.0
+      cache_write_1h: 8.0
+    rate_match: gpt-daybreak-blue
+  claude-haiku:
+    slug: claude-haiku-4-5
+    label: Claude Haiku 4.5
+    transport: claude
+    efforts: []
+    default_effort: null
+    alias: haiku
+    rates:
+      input: 1.0
+      output: 5.0
+      cache_read: 0.1
+      cache_write: 1.25
+      cache_write_1h: 2.0
+    pin_variants:
+    - ''
+    rate_match: haiku
+  legacy-opus:
+    slug: opus
+    label: opus
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: opus
+    rates:
+      input: 5.0
+      output: 25.0
+      cache_read: 0.5
+      cache_write: 6.25
+      cache_write_1h: 10.0
+  legacy-sonnet:
+    slug: sonnet
+    label: sonnet
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: sonnet
+    rates:
+      input: 3.0
+      output: 15.0
+      cache_read: 0.30000000000000004
+      cache_write: 3.75
+      cache_write_1h: 6.0
+  legacy-mythos:
+    slug: mythos
+    label: mythos
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: mythos
+    rates:
+      input: 10.0
+      output: 50.0
+      cache_read: 1.0
+      cache_write: 12.5
+      cache_write_1h: 20.0
+  legacy-gpt-daybreak-red:
+    slug: gpt-daybreak-red
+    label: gpt-daybreak-red
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-daybreak-red
+    rates:
+      input: 12.5
+      output: 75.0
+      cache_read: 1.25
+      cache_write: 15.625
+      cache_write_1h: 25.0
+  legacy-gpt-5.6-luna:
+    slug: gpt-5.6-luna
+    label: gpt-5.6-luna
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-5.6-luna
+    rates:
+      input: 0.2
+      output: 1.2
+      cache_read: 0.020000000000000004
+      cache_write: 0.25
+      cache_write_1h: 0.4
+    retired_by: codex-luna
+  legacy-gpt-5.6-sol:
+    slug: gpt-5.6-sol
+    label: gpt-5.6-sol
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-5.6-sol
+    rates:
+      input: 4.0
+      output: 20.0
+      cache_read: 0.4
+      cache_write: 5.0
+      cache_write_1h: 8.0
+    retired_by: codex-sol
+  legacy-gpt-5.4-mini:
+    slug: gpt-5.4-mini
+    label: gpt-5.4-mini
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-5.4-mini
+    rates:
+      input: 0.75
+      output: 4.5
+      cache_read: 0.07500000000000001
+      cache_write: 0.9375
+      cache_write_1h: 1.5
+  legacy-gpt-5.3-codex:
+    slug: gpt-5.3-codex
+    label: gpt-5.3-codex
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-5.3-codex
+    rates:
+      input: 1.75
+      output: 14.0
+      cache_read: 0.17500000000000002
+      cache_write: 2.1875
+      cache_write_1h: 3.5
+  legacy-gpt-5.5:
+    slug: gpt-5.5
+    label: gpt-5.5
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-5.5
+    rates:
+      input: 5.0
+      output: 30.0
+      cache_read: 0.5
+      cache_write: 6.25
+      cache_write_1h: 10.0
+  legacy-gpt-5.4:
+    slug: gpt-5.4
+    label: gpt-5.4
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-5.4
+    rates:
+      input: 2.5
+      output: 15.0
+      cache_read: 0.25
+      cache_write: 3.125
+      cache_write_1h: 5.0
+  legacy-daybreak:
+    slug: daybreak
+    label: daybreak
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: daybreak
+    rates:
+      input: 4.0
+      output: 20.0
+      cache_read: 0.4
+      cache_write: 5.0
+      cache_write_1h: 8.0
+  legacy-gpt-5:
+    slug: gpt-5
+    label: gpt-5
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-5
+    rates:
+      input: 1.25
+      output: 10.0
+      cache_read: 0.125
+      cache_write: 1.5625
+      cache_write_1h: 2.5
+  legacy-codex:
+    slug: codex
+    label: codex
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: codex
+    rates:
+      input: 1.25
+      output: 10.0
+      cache_read: 0.125
+      cache_write: 1.5625
+      cache_write_1h: 2.5
+  legacy-fable:
+    slug: claude-fable-5
+    label: Claude Fable 5
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: fable
+    rates:
+      input: 10.0
+      output: 50.0
+      cache_read: 1.0
+      cache_write: 12.5
+      cache_write_1h: 20.0
+    retired_by: claude-fable
+    pin_variants:
+    - ''
+  legacy-gemini-3.6-flash:
+    slug: gemini-3.6-flash
+    label: gemini-3.6-flash
+    transport: historical
+    efforts: []
+    default_effort: null
+    retired_by: agy-flash
+  legacy-gemini-3.7-flash:
+    slug: gemini-3.7-flash
+    label: gemini-3.7-flash
+    transport: historical
+    efforts: []
+    default_effort: null
+    retired_by: agy-flash
+  agy-claude-sonnet-4-6-thinking:
+    slug: Claude Sonnet 4.6 (Thinking)
+    label: Sonnet 4.6
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-claude-opus-4-6-thinking:
+    slug: Claude Opus 4.6 (Thinking)
+    label: Opus 4.6
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-gpt-oss-120b-medium:
+    slug: GPT-OSS 120B (Medium)
+    label: GPT-OSS 120B
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-gemini-3-8-flash-low:
+    slug: gemini-3.8-flash-low
+    label: 3.8 Flash
+    transport: agy
+    efforts: []
+    default_effort: null
+  api-pro:
+    slug: gemini-3.1-pro-preview
+    label: Pro 3.1
+    transport: gemini
+    efforts: []
+    default_effort: null
+    rates:
+      input: 2.0
+      output: 12.0
+      cache_read: 0.2
+      cache_write: null
+      cache_write_1h: null
+    price_in_ledger: false
+surfaces:
+  operator-claude:
+  - &id001
+    key: claude-opus
+    value: alias
+  - &id002
+    key: claude-sonnet
+    value: slug
+  - &id003
+    key: claude-haiku
+    value: alias
+  operator-gpt:
+  - key: codex-astra
+    value: slug
+  - key: codex-sol
+    value: slug
+  - key: codex-terra
+    value: slug
+  - key: codex-luna
+    value: slug
+  operator-gem:
+  - key: agy-flash
+    value: slug
+  - key: agy-claude-sonnet-4-6-thinking
+    value: slug
+  - key: agy-claude-opus-4-6-thinking
+    value: slug
+  - key: agy-gpt-oss-120b-medium
+    value: slug
+  operator-demo:
+  - key: agy-gemini-3-8-flash-low
+    value: slug
+  - key: agy-claude-sonnet-4-6-thinking
+    value: slug
+  operator-claude-a:
+  - key: claude-fable
+    value: slug
+  - *id001
+  - *id002
+  - *id003
+  gpt:
+  - key: codex-astra
+  - key: codex-sol
+  - key: codex-terra
+  - key: codex-luna
+  - key: codex-daybreak
+  ticker:
+  - key: agy-flash
+    name: flash
+    options:
+      provider: gemini
+      thinking_budget: 1024
+      key_env: GEMINI_API_KEY
+      cot: true
+      max_context: 900000
+  - key: api-pro
+    name: pro
+    options:
+      provider: gemini
+      thinking_budget: 2048
+      key_env: GEMINI_API_KEY
+      cot: true
+      max_context: 900000
+  - key: claude-sonnet
+    name: sonnet
+    options:
+      provider: anthropic
+      thinking_budget: 4096
+      thinking_mode: adaptive
+      effort: high
+      key_env: ANTHROPIC_API_KEY
+      cot: true
+      max_context: 1000000
+  - key: claude-opus
+    name: opus
+    options:
+      provider: anthropic
+      thinking_budget: 8192
+      thinking_mode: adaptive
+      effort: high
+      key_env: ANTHROPIC_API_KEY
+      cot: true
+      max_context: 180000
+  - key: claude-fable
+    name: fable
+    options:
+      provider: anthropic
+      thinking_mode: adaptive
+      effort: medium
+      key_env: ANTHROPIC_API_KEY
+      cot: false
+      max_context: 180000
+  - key: codex-sol
+    name: sol
+    options:
+      provider: openai
+      thinking_budget: 0
+      reasoning_effort: low
+      key_env: OPENAI_API_KEY
+      cot: true
+      max_context: 120000
+  - key: codex-terra
+    name: terra
+    options:
+      provider: openai
+      thinking_budget: 0
+      reasoning_effort: high
+      key_env: OPENAI_API_KEY
+      cot: true
+      max_context: 120000
+  - key: codex-luna
+    name: luna
+    options:
+      provider: openai
+      thinking_budget: 0
+      reasoning_effort: high
+      key_env: OPENAI_API_KEY
+      cot: true
+      max_context: 120000
+  - key: codex-astra
+    name: astra
+    options:
+      provider: openai
+      thinking_budget: 0
+      reasoning_effort: medium
+      key_env: OPENAI_API_KEY
+      cot: true
+      max_context: 120000
+legacy_pins:
+- claude-fable-5
+- claude-opus-4-8
+- claude-opus-4-8[1m]
+- claude-opus-5
+- claude-opus-5[1m]
+- claude-sonnet-4-6

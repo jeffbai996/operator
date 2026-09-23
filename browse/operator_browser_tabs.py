@@ -240,20 +240,23 @@ IDLE_PAGE_EXPRESSION = """(() => {
 class TabCleanupClient:
     """Small bounded CDP probes; never starts Chrome or a Playwright driver."""
 
-    def __init__(self, endpoint: str) -> None:
+    # Production probes a warm, always-on Chrome: one second is generous and
+    # bounds the sweep on the shared host. A test against a scratch headless
+    # Chrome on a loaded box passes a larger budget.
+    def __init__(self, endpoint: str, *, timeout: float = 1.0) -> None:
         self.endpoint = endpoint.rstrip('/')
+        self.timeout = float(timeout)
 
     def _get(self, suffix: str):
-        with urllib.request.urlopen(self.endpoint + suffix, timeout=1) as response:
+        with urllib.request.urlopen(self.endpoint + suffix, timeout=self.timeout) as response:
             return json.load(response)
 
-    @staticmethod
-    def _rpc(url: str, method: str, params: dict | None = None) -> dict:
+    def _rpc(self, url: str, method: str, params: dict | None = None) -> dict:
         import websocket
-        ws = websocket.create_connection(url, timeout=1, suppress_origin=True)
+        ws = websocket.create_connection(url, timeout=self.timeout, suppress_origin=True)
         try:
             ws.send(json.dumps({"id": 1, "method": method, "params": params or {}}))
-            deadline = time.monotonic() + 1
+            deadline = time.monotonic() + self.timeout
             while time.monotonic() < deadline:
                 ws.settimeout(max(0.01, deadline - time.monotonic()))
                 reply = json.loads(ws.recv())
@@ -281,7 +284,7 @@ class TabCleanupClient:
 
     def close(self, target: str) -> None:
         with urllib.request.urlopen(self.endpoint + '/json/close/' +
-                                    urllib.parse.quote(target, safe=''), timeout=1):
+                                    urllib.parse.quote(target, safe=''), timeout=self.timeout):
             pass
 
 
@@ -365,8 +368,17 @@ class IdleTabReaper:
                         return False
                     client.close(tid)  # failure must retain registry ownership
                     # An accepted close can still be held by beforeunload.
-                    # Do not turn that page into an unowned orphan.
-                    return tid not in client.pages()
+                    # Do not turn that page into an unowned orphan. The close
+                    # is asynchronous: give Chrome a bounded moment to drop
+                    # the target from its list before calling it "still open"
+                    # (2026-09-22: under load the next listing still had it).
+                    deadline = time.monotonic() + 1.0
+                    while True:
+                        if tid not in client.pages():
+                            return True
+                        if time.monotonic() >= deadline:
+                            return False
+                        time.sleep(0.05)
 
                 if guard(cid, candidates[cid], close_if_still_idle):
                     pages.pop(tid, None)

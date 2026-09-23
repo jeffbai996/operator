@@ -498,3 +498,75 @@ def test_conversation_routes_demo_gated(tmp_path, monkeypatch):
     assert c.post("/operator/sessions", json={}).status_code == 403
     assert c.post("/operator/sessions/x", json={}).status_code == 403
     assert c.delete("/operator/sessions/x").status_code == 403
+
+
+def test_machine_create_leaves_the_humans_chat_alone(store):
+    """A delegation (operator-mcp) creates its own conversation without
+    switching the cockpit's active chat or taking over the human's empty
+    draft (2026-09-22 audit)."""
+    store.save({"log": "<div class='op-msg user'>my errand</div>"})
+    human = store.listing()["active"]
+    draft = store.create()                      # the human's open blank chat
+    assert store.listing()["active"] == draft["id"]
+
+    made = store.create("bot errand", activate=False, reuse_draft=False)
+
+    assert made["id"] not in (draft["id"], human)
+    assert store.listing()["active"] == draft["id"]
+    assert store.exists(made["id"]) and not store.exists("nope")
+
+
+def test_fresh_delete_of_the_implicit_conversation_still_lands_somewhere(store):
+    """A brand-new cockpit talks to the implicit `legacy` conversation, which
+    has no row. Trash sent DELETE .../legacy?fresh=1, the store raised
+    KeyError, the route answered 404, and the client showed an alert and
+    never reloaded (2026-09-22). A fresh delete of a rowless conversation is
+    idempotent: nothing to drop, but the cockpit still needs somewhere to go."""
+    made = store.delete("legacy", fresh=True)
+    assert made["active"] and store.exists(made["active"])
+    assert store.listing()["active"] == made["active"]
+    with pytest.raises(KeyError):
+        store.delete("ghost")                 # a plain delete still says unknown
+
+
+# ── delegated chats (2026-09-22 polish): origin, and the weekly prune ────
+
+def test_a_delegation_chat_carries_its_origin(store):
+    made = store.create("errand", activate=False, reuse_draft=False, origin="mcp")
+    rows = {r["id"]: r for r in store.listing()["sessions"]}
+    assert rows[made["id"]]["origin"] == "mcp"
+    human = store.create("mine")            # New chat never adopts a bot's empty chat
+    assert human["id"] != made["id"]
+    rows = {r["id"]: r for r in store.listing()["sessions"]}
+    assert rows[human["id"]]["origin"] == ""
+
+
+def test_prune_takes_only_old_untouched_delegations(store, monkeypatch):
+    """Finished, untouched delegation chats older than the window go; a
+    delegation with a human turn, a fresh one, and a human's own chat stay."""
+    week = 7 * 86400
+    old_bot = store.create("old bot", activate=False, reuse_draft=False, origin="mcp")
+    touched = store.create("touched", activate=False, reuse_draft=False, origin="mcp")
+    store.save({"log": "<div class='op-msg user'><div class='bubble'>me</div></div>"},
+               conversation_id=touched["id"])
+    fresh_bot = store.create("fresh bot", activate=False, reuse_draft=False, origin="mcp")
+    human = store.create("human")
+    store.save({"log": "<div class='op-msg user'>x</div>"}, conversation_id=human["id"])
+    now = 10_000_000.0
+    store._touch_for_test(old_bot["id"], now - week - 60)
+    store._touch_for_test(touched["id"], now - week - 60)
+    store._touch_for_test(human["id"], now - 3 * week)
+    store._touch_for_test(fresh_bot["id"], now - 3600)
+
+    gone = store.prune_delegations(now=now)
+
+    assert gone == [old_bot["id"]]
+    ids = {r["id"] for r in store.listing()["sessions"]}
+    assert old_bot["id"] not in ids
+    assert {touched["id"], fresh_bot["id"], human["id"]} <= ids
+
+
+def test_prune_never_takes_the_active_chat(store):
+    made = store.create("bot", activate=True, reuse_draft=False, origin="mcp")
+    store._touch_for_test(made["id"], 1.0)
+    assert store.prune_delegations(now=10 * 86400) == []

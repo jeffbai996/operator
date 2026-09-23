@@ -14,7 +14,9 @@ This checklist does not authorize publishing a package, public mirror, or demo.
 3. Update all current product-version surfaces together. Keep historical changelog
    entries, compatibility notes, dependency pins, protocol dates, schema/storage
    versions, and independently versioned components intact. For example,
-   `operator-control`'s MCP server version is not the cockpit's product version.
+   `operator-control`'s MCP server version is not the cockpit's product version,
+   and neither is the delegation server's `operator_mcp.MCP_VERSION`; bump
+   that one when the delegation tools or their contract change.
    Asset `rev` values are cache keys: bump references for changed assets, not
    merely to resemble the product version.
 4. Check the generated demo template still uses `OP_VERSION`. If template changes

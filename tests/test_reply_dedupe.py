@@ -107,8 +107,15 @@ def test_an_unrelated_step_is_never_removed():
 
 
 def test_the_shipped_guard_compares_rendered_text_on_both_sides():
-    """Cheap tripwire: nobody reintroduces `=== reply.trim()`."""
+    """Cheap tripwire: nobody reintroduces `=== reply.trim()`.
+
+    49510ac6 folded the `_mdKey` helper into the observer reconcile: the
+    reply is rendered through `_mdToHtml` into a detached element and its
+    normalized textContent is compared with the last bubble's."""
     src = JS.read_text(encoding="utf-8")
-    assert "_mdKey(reply)" in src, "the reply must be rendered before comparing"
+    assert "renderedReply.innerHTML = _mdToHtml(reply" in src, \
+        "the reply must be rendered before comparing"
+    assert "_key(lastMessage.querySelector('.bubble')) === _replyKey" in src, \
+        "the comparison must be rendered-text against rendered-text"
     assert ".textContent.trim() === reply.trim()" not in src, \
         "raw-markdown comparison is back — that is the duplicate-answer bug"

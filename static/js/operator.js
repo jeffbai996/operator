@@ -3960,7 +3960,7 @@
         o.value=x.value; o.textContent=x.label; sel.appendChild(o); });
       let savedModel = (typeof _sess!=='undefined' && _sess) ? _sess.model : '';
       if (!savedModel) { try { const _sv = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (_sv) savedModel = _sv.model || ''; } catch {} }
-      const want = (driver === 'gpt') ? 'gpt-5.6-sol' : (driver === 'gemma') ? 'gemini-3.8-flash' : 'claude-sonnet-5';
+      const want = m.default_model || (m.models || [])[0]?.value;
       if (savedModel && [].some.call(sel.options, o=>o.value===savedModel)) sel.value = savedModel;
       else if ([].some.call(sel.options, o=>o.value===want)) sel.value = want;
       if (typeof syncEffort === 'function') syncEffort();
@@ -3980,23 +3980,131 @@
   // this list was stale from when it was written for Sonnet 4.6). Haiku = no
   // effort support. Picker reacts to the chosen model.
   const EFFORT_BY_MODEL = {
-    opus:   ["low", "medium", "high", "xhigh", "max"],
-    "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
-    "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],   // claude-a-only roster entry
-
-    haiku:  [],   // Haiku 4.5 has no effort support
-    // Keep these in sync with the actual Codex runtime. Ultra enables
-    // automatic subagent delegation and is unavailable on Luna.
-    "gpt-6-astra":   ["low", "medium", "high", "xhigh", "max", "ultra"],
-    "gpt-5.6-sol":   ["low", "medium", "high", "xhigh", "max", "ultra"],
-    "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
-    "gpt-5.6-luna":  ["low", "medium", "high", "xhigh", "max"],
-    // gemma/agy: pick the Gemini family in the model picker, the tier in the effort
-    // picker; start() passes the slug as --model and the tier as --effort (agy
-    // stopped accepting the folded "Gemini X (Tier)" form, 2026-07-24).
-    "gemini-3.8-flash": ["low", "medium", "high"],
-    "gemini-3.1-pro": ["low", "high"],
-    "Claude Sonnet 4.6 (Thinking)": [], "Claude Opus 4.6 (Thinking)": [], "GPT-OSS 120B (Medium)": [],
+    "gpt-6-astra": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "gpt-5.6-terra": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "gpt-6-sol": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "gemini-3.8-flash": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "claude-sonnet-5": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "sonnet": [],
+    "claude-opus-5-5": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "opus": [],
+    "claude-fable-5-1": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "fable": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "qwen3.8:27b": [
+      "standard"
+    ],
+    "gpt-6-luna": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "gpt-daybreak-blue-latest": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "claude-haiku-4-5": [],
+    "haiku": [],
+    "mythos": [],
+    "gpt-daybreak-red": [],
+    "gpt-5.6-luna": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "gpt-5.6-sol": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "gpt-5.4-mini": [],
+    "gpt-5.3-codex": [],
+    "gpt-5.5": [],
+    "gpt-5.4": [],
+    "daybreak": [],
+    "gpt-5": [],
+    "codex": [],
+    "claude-fable-5": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "gemini-3.6-flash": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "gemini-3.7-flash": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "Claude Sonnet 4.6 (Thinking)": [],
+    "Claude Opus 4.6 (Thinking)": [],
+    "GPT-OSS 120B (Medium)": [],
+    "gemini-3.8-flash-low": [],
+    "gemini-3.1-pro-preview": []
   };
   // a width:auto <select> sizes to its WIDEST option, so a short selection (e.g. '3.8 Flash')
   // leaves the caret floating right. fitMini measures the SELECTED option's text and sets the
@@ -5427,9 +5535,11 @@
       const shown = rows.filter(s => (!q
         || [s.title, s.preview, s.bot, s.model, s.surface, (s.presence || {}).controller_label]
           .join(' ').toLocaleLowerCase().includes(q))
-        && (!filter || filter.value === 'all'
-          || (filter.value === 'running' && (s.alive || s.state === 'running'))
-          || (filter.value === 'here' && (s.presence || {}).can_control)))
+        && (filter && filter.value === 'delegations'
+          ? s.origin === 'mcp'
+          : s.origin !== 'mcp' && (!filter || filter.value === 'all'
+            || (filter.value === 'running' && (s.alive || s.state === 'running'))
+            || (filter.value === 'here' && (s.presence || {}).can_control))))
         .sort((a, b) => {
           if (sort && sort.value === 'title') return (a.title || '').localeCompare(b.title || '');
           if (sort && sort.value === 'oldest') return (a.updated_ts || 0) - (b.updated_ts || 0);
@@ -5452,7 +5562,7 @@
     function fingerprint(items, activeId){
       return JSON.stringify([activeId, items.map(s => [
         s.id, s.title, s.preview, s.bot, s.model, s.surface, s.updated_ts,
-        s.state, !!s.alive,
+        s.state, !!s.alive, s.origin || '',
         (s.presence || {}).controller_label || '',
         !!(s.presence || {}).can_control
       ])]);

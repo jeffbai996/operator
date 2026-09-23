@@ -129,9 +129,9 @@ def test_codex_resume_threads_the_conversation():
 
 
 def test_codex_model_and_effort_flags():
-    plan = RT.build_cmd("codex", _spec(model="gpt-5.6-sol", effort="low"))
+    plan = RT.build_cmd("codex", _spec(model="gpt-6-sol", effort="low"))
     c = plan.cmd
-    assert c[c.index("-m") + 1] == "gpt-5.6-sol"
+    assert c[c.index("-m") + 1] == "gpt-6-sol"
     assert 'model_reasoning_effort="low"' in c
 
 

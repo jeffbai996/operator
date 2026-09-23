@@ -44,6 +44,13 @@ from werkzeug.serving import make_server             # noqa: E402
 # time. A dead loopback port → every attach fails fast with ECONNREFUSED and
 # the harness can never reach the real browser.
 _DEAD_CDP = "http://127.0.0.1:9299"
+# Collection imports this module before ANY test runs, so these writes are
+# visible to every other module; _restore_harness_env puts them back once the
+# harness is done (2026-09-22: six Astra launch tests failed in a full run
+# because they saw this dead endpoint and built a demo launch plan).
+_PRIOR_ENV = {k: os.environ.get(k) for k in (
+    "OPERATOR_DEMO_CDP", "OPERATOR_DEMO", "OPERATOR_CHROME_LAUNCHER",
+    "OPERATOR_SESSION_PATH")}
 os.environ["OPERATOR_DEMO_CDP"] = _DEAD_CDP
 os.environ.pop("OPERATOR_DEMO", None)   # live cockpit template, not the demo
 # Demand-start must fail locally too. A dead CDP endpoint alone stopped being
@@ -58,6 +65,16 @@ os.environ["OPERATOR_SESSION_PATH"] = os.path.join(
     _HARNESS_STATE_DIR, "session.json")
 
 import operator_session as OS_MOD  # noqa: E402
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_harness_env():
+    yield
+    for key, value in _PRIOR_ENV.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 import operator_view as OV  # noqa: E402
 importlib.reload(OS_MOD)   # rebind the store path under the isolated env
 
@@ -618,14 +635,14 @@ def test_gpt_picker_offers_supported_reasoning_ladders(page, harness):
         driver.dispatchEvent(new Event('change'));
     }""")
     page.wait_for_function(
-        "document.querySelector('#op-model option[value=\\\"gpt-5.6-luna\\\"]')",
+        "document.querySelector('#op-model option[value=\\\"gpt-6-luna\\\"]')",
         polling=100)
     observed = page.evaluate("""() => {
         const model = document.getElementById('op-model');
         const effort = document.getElementById('op-effort');
         const out = {};
-        for (const name of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra',
-                            'gpt-5.6-luna']) {
+        for (const name of ['gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-terra',
+                            'gpt-6-luna']) {
           model.value = name;
           model.dispatchEvent(new Event('change'));
           out[name] = Array.from(effort.options, option => option.value);
@@ -635,9 +652,9 @@ def test_gpt_picker_offers_supported_reasoning_ladders(page, harness):
     delegated = ["low", "medium", "high", "xhigh", "max", "ultra"]
     assert observed == {
         "gpt-6-astra": delegated,
-        "gpt-5.6-sol": delegated,
+        "gpt-6-sol": delegated,
         "gpt-5.6-terra": delegated,
-        "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
+        "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
     }
     assert page.locator('#op-model option[value="gpt-5.5"]').count() == 0
 
@@ -661,7 +678,7 @@ def test_stale_default_model_response_cannot_overwrite_new_driver(page, harness)
         window._opLoadModels('gpt'),
       ]);
     }""")
-    assert page.locator('#op-model option[value="gpt-5.6-luna"]').count() == 1
+    assert page.locator('#op-model option[value="gpt-6-luna"]').count() == 1
     assert page.locator('#op-model option[value="claude-sonnet-5"]').count() == 0
     assert page._errors == [], f"JS errors: {page._errors}"
 
@@ -2661,7 +2678,7 @@ def test_history_run_again_redispatches_row_bundle(browser, harness):
     import operator_history as OH
     rid = OH.record(types.SimpleNamespace(
         bot="gpt", task="scan the weekly filings", state="done",
-        model="gpt-5.6-sol", effort="low", surface="browser", demo=False,
+        model="gpt-6-sol", effort="low", surface="browser", demo=False,
         started_ts=_t.time() - 120, ended_ts=_t.time() - 60,
         _runtime="codex", _cumulative_in_tokens=1000, _peak_in_tokens=500,
         messages=[{"ts": _t.time() - 90, "role": "assistant",
@@ -2695,7 +2712,7 @@ def test_history_run_again_redispatches_row_bundle(browser, harness):
         body = harness.dispatch_posts[0]
         assert body["bot"] == "gpt"
         assert body["task"] == "scan the weekly filings"
-        assert body["model"] == "gpt-5.6-sol"
+        assert body["model"] == "gpt-6-sol"
         assert body["effort"] == "low"
         assert body["surface"] == "browser"
         assert errors == [], f"JS errors: {errors}"
@@ -2714,13 +2731,26 @@ def test_history_run_again_redispatches_row_bundle(browser, harness):
 # decision; a restored log hides the splash but never disarms it.
 
 
+def _seed_once_script(session: dict) -> str:
+    """Seed localStorage on the FIRST navigation of the tab only. An init
+    script runs on every navigation, so a plain setItem re-seeds the old
+    chat after the clear button's reload and the test boots back into the
+    conversation it just deleted (2026-09-22: two harness tests failed for
+    two months on exactly this)."""
+    return ("if (!sessionStorage.getItem('op-harness-seeded')) {"
+            " localStorage.setItem('operator-session-v2', "
+            + json.dumps(json.dumps(session)) + ");"
+            " sessionStorage.setItem('op-harness-seeded', '1'); }")
+
+
+_RELOADED = "() => performance.getEntriesByType('navigation').some(e => e.type === 'reload')"
+
+
 def _restored_ctx(browser, **ctx_kw):
     """Context with a believable RESTORED session: nonempty chat, auto mode
     (auto is the mode that keeps the splash CSS-visible — the iPad state)."""
     ctx = browser.new_context(**ctx_kw)
-    ctx.add_init_script(
-        "localStorage.setItem('operator-session-v2', "
-        + json.dumps(json.dumps(_SEEDED_SESSION)) + ");")
+    ctx.add_init_script(_seed_once_script(_SEEDED_SESSION))
     return ctx
 
 
@@ -3034,7 +3064,11 @@ def test_header_delete_stays_deleted_after_splash_and_reload(browser, harness, m
 
 def test_trash_clear_returns_to_opaque_splash(browser, harness):
     """Trashing a conversation lands on the SOLID splash, not the translucent
-    over-the-feed blur (the owner 2026-07-18, superseding the 07-17 blur note)."""
+    over-the-feed blur (the owner 2026-07-18, superseding the 07-17 blur note).
+
+    Since 1.1.0 the trash button deletes the durable conversation and
+    RELOADS into the fresh one, so the splash arrives after a full page boot:
+    wait on that navigation, not on a timer sized for the old in-place clear."""
     ctx = _restored_ctx(browser, viewport={"width": 1440, "height": 900})
     pg = ctx.new_page()
     errors, con_errors, _ = _collectors(pg)
@@ -3042,7 +3076,8 @@ def test_trash_clear_returns_to_opaque_splash(browser, harness):
         pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
         pg.wait_for_selector("#op-lp", state="hidden", timeout=4000)
         pg.dispatch_event("#op-clear", "click")
-        pg.wait_for_selector("#op-lp", state="visible", timeout=4000)
+        pg.wait_for_function(_RELOADED, timeout=20000)        # the reload landed
+        pg.wait_for_selector("#op-lp", state="visible", timeout=8000)
         assert not pg.eval_on_selector(
             "#op-lp", "el => el.classList.contains('op-lp-over')"), \
             "trash must present the opaque splash, not the blur overlay"
@@ -3177,16 +3212,25 @@ def test_observer_reconciles_final_without_replaying_or_taking_control(browser, 
                 'messages': [], 'bot': 'gpt', 'alive': True,
                 'started_ts': 1, 'ended_ts': 2, 'run_id': 'observer-fixture'}
     ctx = browser.new_context(viewport={'width': 390 if arrival == 'late_final' else 1440, 'height': 900})
-    ctx.add_init_script("localStorage.setItem('operator-session-v2', " + json.dumps(json.dumps(session)) + ");")
+    ctx.add_init_script(_seed_once_script(session))
     pg = ctx.new_page()
     errors, writes = [], []
+    cleared = {'done': False}
     pg.on('pageerror', lambda error: errors.append(str(error)))
     pg.on('request', lambda req: writes.append(req.url) if req.method == 'POST' else None)
+    # the clear button deletes the conversation and reloads; after that the
+    # server holds a fresh empty one, so the session route must say so
     pg.route('**/operator/session', lambda route: route.fulfill(json={
-        'ok': True, 'data': session, 'rev': 1, 'conversation_rev': 1, 'conversation_id': 'legacy'}))
+        'ok': True, 'data': None if cleared['done'] else session, 'rev': 1,
+        'conversation_rev': 1, 'conversation_id': 'fresh-1' if cleared['done'] else 'legacy'}))
+    pg.route('**/operator/sessions/*?fresh=1', lambda route: (
+        cleared.update(done=True), route.fulfill(json={'ok': True, 'active': 'fresh-1', 'rev': 2})))
     pg.route('**/operator/sessions/*/presence', lambda route: route.fulfill(json={
         'ok': True, 'can_control': False, 'controller_label': 'HOST-B'}))
-    pg.route('**/operator/agent?*', lambda route: route.fulfill(json=snapshot))
+    idle = {'state': 'idle', 'final': '', 'messages': [], 'bot': '', 'alive': False,
+            'started_ts': 0, 'ended_ts': 0, 'run_id': ''}
+    pg.route('**/operator/agent?*', lambda route: route.fulfill(
+        json=idle if cleared['done'] else snapshot))
     try:
         pg.goto(harness.base + '/operator', wait_until='domcontentloaded')
         pg.wait_for_selector('#op[data-thread-control="observer"]')
@@ -3211,7 +3255,10 @@ def test_observer_reconciles_final_without_replaying_or_taking_control(browser, 
             # send the fixture's reset to an actual runner.
             pg.route('**/operator/agent/reset', lambda route: route.fulfill(json={'ok': True}))
             pg.locator('#op-clear').evaluate('el => el.click()')
-            pg.wait_for_timeout(2000)
+            pg.wait_for_function(_RELOADED, timeout=20000)     # the reload landed
+            pg.wait_for_selector('#op-log', state='attached', timeout=8000)
+            pg.wait_for_timeout(1500)
+            assert cleared['done'], 'clear must delete the conversation on the server'
             assert pg.locator('.op-msg.bot .bubble').count() == 0
     finally:
         ctx.close()
@@ -3360,3 +3407,41 @@ def test_deferred_viewport_beacon_retries_until_server_applies(browser, harness)
         assert len(requests) == settled, "applied viewport should stop retrying"
     finally:
         ctx.close()
+
+
+def test_chat_library_hides_delegations_until_asked(browser, harness):
+    """Bot-made delegation chats (origin mcp) stay out of the human's library
+    by default; the Delegations filter shows exactly them (2026-09-22)."""
+    mine = OS_MOD.create()["id"]
+    OS_MOD.save({"log": '<div class="op-msg user"><span class="bubble">mine</span></div>',
+                 "preview": "Book the ferry", "bot": "gpt", "surface": "browser"},
+                conversation_id=mine)
+    OS_MOD.title_if_unset("Ferry", mine)
+    bot = OS_MOD.create("Compare rates", activate=False, reuse_draft=False, origin="mcp")["id"]
+    harness.mode = "live"
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
+        pg.wait_for_selector("#op-lp-open", state="visible", timeout=8000)
+        pg.locator("#op-lp-open").dispatch_event("click")
+        pg.wait_for_selector("#op-lp-chats", state="visible", timeout=8000)
+        pg.locator("#op-lp-chats").dispatch_event("click")
+        pg.wait_for_selector(".op-chat-row", state="visible", timeout=8000)
+        assert pg.locator(".op-chat-title").all_text_contents() == ["Ferry"]
+        pg.select_option("#op-chat-filter", "delegations")
+        pg.wait_for_timeout(300)
+        assert pg.locator(".op-chat-title").all_text_contents() == ["Compare rates"]
+        pg.select_option("#op-chat-filter", "all")
+        pg.wait_for_timeout(300)
+        assert pg.locator(".op-chat-title").all_text_contents() == ["Ferry"]
+        assert errors == []
+    finally:
+        ctx.close()
+        for sid in (mine, bot):
+            try:
+                OS_MOD.delete(sid)
+            except KeyError:
+                pass

@@ -307,3 +307,18 @@ def test_two_real_runner_process_groups_stop_independently(
     b._thread.join(5)
     assert not b.is_running()
     assert {cid for cid, _reason in recorded} == {"conv-a", "conv-b"}
+
+
+def test_peek_never_manufactures_a_runner() -> None:
+    """snapshot() on an unknown id used to create a runner as a side effect
+    (2026-09-22 audit: a status probe with a bogus id left one behind)."""
+    made = []
+
+    def factory(**kw):
+        made.append(kw)
+        return _FakeRunner(**kw)
+    runners = OA.RunnerRegistry(runner_factory=factory, global_limit=2, per_bot_limit=1)
+    assert runners.peek("ghost") is None
+    assert made == []
+    runners.get("real")
+    assert runners.peek("real") is not None and len(made) == 1

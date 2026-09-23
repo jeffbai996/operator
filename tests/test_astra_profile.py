@@ -1,6 +1,14 @@
 """Astra's compact contract must retain routing, continuity and boundaries."""
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _no_ambient_demo_endpoint(monkeypatch):
+    """The launch plan reads OPERATOR_DEMO_CDP at call time; another module
+    (the browser harness) sets it at import. These tests pin the default
+    :9222 plan and must not depend on collection order."""
+    monkeypatch.delenv("OPERATOR_DEMO_CDP", raising=False)
+
 import operator_prompts as P
 import operator_runtimes as RT
 
@@ -30,7 +38,7 @@ def test_astra_profile_is_compact_and_surface_specific(surface, demo):
         assert "Use 1Password's UI" not in text
 
 
-@pytest.mark.parametrize("model", ["", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+@pytest.mark.parametrize("model", ["", "gpt-6-sol", "gpt-5.6-terra", "gpt-6-luna"])
 def test_other_models_keep_their_profile_plus_shared_recipient_rule(model):
     persona = P.build_persona("BASE", "browser", False, model)
     assert persona == (

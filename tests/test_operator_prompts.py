@@ -106,7 +106,7 @@ def test_private_persona_guards_autofill_when_chatty_shortcut_returns_raw(
         "You are X." + P.BROWSER_MANDATE,
         surface,
         False,
-        model="gpt-5.6-sol",
+        model="gpt-6-sol",
     )
     assert task_arg == task
     assert "current origin and visible site" in persona
@@ -191,7 +191,7 @@ def test_form_recall_preserves_authorized_ordinary_form_completion():
     assert "minimum information needed" in hint
 
 
-@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-astra"])
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-astra"])
 @pytest.mark.parametrize("surface", ["browser", "desktop-sandbox", "desktop-real"])
 def test_private_persona_always_guards_stored_data_disclosure(model, surface):
     persona = P.build_persona("BASE" + P.BROWSER_MANDATE, surface, False, model)
@@ -202,14 +202,14 @@ def test_private_persona_always_guards_stored_data_disclosure(model, surface):
     assert "Do not retrieve from squad memory" in persona
 
 
-@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-astra"])
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-astra"])
 @pytest.mark.parametrize("surface", ["browser", "desktop-sandbox", "desktop-real"])
 def test_demo_persona_never_advertises_stored_data_access(model, surface):
     persona = P.build_persona("BASE" + P.BROWSER_MANDATE, surface, True, model)
     assert "stored personal or account information" not in persona
 
 
-@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-astra"])
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-astra"])
 def test_raw_task_paths_still_receive_the_private_persona_guard(runner, model):
     runner.model = model
     runner.surface = "browser"

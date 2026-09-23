@@ -483,6 +483,12 @@ def _live_run_targets(busy: bool) -> list[str]:
         cid = getattr(operator_agent.runner, "conversation_id", "") or ""
     except Exception:  # noqa: BLE001 — runner unavailable
         return []
+    return _registry_targets(cid)
+
+
+def _registry_targets(cid: str) -> list[str]:
+    """CDP target ids the tab registry holds for a conversation; [] when the
+    id is empty, the registry is unreadable, or the demo has no browse module."""
     if not cid:
         return []
     here = Path(__file__).resolve()
@@ -499,6 +505,43 @@ def _live_run_targets(busy: bool) -> list[str]:
         return list(mod._read_registry().get(cid, []))
     except Exception:  # noqa: BLE001 — registry is advisory
         return []
+
+
+def decide_streamed_tab(*, live: list, current, busy: bool, owned, front,
+                        movers: list, count_changed: bool):
+    """Which tab the cockpit streams, and why. Pure: the streamer gathers the
+    inputs, this picks. Returns (page, reason) or (None, "") to stay put.
+
+    Order of authority:
+      dead-current  the streamed page is gone → newest page with content
+      owned         a run is live and the registry names its tab → that tab,
+                    and never away from it while the run lasts
+      mover         a run is live with no registry entry → the tab whose URL
+                    just changed (the agent's activity)
+      front         Chrome's real front tab, unless it is an empty one
+      new-tab       idle, the tab count grew, we are not on the newest → it
+    A count change mid-run is not a reason: the owned/mover rules cover the
+    agent's own tabs, and anything else is a stray click the run must not
+    follow. document.visibilityState is not consulted at all: every tab on a
+    CDP-driven Chrome answers 'visible' (verified 2026-07-29)."""
+    if not live:
+        return None, ""
+    if current is None or current not in live:
+        for pg in reversed(live):
+            if not _is_blank_url(pg.url):
+                return pg, "dead-current"
+        return live[-1], "dead-current"
+    if busy and owned is not None and owned in live:
+        return (None, "") if owned is current else (owned, "owned")
+    if busy and movers:
+        pg = movers[-1]
+        return (None, "") if pg is current else (pg, "mover")
+    if front is not None and front in live and front is not current \
+            and not _is_blank_url(front.url):
+        return front, "front"
+    if not busy and count_changed and current is not live[-1]:
+        return live[-1], "new-tab"
+    return None, ""
 
 
 def should_mirror_onepassword(streamer, fresh, busy: bool) -> bool:
@@ -1626,31 +1669,35 @@ class _Streamer:
         self._eager_evt.clear()
 
     async def _refresh_active_page(self) -> None:
+        """Per-frame bookkeeping for the follow decision: notice a tab-count
+        change (consumed by _follow_active_tab) and recover immediately from a
+        dead streamed page. Everything else is decide_streamed_tab's call."""
         try:
             ctx = self._browser.contexts[0]
             live = self._live_pages(ctx)
             if not live:
                 return
-            switch_to = None
-            # 1. current page gone → must switch
+            n = len(live)
+            if n != getattr(self, "_live_n", n):
+                self._tab_count_changed = True
+            self._live_n = n
             if self._page is None or self._page.is_closed():
-                switch_to = live[-1]
-            else:
-                # 2. follow the agent's ACTIVE tab: when a new tab appeared (the live
-                # count grew) the agent almost certainly just opened+moved to it, so
-                # stream that one. bounded by a count check so we don't churn per-frame.
-                n = len(live)
-                if n != getattr(self, "_live_n", n) and self._page is not live[-1]:
-                    switch_to = live[-1]
-                self._live_n = n
-            if switch_to is not None and switch_to is not self._page:
-                self._page = switch_to
-                self._cdp = None
-                self._update_viewport()
-                await self._force_desktop_page(self._page)
-                self._vp_log("tab-refresh", (switch_to.url or "")[:48])
+                pg, why = decide_streamed_tab(
+                    live=live, current=None, busy=False, owned=None,
+                    front=None, movers=[], count_changed=False)
+                if pg is not None:
+                    await self._switch_streamed_page(pg, why)
         except Exception:  # noqa: BLE001
             pass
+
+    async def _switch_streamed_page(self, pg, why: str) -> None:
+        """The one writer of self._page outside attach: every switch leaves
+        a recorder event, so a wrong tab can be reconstructed later."""
+        self._page = pg
+        self._cdp = None
+        self._update_viewport()
+        await self._force_desktop_page(self._page)
+        self._vp_log("tab-" + why, (pg.url or "")[:48])
 
     async def _follow_active_tab(self) -> None:  # noqa: D401
         """Stream whichever tab the AGENT (or user) actually has in the FOREGROUND —
@@ -1705,149 +1752,52 @@ class _Streamer:
             # break the loop, and a same-URL SPA never produces one. With no
             # registry entry there is no enforcement at all — the front-tab
             # check and the url-diff mover decide.
-            if _busy and now - getattr(self, "_front_ts", 0.0) > 2.5:
-                self._front_ts = now
+            live_set = set(live)
+            for _dead in [k for k in self._target_ids if k not in live_set]:
+                self._target_ids.pop(_dead, None)
+            # inputs for the decision
+            owned_pg = None
+            if _busy:
                 owned = _live_run_targets(_busy)
                 if owned:
-                    owned_pg = None
                     for pg in live:
                         if await self._page_target_id(pg) in owned:
                             owned_pg = pg
                             break
-                    if owned_pg is not None:
-                        if owned_pg is not self._page:
-                            self._page = owned_pg
-                            self._cdp = None
-                            self._update_viewport()
-                            await self._force_desktop_page(self._page)
-                            self._vp_log("tab-follow-owned",
-                                         (owned_pg.url or "")[:48])
-                        try:
-                            await asyncio.wait_for(
-                                owned_pg.bring_to_front(), timeout=0.5)
-                        except Exception:  # noqa: BLE001 — best-effort
-                            pass
-                        return
-            if len(live) < 2:
-                return  # single tab → nothing to follow
-            # ACTIVITY BEATS VISIBILITY (the owner 2026-07-08: "the view doesn't track
-            # the tab the bot is using — some bots, not others"): agents drive
-            # pages over CDP, which never foregrounds them — the MCP picks its
-            # current tab at connect independent of Chrome's focus, and navigate/
-            # click never activate a target (only the explicit tab tools do). So
-            # a tab whose URL changed since the last poll is the one being DRIVEN;
-            # follow it and bring it to front (which also keeps its renderer from
-            # being background-throttled and makes later visibility polls agree).
-            # ONLY while an agent run is live: outside a run, "URL activity" is
-            # SPA churn in idle tabs (Google Travel pushStates on its own), and
-            # yanking focus then kills in-page popups the USER is working with
-            # (1Password's inline menu dies on blur) — and in manual mode a view
-            # switch would re-aim the user's steer clicks at the wrong page.
             urls = {pg: pg.url for pg in live}
             prev = getattr(self, "_tab_urls", {})
             self._tab_urls = urls
-            # drop target-id cache entries for closed tabs — bounds the dict to
-            # the live tab count instead of every page the session ever opened
-            if len(self._target_ids) > len(live):
-                _liveset = set(live)
-                for _dead in [k for k in self._target_ids if k not in _liveset]:
-                    self._target_ids.pop(_dead, None)
-            # A tab CREATED AND NAVIGATED between two polls has no prev entry,
-            # so the url-diff never saw it — the agent's fresh MCP tab could
-            # stream-shadow behind a stale one indefinitely (the owner 2026-07-27
-            # "isn't displaying the tab the agent is working on at ALL
-            # times"). While busy, a brand-new non-blank tab counts as a
-            # mover too.
-            moved = ([pg for pg in live
-                      if (pg in prev and prev[pg] != urls[pg])
-                      or (pg not in prev
-                          and urls[pg] not in ("", "about:blank"))]
-                     if _busy else [])
-            if moved:
-                pg = moved[-1]                       # most recently registered mover
-                if pg is not self._page:
-                    self._page = pg
-                    self._cdp = None
-                    self._update_viewport()
-                    await self._force_desktop_page(self._page)
-                    self._vp_log("tab-follow", (urls.get(pg) or "")[:48])
-                try:
-                    await asyncio.wait_for(pg.bring_to_front(), timeout=0.5)
-                except Exception:  # noqa: BLE001 — foregrounding is best-effort
-                    pass
-                return
-            # current page already visible? then don't churn.
-            async def _vis(pg):
-                try:
-                    s = await asyncio.wait_for(
-                        pg.evaluate("document.visibilityState"), timeout=0.5)
-                    return s
-                except Exception:
-                    # JS world unavailable → fall back to CDP visibility metric.
-                    # DETACH the throwaway session: this runs per pump
-                    # iteration, and each leaked session is per-target CDP
-                    # state Chrome keeps until browser disconnect (found while
-                    # hunting the 2026-07-23 width walker — hundreds leaked on
-                    # a busy 2-tab night).
-                    sess = None
-                    try:
-                        sess = await pg.context.new_cdp_session(pg)
-                        r = await asyncio.wait_for(
-                            sess.send("Runtime.evaluate", {
-                                "expression": "document.visibilityState",
-                                "returnByValue": True}), timeout=0.5)
-                        return (r.get("result") or {}).get("value")
-                    except Exception:
-                        return None
-                    finally:
-                        if sess is not None:
-                            try:
-                                await sess.detach()
-                            except Exception:  # noqa: BLE001
-                                pass
-            # AUTHORITATIVE foreground check (the owner 2026-07-29: "the operator
-            # browser doesn't focus on the tab the bot is working on is STILL
-            # present"). The visibilityState probes below cannot answer this on
-            # our Chrome — every tab reports 'visible' (see _active_target_id),
-            # so the old `cur_vis == "visible"` early-return matched ALWAYS and
-            # froze the view on whatever tab it happened to hold. That left the
-            # url-diff heuristic above as the only mover, which by construction
-            # misses a same-URL workload (clicking/typing/reading one SPA) —
-            # precisely the trace the owner screenshotted.
-            act = self._active_target_id()
+            movers = ([pg for pg in live
+                       if (pg in prev and prev[pg] != urls[pg])
+                       or (pg not in prev and not _is_blank_url(urls[pg]))]
+                      if _busy else [])
+            front_pg = None
+            act = self._active_target_id() if len(live) > 1 else None
             if act:
-                cur_tid = await self._page_target_id(self._page) \
-                    if self._page in live else None
-                if cur_tid == act:
-                    return                       # already on the real front tab
                 for pg in live:
-                    if pg is self._page:
-                        continue
                     if await self._page_target_id(pg) == act:
-                        self._page = pg
-                        self._cdp = None
-                        self._update_viewport()
-                        await self._force_desktop_page(self._page)
-                        self._vp_log("tab-follow-active",
-                                     (urls.get(pg) or "")[:48])
-                        return
-                return   # front tab known but not ours to stream (devtools etc.)
-            # CDP target list unreachable → fall back to the visibility probe.
-            # Harmless where it works (a real focused window) and a no-op where
-            # every tab claims visible, which is the pre-existing behavior.
-            if self._page in live:
-                cur_vis = await _vis(self._page)
-                if cur_vis == "visible":
-                    return
-            for pg in reversed(live):   # prefer the newest visible one
-                if pg is self._page:
-                    continue
-                if await _vis(pg) == "visible":
-                    self._page = pg
-                    self._cdp = None
-                    self._update_viewport()
-                    await self._force_desktop_page(self._page)
-                    return
+                        front_pg = pg
+                        break
+            count_changed = bool(getattr(self, "_tab_count_changed", False))
+            self._tab_count_changed = False
+            current = self._page if (self._page is not None
+                                     and not self._page.is_closed()) else None
+            pg, why = decide_streamed_tab(
+                live=live, current=current, busy=_busy, owned=owned_pg,
+                front=front_pg, movers=movers, count_changed=count_changed)
+            if pg is not None:
+                await self._switch_streamed_page(pg, why)
+            # the agent's tab stays in front while it works: bring_to_front
+            # of an already-front tab is a cheap no-op, and it keeps a stray
+            # click from flipping the real window away from the run
+            keep_front = owned_pg if (_busy and owned_pg is not None) else (
+                pg if why == "mover" else None)
+            if keep_front is not None and now - getattr(self, "_front_ts", 0.0) > 2.5:
+                self._front_ts = now
+                try:
+                    await asyncio.wait_for(keep_front.bring_to_front(), timeout=0.5)
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
         except Exception:  # noqa: BLE001
             pass
 
@@ -1967,6 +1917,40 @@ class _Streamer:
                 "failed": failed}
 
     # ---- tabs ------------------------------------------------------------
+    def grab_target(self, targets: list) -> "dict | None":
+        """One JPEG of the live page whose CDP target is in `targets`, with its
+        url and title; None when no such page is open. Runs on the loop
+        thread. Never touches self._page: a look at conversation A must not
+        return conversation B's tab, whatever the cockpit is streaming."""
+        if not self._running or self._loop is None:
+            return None
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._grab_target(targets), self._loop)
+            return fut.result(timeout=12)
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _grab_target(self, targets: list) -> "dict | None":
+        wanted = set(targets or ())
+        if not wanted or self._browser is None:
+            return None
+        try:
+            live = self._live_pages(self._browser.contexts[0])
+        except Exception:  # noqa: BLE001
+            return None
+        for pg in live:
+            if await self._page_target_id(pg) not in wanted:
+                continue
+            jpeg = await self._grab(pg)
+            if not jpeg:
+                return None
+            try:
+                title = await asyncio.wait_for(pg.title(), timeout=2)
+            except Exception:  # noqa: BLE001
+                title = ""
+            return {"jpeg": jpeg, "url": pg.url, "title": title}
+        return None
+
     def list_tabs(self) -> list:
         """Snapshot of open tabs (title/url/active). Runs on the loop thread."""
         if not self._running or self._loop is None:
@@ -4385,6 +4369,58 @@ def dispatch_for_machine(data: dict) -> tuple[dict, int]:
     return r, (200 if r.get("ok") else 409)
 
 
+def prune_delegated_conversations() -> list[str]:
+    """Hourly (from the owned-tab cleanup thread): finished, untouched
+    delegation chats older than a week lose their row, workspace and tab
+    lease. A running conversation, or one with a human turn, is kept."""
+    import operator_session as _sess_store
+    import operator_workspace
+    try:
+        alive = operator_agent.runner.conversation_summaries()
+    except Exception:  # noqa: BLE001
+        alive = {}
+    gone = []
+    for sid in _sess_store.prune_candidates():
+        if (alive.get(sid) or {}).get("alive"):
+            continue
+        try:
+            operator_workspace.delete_conversation(sid)
+        except Exception:  # noqa: BLE001 — a conflict keeps the chat
+            continue
+        _browser_tab_command("release", sid, close=True)
+        try:
+            _sess_store.delete(sid)
+        except KeyError:
+            pass
+        gone.append(sid)
+    return gone
+
+
+def look_for_machine(data: dict) -> tuple[dict, int]:
+    """One frame of a delegation's own tab for the signed internal MCP
+    capability (operator-mcp operate_look). The tab is the registry's target
+    for the conversation, captured directly; the cockpit's streamed page is
+    not consulted, so a caller never sees another conversation's work."""
+    import base64 as _b64
+    cid = str(data.get("conversation_id") or "").strip()
+    if not cid:
+        return {"ok": False, "error": "conversation_id required"}, 400
+    targets = _registry_targets(cid)
+    if not targets:
+        return {"ok": False, "error": "no browser tab for this conversation",
+                "conversation_id": cid}, 404
+    browser_error = _streamer.require_ready()
+    if browser_error:
+        return {"ok": False, "error": browser_error, "conversation_id": cid}, 503
+    shot = _streamer.grab_target(targets)
+    if not shot:
+        return {"ok": False, "error": "the conversation's tab is not open",
+                "conversation_id": cid}, 404
+    return {"ok": True, "conversation_id": cid,
+            "jpeg_b64": _b64.b64encode(shot["jpeg"]).decode("ascii"),
+            "url": shot.get("url") or "", "title": shot.get("title") or ""}, 200
+
+
 @bp.route("/operator/dispatch", methods=["POST"])
 def operator_dispatch():
     """Start a headless Claude Code agent (as the chosen persona) to do the task
@@ -4796,28 +4832,20 @@ def _live_bots() -> set:
 # resolves an alias to the *latest* of that family, so the actual model the agent
 # runs is always current. The LABEL is the human version; bump these two lines
 # when a family's latest version changes (the only manual touch-point).
-OPERATOR_MODELS = [
-    {"value": "opus", "label": "Opus 5"},
-    {"value": "claude-sonnet-5", "label": "Sonnet 5"},
-    {"value": "haiku", "label": "Haiku 4.5"},
-]
+from operator_catalog import picker as model_picker, default_slug, aliases as model_aliases
+OPERATOR_MODELS = model_picker('operator-claude')
 # claude-a-only roster (the owner 2026-07-22): adds Fable (Mythos-class, above Opus)
 # on top of the base Claude list. claude-b keeps the base roster — the models
 # endpoint branches on the driver key, so scope stays per-bot.
 # Bumped to 5.1 on 2026-09-01; the old 5 id is gone rather than kept alongside,
 # because a picker offering a superseded model is how bots quietly stay stale.
-OPERATOR_MODELS_CLAUDE_A = [
-    {"value": "claude-fable-5-1", "label": "Fable 5.1"},
-] + OPERATOR_MODELS
-# codex/gpt models (default gpt-5.6-sol low per the owner). Astra is the top
-# subscription tier; the 5.6 family remains as Sol / Terra / Luna. Each model
-# has its own effort ladder in EFFORT_BY_MODEL.
-OPERATOR_MODELS_GPT = [
-    {"value": "gpt-6-astra", "label": "GPT-6 Astra"},
-    {"value": "gpt-5.6-sol", "label": "GPT-5.6 Sol"},
-    {"value": "gpt-5.6-terra", "label": "GPT-5.6 Terra"},
-    {"value": "gpt-5.6-luna", "label": "GPT-5.6 Luna"},
-]
+OPERATOR_MODELS_CLAUDE_A = model_picker('operator-claude-a')
+# codex/gpt models (default gpt-6-sol low per the owner). Astra is the top
+# subscription tier; Sol and Luna moved to GPT-6 on 2026-09-22 and Terra has
+# no GPT-6 successor, so it stays on 5.6. Each model has its own effort ladder
+# in EFFORT_BY_MODEL. The 5.6 Sol and Luna slugs are gone from the picker on
+# purpose: a picker offering a superseded model is how bots quietly stay stale.
+OPERATOR_MODELS_GPT = model_picker('operator-gpt')
 # gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner's
 # flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
 # ones have a fixed tier baked in (no effort). start() folds family+effort into the
@@ -4826,12 +4854,7 @@ OPERATOR_MODELS_GPT = [
 # dispatched WITHOUT --effort. NB (2026-07-24): agy stopped accepting the old
 # "Gemini 3.5 Flash (High)" display form together with --effort — it now errors
 # "--effort is not supported for model …". Gemini values must be slugs.
-OPERATOR_MODELS_GEMMA = [
-    {"value": "gemini-3.8-flash", "label": "3.8 Flash"},
-    {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
-    {"value": "Claude Opus 4.6 (Thinking)", "label": "Opus 4.6"},
-    {"value": "GPT-OSS 120B (Medium)", "label": "GPT-OSS 120B"},
-]
+OPERATOR_MODELS_GEMMA = model_picker('operator-gem')
 
 
 # public demo: LOCKED 2-model choice on the gemma/agy runtime (the owner 2026-07-09):
@@ -4839,10 +4862,7 @@ OPERATOR_MODELS_GEMMA = [
 # as the heavier alt. Tier is baked into each value — the effort control is
 # hidden in the demo UI, the lock owns effort (dispatch sends effort="", so the
 # baked-tier form is what agy gets).
-OPERATOR_MODELS_DEMO = [
-    {"value": "gemini-3.8-flash-low", "label": "3.8 Flash"},
-    {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
-]
+OPERATOR_MODELS_DEMO = model_picker('operator-demo')
 
 
 @bp.route("/operator/models")
@@ -4851,12 +4871,12 @@ def operator_models():
         return jsonify(models=OPERATOR_MODELS_DEMO)
     driver = request.args.get("driver", "")
     if driver == "gpt":
-        return jsonify(models=OPERATOR_MODELS_GPT)
+        return jsonify(models=OPERATOR_MODELS_GPT, default_model=default_slug("gpt-codex"))
     if driver == "gemma":
-        return jsonify(models=OPERATOR_MODELS_GEMMA)
+        return jsonify(models=OPERATOR_MODELS_GEMMA, default_model=default_slug("runtime"))
     if driver == "claude-a":
-        return jsonify(models=OPERATOR_MODELS_CLAUDE_A)
-    return jsonify(models=OPERATOR_MODELS)
+        return jsonify(models=OPERATOR_MODELS_CLAUDE_A, default_model=model_aliases()["sonnet"])
+    return jsonify(models=OPERATOR_MODELS, default_model=model_aliases()["sonnet"])
 
 
 import operator_workspace_routes as _workspace_routes

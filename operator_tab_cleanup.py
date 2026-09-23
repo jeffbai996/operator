@@ -69,8 +69,17 @@ def sweep(view, reaper, client) -> dict:
 def _loop(view, reaper, client) -> None:
     # No browser launches, per-tick subprocesses or filesystem scans. A stopped
     # browser is simply unavailable; failures contain no URLs or credentials.
+    last_prune = 0.0
     while True:
         time.sleep(60)
+        if time.time() - last_prune >= 3600:
+            last_prune = time.time()
+            try:
+                gone = view.prune_delegated_conversations()
+                if gone:
+                    LOG.info("Operator delegation prune: removed %d chat(s)", len(gone))
+            except Exception:  # noqa: BLE001 — never let the prune stop the sweep
+                LOG.warning("Operator delegation prune failed, nothing removed")
         try:
             result = sweep(view, reaper, client)
             _status.update(last_sweep=time.time(), last=result,
