@@ -500,19 +500,21 @@ def test_stream_quality_override_is_visible_persisted_and_beats_network(browser,
         ctx.close()
 
 
-def test_hamburger_shortcuts_match_the_viewers_platform(browser, harness):
+@pytest.mark.parametrize("platform", ["Win32", "MacIntel"])
+def test_hamburger_shortcuts_match_the_viewers_platform(browser, harness, platform):
     """Shortcut hints describe the viewer's keyboard; they are not decorative
-    glyphs. The Linux harness exercises the non-Apple branch so a Windows
-    cockpit can never regress to showing Command-key instructions."""
+    glyphs. Pin both platform branches independently of the test host."""
     harness.mode = "live"
     ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    ctx.add_init_script("Object.defineProperty(navigator, 'userAgentData', {value: undefined});"
+        + "Object.defineProperty(navigator, 'platform', {value: " + json.dumps(platform) + "});")
     pg = ctx.new_page()
     try:
         pg.goto(harness.base + "/operator", wait_until="domcontentloaded")
         hints = pg.evaluate("""() => Object.fromEntries(
           [...document.querySelectorAll('[data-shortcut]')]
             .map(el => [el.dataset.shortcut, el.textContent.trim()]))""")
-        assert hints == {
+        expected = {
             "reload": "Ctrl R",
             "hard-reload": "Ctrl Shift R",
             "zoom-in": "Ctrl +",
@@ -523,6 +525,11 @@ def test_hamburger_shortcuts_match_the_viewers_platform(browser, harness):
             "escape": "Esc",
             "next-tab": "Ctrl Tab",
         }
+        if platform == 'MacIntel':
+            expected = {key: value.replace('Ctrl Shift', '⇧ ⌘').replace('Ctrl', '⌘')
+                        for key, value in expected.items()}
+            expected['next-tab'] = '⌃ Tab'
+        assert hints == expected
     finally:
         ctx.close()
 
