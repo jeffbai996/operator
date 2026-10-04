@@ -33,3 +33,29 @@ def test_flat_filename_collision_fails_before_execution(tmp_path):
     dest.mkdir()
     with pytest.raises(ValueError, match='filename collision: shared.py'):
         M.stage(root, 'control', dest)
+
+
+@pytest.mark.parametrize('suite', ['control', 'vision'])
+@pytest.mark.parametrize('override', [False, True])
+def test_standalone_runner_preserves_suite_venv_and_explicit_override(tmp_path, suite, override):
+    import os
+    artifact = tmp_path / 'standalone'
+    script = artifact / suite / 'run_tests.sh'
+    script.parent.mkdir(parents=True)
+    script.write_bytes((ROOT / suite / 'run_tests.sh').read_bytes())
+    venv = artifact / 'vision/venv/bin/python3'
+    venv.parent.mkdir(parents=True, exist_ok=True)
+    venv.write_text('#!/bin/sh\nprintf "suite-venv\\n"\n')
+    venv.chmod(0o755)
+    explicit = artifact / 'override-python'
+    explicit.write_text('#!/bin/sh\nprintf "explicit-override\\n"\n')
+    explicit.chmod(0o755)
+    env = dict(os.environ)
+    env.pop('CONTROL_TEST_PYTHON', None)
+    env.pop('VISION_TEST_PYTHON', None)
+    if override:
+        env[suite.upper() + '_TEST_PYTHON'] = str(explicit)
+    result = subprocess.run(['/bin/bash', str(script)], env=env,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ('explicit-override' if override else 'suite-venv')

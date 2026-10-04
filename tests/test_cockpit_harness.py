@@ -223,10 +223,13 @@ def browser():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_session_store(monkeypatch, harness):
+def _fresh_session_store(monkeypatch, harness, tmp_path):
     """Each test gets an empty shared-session store — otherwise a session
     pushed by an earlier test's page boot gets ADOPTED by the next test's
     fresh context (log swap + mode re-apply mid-test = flaky sampling)."""
+    # A task fixture must not change the next page's launchpad data source.
+    monkeypatch.setattr(harness.mod.operator_tasks_store, 'TASKS_PATH',
+                        str(tmp_path / 'saved-tasks.json'))
     harness.mode = "real"
     harness.agent_mode = None
     harness.agent_handoff = None
