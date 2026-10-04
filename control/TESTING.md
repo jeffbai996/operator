@@ -11,5 +11,5 @@ The served browser harness blocks process launch by default. Saved-task tests
 exercise the real HTTP origin guard and stored-bundle dispatcher with only the
 consequential launch replaced for valid bundles. Invalid bots reach the real
 runner rejection; they must never be accepted to display hostile status text.
-Rejected runs remain idle and do not update last_run. Markup checks cover both
+Rejected runs remain outside the running state and do not update last_run. Markup checks cover both
 rejection and error presentation.

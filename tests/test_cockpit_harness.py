@@ -2505,7 +2505,7 @@ def test_saved_task_real_route_enforces_origin_and_dispatches_valid_bundle(brows
         else:
             page.wait_for_function("typeof window._opRunSavedTask === 'function'")
             with page.expect_response(lambda r: r.url.endswith(f'/{slug}/run')) as response:
-                page.evaluate('task => window._opRunSavedTask(task)', store.get_task(slug))
+                page.evaluate('task => window._opRunSavedTask(task)', {**store.get_task(slug), 'slug': slug})
             assert response.value.status == 200
         assert len(starts) == (0 if foreign else 1)
         assert bool(store.get_task(slug)['last_run']) is (not foreign)
@@ -2532,10 +2532,10 @@ def test_invalid_saved_bot_is_rejected_by_real_runner_without_markup(browser, ha
         page.goto(harness.base + '/operator', wait_until='domcontentloaded')
         page.wait_for_function("typeof window._opRunSavedTask === 'function'")
         with page.expect_response(lambda r: r.url.endswith(f'/{slug}/run')) as response:
-            page.evaluate('task => window._opRunSavedTask(task)', store.get_task(slug))
+            page.evaluate('task => window._opRunSavedTask(task)', {**store.get_task(slug), 'slug': slug})
         assert response.value.status == 409
         assert not store.get_task(slug)['last_run']
-        page.wait_for_function("document.getElementById('op-action-sub').textContent.includes('idle')")
+        page.wait_for_function("document.getElementById('op').dataset.busy === '0'")
         assert page.locator('#saved-task-xss').count() == 0
         assert not page.evaluate('window.__savedTaskXss === true')
     finally:
