@@ -123,6 +123,7 @@ class _Harness:
         self.stop_posts: list = []
         self.dispatch_posts: list = []
         self.run_posts: list = []
+        self.allowed_task_slug = None
         self.frame_tiers: list[str] = []
         self._steer_pending = 0
         app = Flask(__name__)
@@ -140,7 +141,8 @@ class _Harness:
             if (request.path.startswith("/operator/tasks/")
                     and request.path.endswith("/run")):
                 self.run_posts.append(request.path)
-                return Response("harness: task run blocked", status=403)
+                if request.path != f"/operator/tasks/{self.allowed_task_slug}/run":
+                    return Response("harness: task run blocked", status=403)
             # Cockpit tests do not exercise the remote browser tab inventory.
             # Short-circuit it so a failed/dead synthetic CDP loop cannot leave
             # run_coroutine_threadsafe futures pending during page teardown.
@@ -233,6 +235,7 @@ def _fresh_session_store(monkeypatch, harness):
     harness.stop_posts.clear()
     harness.dispatch_posts.clear()
     harness.run_posts.clear()
+    harness.allowed_task_slug = None
     harness.frame_tiers.clear()
     session_path = os.path.join(_HARNESS_STATE_DIR, "session.json")
     # Other test modules reload operator_session against their own tmp paths.
@@ -1404,6 +1407,7 @@ def test_var_task_card_prefills_composer(browser, harness):
                               "prompt": "find the price of {{item}} on {{site}}"})
     assert err is None
     harness.run_posts.clear()
+    harness.allowed_task_slug = None
     harness.dispatch_posts.clear()
     ctx = browser.new_context()
     # AUTO mode: the launchpad is display:none in manual (the fresh-boot default)
@@ -2423,7 +2427,7 @@ def test_saved_pill_is_permanent_with_a_minimal_empty_state(browser, harness):
         ctx.close()
 
 
-def test_saved_task_bot_is_rendered_as_text_when_run(browser, harness):
+def test_rejected_saved_task_keeps_idle_state_and_never_executes_metadata(browser, harness):
     """Persisted task metadata must never become status-card markup."""
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     ctx.add_init_script(
@@ -2462,12 +2466,78 @@ def test_saved_task_bot_is_rendered_as_text_when_run(browser, harness):
         )
         pg.dispatch_event("#op-lp-tasks-toggle", "click")
         pg.wait_for_selector(".op-lp-card", state="visible", timeout=3000)
-        pg.dispatch_event(".op-lp-card .op-lp-go", "click")
-        pg.wait_for_timeout(250)
-
+        pg.wait_for_function("typeof window._opRunSavedTask === 'function'")
+        with pg.expect_response(lambda r: r.url.endswith('/hostile-task/run')) as response:
+            pg.dispatch_event(".op-lp-card .op-lp-go", "click")
+        assert response.value.status == 403
+        pg.wait_for_function("document.getElementById('op-action-sub').textContent.includes('idle')")
         assert pg.evaluate("window.__savedTaskXss === true") is False
         assert pg.locator("#saved-task-xss").count() == 0
-        assert hostile_bot in pg.locator("#op-action-sub").text_content()
+        assert hostile_bot not in pg.locator("#op-action-sub").text_content()
+        assert harness.run_posts == ['/operator/tasks/hostile-task/run']
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize('foreign', [False, True])
+def test_saved_task_real_route_enforces_origin_and_dispatches_valid_bundle(browser, harness, monkeypatch, foreign):
+    store = harness.mod.operator_tasks_store
+    slug, error = store.save_task({'name': 'Fixture task', 'prompt': 'Check fixture', 'bot': 'gpt'})
+    assert error is None
+    harness.allowed_task_slug = slug
+    starts = []
+    monkeypatch.setattr(harness.mod._streamer, 'require_ready', lambda: None)
+    # Replace only the consequential process launch, leaving the HTTP guard,
+    # saved bundle lookup, dispatch assembly and last_run update real.
+    def start(bot, prompt, **kwargs):
+        starts.append((bot, prompt, kwargs))
+        return {'ok': True}
+    monkeypatch.setattr(harness.mod.operator_agent.runner, 'start', start)
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    try:
+        page.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        headers = {'Origin': 'https://foreign.invalid'} if foreign else {}
+        if foreign:
+            response = ctx.request.post(harness.base + f'/operator/tasks/{slug}/run',
+                data={'conversation_id': 'fixture-conversation'}, headers=headers)
+            assert response.status == 403
+        else:
+            page.wait_for_function("typeof window._opRunSavedTask === 'function'")
+            with page.expect_response(lambda r: r.url.endswith(f'/{slug}/run')) as response:
+                page.evaluate('task => window._opRunSavedTask(task)', store.get_task(slug))
+            assert response.value.status == 200
+        assert len(starts) == (0 if foreign else 1)
+        assert bool(store.get_task(slug)['last_run']) is (not foreign)
+        if starts:
+            assert starts[0][:2] == ('gpt', 'Check fixture')
+            assert starts[0][2]['conversation_id']
+    finally:
+        ctx.close()
+
+
+def test_invalid_saved_bot_is_rejected_by_real_runner_without_markup(browser, harness, monkeypatch):
+    hostile = '</span><img id="saved-task-xss" src="missing" onerror="window.__savedTaskXss=true">'
+    store = harness.mod.operator_tasks_store
+    slug, error = store.save_task({'name': 'Invalid bot fixture', 'prompt': 'Fixture', 'bot': hostile})
+    assert error is None
+    harness.allowed_task_slug = slug
+    monkeypatch.setattr(harness.mod._streamer, 'require_ready', lambda: None)
+    # The real runner rejects before allocating a process or opening a job.
+    monkeypatch.setattr(harness.mod.operator_agent.subprocess, 'Popen',
+        lambda *a, **kw: pytest.fail('invalid metadata reached process launch'))
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    try:
+        page.goto(harness.base + '/operator', wait_until='domcontentloaded')
+        page.wait_for_function("typeof window._opRunSavedTask === 'function'")
+        with page.expect_response(lambda r: r.url.endswith(f'/{slug}/run')) as response:
+            page.evaluate('task => window._opRunSavedTask(task)', store.get_task(slug))
+        assert response.value.status == 409
+        assert not store.get_task(slug)['last_run']
+        page.wait_for_function("document.getElementById('op-action-sub').textContent.includes('idle')")
+        assert page.locator('#saved-task-xss').count() == 0
+        assert not page.evaluate('window.__savedTaskXss === true')
     finally:
         ctx.close()
 
