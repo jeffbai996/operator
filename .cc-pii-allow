@@ -1,0 +1,4 @@
+# The address range Tailscale assigns from, and example addresses inside it in
+# the device-label tests. None of them is a host on the owner's tailnet.
+tailnet_ip operator_devices.py
+tailnet_ip tests/test_operator_devices.py

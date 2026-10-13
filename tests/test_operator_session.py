@@ -459,7 +459,7 @@ def test_presence_route_gates_writes_until_takeover(tmp_path, monkeypatch):
 def test_peer_name_survives_presence_session_save_and_control_guard(tmp_path, monkeypatch):
     app = _app(False, tmp_path, monkeypatch)
     c = app.test_client()
-    address = '100.94.27.37'
+    address = '192.0.2.10'
     monkeypatch.setattr(OV, '_peer_device_label',
         lambda ip, label: 'HOST-B' if ip == address else label)
     remote = {'REMOTE_ADDR': address}
