@@ -594,12 +594,13 @@ def test_release_version_surfaces_stay_in_sync() -> None:
     live = (root / "templates/operator.html").read_text(encoding="utf-8")
     demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
     readme = (root / "README.md").read_text(encoding="utf-8")
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
 
     assert re.fullmatch(r"\d+\.\d+\.\d+", OV.OP_VERSION)
     assert OV.OP_VERSION == "1.2.1"
     release_heading = re.search(r"^## v(\d+\.\d+\.\d+)\b", readme, re.MULTILINE)
     assert release_heading and release_heading.group(1) == OV.OP_VERSION
-    assert f"| v{OV.OP_VERSION} |" in readme
+    assert f"| v{OV.OP_VERSION} |" in changelog
     for template, suffix in ((live, ""), (demo, " demo")):
         assert '<span class="op-ver">{{ OP_VERSION }}' + suffix + '</span>' in template
         assert '<span class="op-lp-mark-ver">v{{ OP_VERSION }}</span>' in template
