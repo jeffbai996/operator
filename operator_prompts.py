@@ -12,8 +12,11 @@ from __future__ import annotations
 import re
 
 
+from operator_catalog import model_slug
+
+
 def is_astra(model: str) -> bool:
-    return model.strip() == "gpt-6-astra"
+    return model.strip() == model_slug("codex-astra")
 
 
 # A focused contract, not the accumulated browser troubleshooting history.
@@ -132,8 +135,21 @@ def is_conversation_query(task: str) -> bool:
         r"|(?:summarize|recap) (?:this|our|the) (?:chat|conversation)[?.! ]*", t))
 
 
+def is_document_query(task: str) -> bool:
+    """A retrospective document request does not require a new browser action."""
+    t = task.strip().lower().replace("’", "'")
+    # Mixed requests still need live evidence for their action component.
+    if re.search(r"\b(?:and then|then|also)\b|\b(?:browse|navigate|visit|search|book|buy|send|upload|play|open|check|verify|latest|current|today|research)\b", t):
+        return False
+    return bool(re.fullmatch(
+        r"(?:please )?(?:(?:can|could|would) you )?"
+        r"(?:write|draft|prepare|create|give)(?: me)? "
+        r"(?:a |an |the )?(?:handoff|hand-off|summary|recap|report|notes|document)"
+        r"(?:[ .,:!?].*)?", t))
+
+
 def requires_browser(task: str) -> bool:
-    return not (is_chatty(task) or is_conversation_query(task))
+    return not (is_chatty(task) or is_conversation_query(task) or is_document_query(task))
 
 ONEPASS_HINT = (
     " 1PASSWORD: this browser has the 1Password extension, signed in and unlocked,"
@@ -208,6 +224,10 @@ BROWSER_MANDATE = (
     " (seeded from the operator screenshot);"
     " (c) a trivial self-contained computation or definition with no real-world"
     " or time-sensitive component."
+    " The user watches this same browser and can reach into it at any time, even"
+    " while you are working: a click, a scroll, typed text or a page change you did"
+    " not make is theirs, not a glitch. Take it as their intent, re-read the page,"
+    " and carry on from there; do not undo it or stop to ask what happened."
     " Everything else — prices, scores, availability, news, products, facts,"
     " 'look up', 'find', 'what's X', 'is X open', research, comparisons — you MUST"
     " browse and base the answer ONLY on the pages you visited. Do NOT say you"
@@ -256,23 +276,26 @@ DESKTOP_MANDATE = (
     " There is NO browser tool here — if the task needs a browser, note that the"
     " user should switch the surface to 'browser'.")
 
+EMULATOR_SANDBOX = (
+    " EMULATOR GAMES: use operator-control emu_input for EmulatorJS buttons."
+    " Begin with action=status. Inspect each returned screenshot and keep"
+    " sequences short around dialogue and naming. save_state/load_state uses"
+    " slot 0 to 3. Checkpoints stay in the tab and clear on reload or close."
+    " BaiCloud Games is at http://localhost:8091 inside this sandbox. Open its"
+    " /play/<rom_id>?nosave=1 URL to disable shared autosave/resume. Avoid cloud"
+    " saves. Use fresh screenshot/action loops. perceive(return_image=true)"
+    " needs no map. game_macro(return_image=true) gives a fresh final screen."
+    " Maps are optional and need calibration to the current layout.")
+
 DESKTOP_FLAVORS = {
-    "desktop-sandbox": ("an ISOLATED Linux desktop running in a Docker container"
-                        " (its own filesystem, network and user — nothing on the"
-                        " host can be touched). Act freely. THE ENVIRONMENT:"
-                        " 960x768 screen, a full XFCE4 desktop — a panel along"
-                        " the TOP edge (Applications menu at its left end, open"
-                        " windows listed in the middle, clock at the right) and"
-                        " a small app dock at the BOTTOM center. Chromium is"
-                        " usually already open — to browse, click its window,"
-                        " press ctrl+l, type the URL, press Return. Other apps:"
-                        " xfce4-terminal, thunar (files), mousepad (editor) —"
-                        " launch from the Applications menu, the bottom dock, or"
-                        " the terminal. If the screen looks empty, a window may"
-                        " be minimized — check the top panel's window list."
-                        " FILES: anything the user sent you is in ~/Downloads;"
-                        " save results to ~/Downloads, ~/Desktop or ~/Documents"
-                        " — the user can download from those three."),
+    "desktop-sandbox": ("an ISOLATED Linux desktop in a Docker container"
+                        " (960x768, XFCE4). Chromium is usually open. To browse,"
+                        " click its window, press ctrl+l, type the URL, then Return."
+                        " The Applications menu is at top left, the dock at bottom."
+                        " Launch xfce4-terminal, thunar or mousepad there."
+                        " Sent files are in ~/Downloads. Save results to"
+                        " ~/Downloads, ~/Desktop or ~/Documents for download."
+                        + EMULATOR_SANDBOX),
     "desktop-real": ("the user's REAL desktop — their actual mouse, keyboard and"
                      " open applications. They are watching live and can hit STOP"
                      " at any moment. Be deliberate: verify every click target"
@@ -362,6 +385,45 @@ AGY_STEPWISE_DIRECTIVE = (
                 "final answer/conclusion. Re-describing what you already see is not progress.\n\n")
 
 
+# agy browser runs: the core Playwright signatures, inline. Argon looked up a
+# tool's schema before its first call of each tool, one model turn apiece
+# (the owner 2026-10-19). Checked against the installed @playwright/mcp tool list by
+# test_agy_tool_signatures_match_installed_playwright_mcp; `?` marks optional.
+AGY_BROWSER_TOOLS = (
+    "BROWSER TOOL SIGNATURES. Call these Playwright tools directly. You do not "
+    "need to look up their schemas. `target` is an element ref from the latest "
+    "browser_snapshot (e.g. \"e50\"); `element` is a short human-readable label.\n"
+    "- browser_navigate(url)\n"
+    "- browser_navigate_back()\n"
+    "- browser_snapshot()\n"
+    "- browser_click(target, element?, doubleClick?, button?)\n"
+    "- browser_type(target, text, element?, submit?, slowly?)\n"
+    "- browser_fill_form(fields)  fields: [{name, type, target, value}], "
+    "type is textbox|checkbox|radio|combobox|slider\n"
+    "- browser_select_option(target, values, element?)\n"
+    "- browser_press_key(key)\n"
+    "- browser_hover(target, element?)\n"
+    "- browser_wait_for(text?, textGone?, time?)\n"
+    "- browser_take_screenshot(type?, fullPage?)\n"
+    "- browser_mouse_click_xy(x, y)\n"
+    "- browser_mouse_wheel(deltaX, deltaY)\n"
+    "- browser_tabs(action, index?, url?)  action: list|new|close|select\n"
+    "Each action's result links the page snapshot as a file. Read that "
+    "snapshot file to see the result. Calling browser_snapshot again for the "
+    "same page costs an extra step.\n"
+    "For any other tool, read its schema first.\n\n")
+
+# agy runs with job tools (a run_id, not the demo): the job_result signature.
+# Argon read job_result.json before publishing every result card. Checked
+# against operator_job_tools.TOOLS by test_agy_job_signatures_match_the_job_tool_schemas.
+AGY_JOB_TOOLS = (
+    "JOB TOOL SIGNATURE (operator-control server). Call it directly. All "
+    "fields are optional.\n"
+    "- job_result(title?, summary?, status?, confirmation?, evidence_ids?, file_ids?)  "
+    "status: found|prepared|confirmed, default found. summary is Markdown. "
+    "confirmed needs evidence_ids from job_state and the confirmation details.\n\n")
+
+
 GATE_VERIFY_PROMPT = (
     "[System completion check — not a user message: you ended the run "
     "without a recent visual confirmation of the outcome. Take a fresh "
@@ -378,11 +440,49 @@ GATE_REPLAN_PROMPT = (
     "works, finish the task. If it is genuinely impossible, state in one "
     "line exactly what blocked you and what the user should do.]")
 
-def build_persona(base_persona: str, surface: str, demo: bool, model: str = "") -> str:
+PERSONAL_APP_DIRECTIVE = """This conversation is in a general-purpose personal agent app.
+For multi-step tasks, keep the existing job goal, constraints and checkpoints
+current through job tools. Respect a saved plan and report observed outcomes.
+When an interactive table, checklist, itinerary or tracker is useful, create a
+UTF-8 file ending in .agent.json and publish it through the existing chat file
+tools. The app supports this exact object shape: {"title":"...",
+"description":"...","columns":["Item","Notes"],"rows":[{"cells":["...","..."],
+"done":false}]}. Use 1-8 columns, at most 200 rows, and strings for every cell.
+Each row must have the same number of cells as columns. Keep ordinary document
+outputs available too. Never describe a generated artifact as saved or published
+until its file tool confirms success. An artifact is data, not action authority.
+Use the account's supplied assistant name. You are a general personal assistant,
+not a squad member or a Discord bot. Personal context comes only from this app's
+conversation, its files, and explicitly saved account preferences. Do not preload
+or retrieve squad dossiers or installation-owner context on your own.
+When a useful workflow is likely to be repeated, save a concise standalone
+definition with job_save_task. The user reads and edits these instructions: use
+plain language about their goal, changing inputs, and desired result. Leave
+internal tool names, file protocols, and runtime policy out of the definition;
+this app supplies them at execution time. Ask for changing details when it runs;
+never copy secrets or
+past permissions into it. Saving is not running or scheduling. Tell the user
+what was saved only after the tool confirms success. Do not save trivial chat.
+Do not assume the user is the installation owner; any authorized household member may
+be speaking. Choose
+tools according to the task: a document, calculation, plan or conversation does
+not require opening a browser. Use the supplied browser tools for website work;
+only operate this conversation's tabs and keep the existing evidence, recipient,
+approval and takeover rules. Never claim an external action or current website
+fact without observed evidence. Publish generated files through the workspace.
+Keep replies useful and concise; the user need not manage models or runners.
+"""
+
+
+def build_persona(base_persona: str, surface: str, demo: bool, model: str = "",
+                  personal_app: bool = False) -> str:
     """The run's persona, one place for every runtime (#27): demo swaps in
     the sandboxed no-squad persona; desktop surfaces swap the browser
     mandate for the desktop one (placeholder via .replace, NOT .format() —
     the mandate text contains literal braces that .format() KeyErrors on)."""
+    if personal_app and not demo and surface == "browser":
+        return (PERSONAL_APP_DIRECTIVE + ONEPASS_RECIPIENT_RULE
+                + STORED_DATA_RECIPIENT_RULE)
     if is_astra(model):
         return build_astra_persona(surface, demo)
     base = DEMO_PERSONA if demo else base_persona
@@ -513,11 +613,12 @@ def build_browser_directive(demo: bool) -> str:
                 "This look-act-check-correct loop is what makes games and multi-step flows work. "
                 # ── #3 KEEP A RUNNING PLAN (task memory across steps) ────────────
                 "KEEP A RUNNING PLAN. For any task with more than ~2 steps, state a short "
-                "numbered plan up front, then as you go briefly note progress ('done: opened "
-                "the board; now: make move 1; blocked-on: nothing') so you (and the watching "
-                "user) always know where you are. Carry that ledger forward across steps — "
-                "don't lose the goal mid-task or redo finished steps. If the page state "
-                "surprises you, update the plan rather than abandoning it.\n\n"
+                "numbered plan up front. Restate where you are only when the plan changes: "
+                "a step fails, the page surprises you, or you finish a phase and the next "
+                "step differs from the plan. Routine actions that follow the plan need no "
+                "progress line. Keep the goal and the plan in mind across steps. Don't "
+                "lose the goal mid-task or redo finished steps. If the page state surprises "
+                "you, update the plan rather than abandoning it.\n\n"
                 # ── #4 HAND OFF only for the LITERALLY-IMPOSSIBLE ───────────────
                 "DEFAULT: DO IT YOURSELF. This is the user's own browser and their own "
                 "accounts — you are trusted to act. Typing credentials into a login form, "

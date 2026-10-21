@@ -18,16 +18,24 @@ on WSL and made the feed ~1fps and manual steer visibly laggy:
     wants full-quality stills, and one exec per model turn is noise.
 
 Lifecycle (the owner's rule): the container is PERSISTENT. It is created on first use
-and survives leaving Operator, restarts, and idle — `--restart unless-stopped`.
-It is only torn down by an EXPLICIT delete (`delete()` / the UI's delete action),
-never by merely switching surfaces or closing the page.
+and its state survives leaving Operator and restarts. It is only torn down by an
+EXPLICIT delete (`delete()` / the UI's delete action), never by merely switching
+surfaces or closing the page.
+
+It is a whole desktop, so it is PAUSED when unused: once no `docker exec` client
+(feed, input pipe, CDP tunnel) is attached and nothing has touched it for
+IDLE_STOP_AFTER_S, `reap_if_idle()` runs `stop()`. State and the home volume are
+kept, and the next `ensure()` starts it again. `--restart unless-stopped` keeps a
+stopped container stopped across docker/host restarts.
 
 One job per file: container lifecycle + capture + input for the sandbox surface.
 """
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
+from pathlib import Path
 import shlex
 import shutil
 import stat
@@ -35,6 +43,8 @@ import subprocess
 import tempfile
 import threading
 import time
+
+LOG = logging.getLogger(__name__)
 
 CONTAINER = os.environ.get("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox")
 IMAGE = os.environ.get("OPERATOR_SANDBOX_IMAGE", "operator-sandbox:latest")
@@ -49,6 +59,23 @@ SCREEN_W, SCREEN_H = 960, 768
 # image upgrade (rm container + recreate) keeps the user's files. The two-tap
 # Delete stays a true factory reset: delete() removes the volume too.
 HOME_VOLUME = f"{CONTAINER}-home"
+
+
+def _idle_window() -> float:
+    """Seconds of disuse before the container is paused; 0 disables the pause."""
+    try:
+        return max(0.0, float(os.environ.get("OPERATOR_SANDBOX_IDLE_STOP_S", "900")))
+    except ValueError:
+        return 900.0
+
+
+IDLE_STOP_AFTER_S = _idle_window()
+# Host-side marker shared by every process that drives the container (worker,
+# MCP): its mtime is the last time any of them used it.
+_USED_FILE = (Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+              / "computer-use" / f"{CONTAINER}.last-used")
+_MARK_THROTTLE_S = 5.0
+_last_marked = 0.0
 _RUN_ARGS = [
     "--name", CONTAINER,
     "--detach",
@@ -93,6 +120,7 @@ def _run(args: list[str], timeout: float = 15, check: bool = True) -> subprocess
 
 def _exec(cmd: list[str], timeout: float = 15, check: bool = True) -> subprocess.CompletedProcess:
     """Run a command INSIDE the container as the desktop user, with DISPLAY set."""
+    mark_used()
     return _run(["exec", "-u", "opuser", "-e", f"DISPLAY={DISPLAY}", CONTAINER, *cmd],
                 timeout=timeout, check=check)
 
@@ -135,6 +163,7 @@ def ensure(timeout: float = 30) -> str:
         if _display_live():
             _retire_legacy_cdp_bridge()
             _ensure_host_bridge()
+            mark_used()
             return CONTAINER
         time.sleep(0.4)
     raise SandboxError("sandbox desktop did not come up in time")
@@ -190,7 +219,7 @@ def _ensure_host_bridge() -> None:
         _run(["cp", src, f"{CONTAINER}:/opt/sandbox_host_bridge.py"])
         # fraggames leg: 127.0.0.1:8091 -> 172.17.0.1:8091 (host gateway)
         if _run(["exec", CONTAINER, "sh", "-c",
-                 "pgrep -f 'host_bridge.py 8091' >/dev/null"],
+                 "pgrep -f '[s]andbox_host_bridge.py 8091' >/dev/null"],
                 check=False).returncode != 0:
             _run(["exec", "-d", CONTAINER, "python3",
                   "/opt/sandbox_host_bridge.py",
@@ -212,6 +241,127 @@ def delete() -> None:
     files go too). A fresh `ensure()` starts a clean desktop."""
     _run(["rm", "-f", CONTAINER], timeout=20, check=False)
     _run(["volume", "rm", HOME_VOLUME], timeout=20, check=False)
+
+
+# ── idle pause ───────────────────────────────────────────────────────────────
+def mark_used() -> None:
+    """Record that something just used the container (throttled; best effort)."""
+    global _last_marked
+    now = time.time()
+    if now - _last_marked < _MARK_THROTTLE_S:
+        return
+    _last_marked = now
+    try:
+        _USED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _USED_FILE.touch()
+        os.utime(_USED_FILE, (now, now))
+    except OSError as e:
+        LOG.warning("sandbox use marker not written: %s", e)
+
+
+def last_used() -> float | None:
+    """Epoch seconds of the last recorded use, or None if never recorded."""
+    try:
+        return _USED_FILE.stat().st_mtime
+    except OSError:
+        return None
+
+
+def idle_stop_due(*, running: bool, live_clients: int, last_used: float,
+                  now: float, idle_after: float) -> bool:
+    """Pure decision: has a running, unattended container been unused long enough?"""
+    if idle_after <= 0 or not running or live_clients > 0:
+        return False
+    return now - last_used >= idle_after
+
+
+def count_exec_clients(argvs) -> int:
+    """How many of these host command lines are `docker exec` into the container.
+
+    The live feed, the input shell and the CDP tunnel are all long-lived
+    `docker exec` children, in whichever process (worker or MCP) opened them.
+    """
+    n = 0
+    for argv in argvs:
+        if (len(argv) >= 3 and os.path.basename(argv[0]) == "docker"
+                and argv[1] == "exec" and CONTAINER in argv[2:]):
+            n += 1
+    return n
+
+
+def _proc_argvs():
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry.name}/cmdline", "rb") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        yield [a.decode(errors="replace") for a in raw.split(b"\0") if a]
+
+
+def live_clients() -> int:
+    """Attached `docker exec` sessions. Without /proc the answer is unknowable,
+    so report one: a container that cannot be proven idle is left running."""
+    if not os.path.isdir("/proc"):
+        return 1
+    return count_exec_clients(_proc_argvs())
+
+
+def reap_if_idle(now: float | None = None) -> bool:
+    """Pause the container if it is running, unattended and past the idle window.
+
+    The first look at a container with no marker starts its window rather than
+    ending it, so a fresh boot or deploy never pauses a session in progress.
+    """
+    if IDLE_STOP_AFTER_S <= 0 or state() != "running":
+        return False
+    now = time.time() if now is None else now
+    used = last_used()
+    if used is None:
+        mark_used()
+        return False
+    if not idle_stop_due(running=True, live_clients=live_clients(),
+                         last_used=used, now=now, idle_after=IDLE_STOP_AFTER_S):
+        return False
+    LOG.info("sandbox idle for %.0fs, pausing %s", now - used, CONTAINER)
+    stop()
+    return True
+
+
+_reaper: threading.Thread | None = None
+_reaper_lock = threading.Lock()
+_reaper_stop = threading.Event()
+
+
+def _reaper_loop(interval: float) -> None:
+    while not _reaper_stop.wait(interval):
+        try:
+            reap_if_idle()
+        except Exception:  # noqa: BLE001 — housekeeping must outlive a bad tick
+            LOG.exception("sandbox idle check failed")
+
+
+def start_idle_reaper(interval: float = 60.0) -> threading.Thread | None:
+    """Start the idle check once per process. None when idle pause is disabled."""
+    global _reaper
+    if IDLE_STOP_AFTER_S <= 0:
+        return None
+    with _reaper_lock:
+        if _reaper is not None and _reaper.is_alive():
+            return _reaper
+        _reaper_stop.clear()
+        _reaper = threading.Thread(target=_reaper_loop, args=(interval,),
+                                   name="operator-sandbox-idle", daemon=True)
+        _reaper.start()
+        return _reaper
+
+
+def stop_idle_reaper() -> None:
+    _reaper_stop.set()
+    if _reaper is not None:
+        _reaper.join(timeout=5)
 
 
 # ── live stream (the feed's frame source) ────────────────────────────────────
@@ -398,6 +548,12 @@ def execute(action: dict) -> None:
         return
     if kind == "type":
         _xdotool(["type", "--", action.get("text", "")])
+        return
+    if kind == "paste_text":
+        # Literal text, one input-pipe request. The ordinary type path's
+        # xdotool delay would turn a long clipboard paste into minutes.
+        _xdotool(["type", "--clearmodifiers", "--delay", "0", "--",
+                  action.get("text", "")])
         return
     if kind == "key":
         _xdotool(["key", "--", _norm_key(action.get("text", ""))])

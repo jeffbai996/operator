@@ -58,6 +58,11 @@ def main() -> None:
     import operator_tab_cleanup
     import operator_view
     operator_tab_cleanup.start(operator_view)
+    # The sandbox desktop is paused once nothing has used it for a while.
+    if not os.environ.get('OPERATOR_TESTING'):
+        operator_view._load_cu('sandbox_container.py').start_idle_reaper()
+    # Same redaction and poll filtering as the main server; keep the listener alive.
+    _log_listener, _log_handler = server.configure_request_logging()
     run_simple('unix://' + socket_path(), 0, server.app, threaded=True,
                use_reloader=False, use_debugger=False)
 

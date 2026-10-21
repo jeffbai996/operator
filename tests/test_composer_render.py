@@ -22,6 +22,7 @@ import importlib
 import json
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -65,20 +66,90 @@ def base_url():
 
 
 @pytest.fixture(scope="module")
-def page(base_url):
+def chromium():
+    with pw_sync.sync_playwright() as p:
+        browser = p.chromium.launch()
+        yield browser
+        browser.close()
+
+
+@pytest.fixture
+def page(base_url, chromium):
     """Page JS is DISABLED: the cockpit's own poll loop hides/shows the splash
     on live state, which raced the measurements (rects read 0 mid-hide). The
     composer contract under test is pure CSS; evaluate() still runs with page
     scripts off, so we force-show the splash ourselves and measure a
-    deterministic static render."""
-    with pw_sync.sync_playwright() as p:
-        browser = p.chromium.launch()
-        pg = browser.new_page(viewport={"width": 1280, "height": 900},
-                              java_script_enabled=False)
-        pg.goto(base_url + "/operator", wait_until="load")
-        pg.wait_for_timeout(250)   # font swap settle
-        yield pg
-        browser.close()
+    deterministic static render. Give each check a fresh context so changed
+    font scales, themes and viewports cannot leak into selected test order."""
+    pg = chromium.new_page(viewport={"width": 1280, "height": 900},
+                           java_script_enabled=False)
+    pg.goto(base_url + "/operator", wait_until="load")
+    pg.wait_for_timeout(250)   # font swap settle
+    yield pg
+    pg.context.close()
+
+
+def _include_shared_stylesheet(page):
+    """Include the parent page's real cascade without running its scripts."""
+    base_css = (Path(__file__).resolve().parents[2] /
+                'host-app/static/css/base.css').read_text()
+    page.evaluate("""css => {
+        const style = document.createElement('style'); style.textContent = css;
+        document.head.prepend(style);
+    }""", base_css)
+
+
+def test_driver_chip_has_no_caret_with_the_shared_page_stylesheet(page):
+    """The page-wide important select arrow must not paint over the driver logo."""
+    _include_shared_stylesheet(page)
+    paint = page.evaluate("""() => {
+        const driver = document.getElementById('op-action-caret');
+        const model = document.getElementById('op-model');
+        const effort = document.getElementById('op-effort');
+        const style = el => {
+            const cs = getComputedStyle(el);
+            return {image: cs.backgroundImage, right: cs.paddingRight,
+                    position: cs.backgroundPosition, size: cs.backgroundSize};
+        };
+        return {driver: style(driver), model: style(model), effort: style(effort)};
+    }""")
+    assert paint['driver']['image'] == 'none', paint
+    assert float(paint['driver']['right'].removesuffix('px')) == pytest.approx(8), paint
+    # Composer pickers retain their compact, measured gutter, not the global
+    # 1.75rem reserve that separates labels from their arrows at desktop zoom.
+    for name in ('model', 'effort'):
+        assert float(paint[name]['right'].removesuffix('px')) < 24, paint
+        assert paint[name]['size'] != '10px 6px', paint
+
+
+@pytest.mark.parametrize('card_width', [245, 320])
+def test_approval_heading_stays_on_one_line_in_a_narrow_status_card(page, card_width):
+    _include_shared_stylesheet(page)
+    geometry = page.evaluate("""width => {
+        const op = document.getElementById('op');
+        op.classList.remove('op-booting'); op.classList.add('op-ready');
+        op.dataset.mode = 'auto'; op.dataset.statusMin = '0';
+        document.getElementById('op-lp').hidden = true;
+        const card = document.getElementById('op-action');
+        card.style.width = width + 'px'; card.style.transition = 'none';
+        document.getElementById('op-pick-wrap').hidden = false;
+        const title = document.getElementById('op-action-txt');
+        title.textContent = 'Awaiting approval';
+        document.getElementById('op-action-sub').textContent = 'Reading file';
+        const cs = getComputedStyle(title);
+        const range = document.createRange(); range.selectNodeContents(title);
+        return {height: title.getBoundingClientRect().height,
+                line: parseFloat(cs.lineHeight),
+                lines: new Set([...range.getClientRects()].map(r => r.top)).size,
+                titleFits: title.scrollWidth <= title.clientWidth,
+                cardRight: card.getBoundingClientRect().right,
+                caretRight: document.getElementById('op-status-min').getBoundingClientRect().right};
+    }""", card_width)
+    assert geometry['height'] <= geometry['line'] + 1, geometry
+    assert geometry['lines'] == 1, geometry
+    assert geometry['caretRight'] <= geometry['cardRight'], geometry
+    if card_width == 320:
+        assert geometry['titleFits'], geometry
 
 
 @pytest.fixture
@@ -182,6 +253,22 @@ def test_hero_font_sizes(page):
     assert _typed_font(page, ".op-lp-input") == pytest.approx(HERO_INPUT_PX, abs=0.25)
     assert m["phFont"] == pytest.approx(HERO_PLACEHOLDER_PX, abs=0.25)
     assert m["phFont"] == pytest.approx(_typed_font(page, ".op-lp-input"), abs=.25)
+
+
+def test_hero_caret_has_room_inside_the_textarea(page):
+    """With padding 0 the textarea's own overflow clip cut the caret's left
+    half at x=0 (the owner 2026-10-19). The textarea now carries 2px of left
+    padding, taken off the composer's, so the text starts where it did."""
+    m = page.evaluate("""() => {
+        const i = document.querySelector('.op-lp-input');
+        const c = document.querySelector('.op-lp-composer');
+        const cs = getComputedStyle(i), ccs = getComputedStyle(c);
+        return {inputPad: parseFloat(cs.paddingLeft),
+                textStart: i.getBoundingClientRect().left + parseFloat(cs.paddingLeft)
+                           - c.getBoundingClientRect().left - parseFloat(ccs.borderLeftWidth)};
+    }""")
+    assert m["inputPad"] >= 2
+    assert m["textStart"] == pytest.approx(0.92 * REM, abs=0.5)
 
 
 def test_hero_empty_and_typed_boxes_keep_the_merged_compact_scale(page):
@@ -458,12 +545,18 @@ def test_model_label_stays_on_the_composer_left_rail(page):
         const b = B(box);
         const inputInk = B(ta).left + parseFloat(getComputedStyle(ta).paddingLeft) - b.left;
         const modelInk = B(mi).left + parseFloat(getComputedStyle(mi).paddingLeft) - b.left;
-        return {input: inputInk, model: modelInk};
+        const sendInset = b.right - B(document.getElementById('op-send')).right;
+        const divider = B(document.getElementById('op-modelrow'));
+        return {input: inputInk, model: modelInk, send: sendInset,
+                dividerLeft: divider.left - b.left, dividerRight: b.right - divider.right};
     }""")
     off = abs(rail["model"] - rail["input"])
     assert off < 1.5, (
         f"model label is {off:.2f}px off the input's left rail "
         f"(input {rail['input']:.2f}, model {rail['model']:.2f})")
+    assert rail['send'] == pytest.approx(rail['input'], abs=0.5)
+    assert rail['dividerLeft'] == pytest.approx(rail['dividerRight'], abs=0.5)
+    assert rail['dividerLeft'] < rail['input']
 
 
 def test_model_picker_refits_after_its_webfont_loads(interactive_page):
@@ -649,11 +742,11 @@ def test_every_notch_actually_resizes_the_composer(page):
         f"heights {[round(h, 2) for h in heights]}")
 
 
-def test_the_default_notch_keeps_its_established_geometry(page):
-    """1.05 is the shipped default — the scaling rewrite must not move it."""
+def test_the_default_notch_keeps_compact_desktop_geometry(page):
+    """Keep the compact desktop picker and the established send-button size."""
     m = _at_scale(page, 1.05)
     assert abs(m["send"] - 21.0) < 0.2, f"send button drifted to {m['send']:.2f}px"
-    assert abs(m["box"] - 60.61) < 0.6, f"composer drifted to {m['box']:.2f}px"
+    assert abs(m["box"] - 58.45) < 0.6, f"composer drifted to {m['box']:.2f}px"
 
 
 def test_task_editor_fields_are_true_black_in_dark_mode(page):
@@ -673,8 +766,9 @@ def test_task_editor_fields_are_true_black_in_dark_mode(page):
     assert set(fills) == {"rgb(0, 0, 0)"}, f"task field fills drifted: {fills}"
 
 
-def test_browser_menu_quality_leads_and_trailing_controls_have_real_semantics(page):
-    """The right rail may contain a keyboard shortcut OR an action icon.
+def test_browser_menu_quality_sits_with_settings_and_trailing_controls_have_real_semantics(page):
+    """Stream quality is a settings row beside History and Settings, not a card
+    leading the menu (the owner 2026-10-06: "too prominent"). The right rail may contain a keyboard shortcut OR an action icon.
     Random Unicode in identical keycap boxes is neither, and was how arrows,
     a house, a squiggle, and an escape rune all wound up pretending to be
     shortcuts."""
@@ -698,14 +792,16 @@ def test_browser_menu_quality_leads_and_trailing_controls_have_real_semantics(pa
             return rr.left < r.left - .5 || rr.right > r.right + .5;
           }).map(row => row.textContent.trim());
           return {
-            firstIsQuality: children[0] && children[0].classList.contains('op-ham-quality'),
-            dividerAfter: children[1] && children[1].classList.contains('op-ham-sep'),
+            qualityBeforeHistory: (() => {
+              const q = children.findIndex(c => c.classList.contains('op-ham-quality'));
+              return q > 0 && children[q - 1].classList.contains('op-ham-sep')
+                && children[q + 1] && children[q + 1].id === 'op-ham-history';
+            })(),
             bad, overflow,
             horizontalOverflow: menu.scrollWidth > menu.clientWidth + 1,
           };
         }""")
-        assert result["firstIsQuality"] is True
-        assert result["dividerAfter"] is True
+        assert result["qualityBeforeHistory"] is True
         assert result["bad"] == []
         assert result["overflow"] == []
         assert result["horizontalOverflow"] is False

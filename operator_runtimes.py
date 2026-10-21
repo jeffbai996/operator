@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass, field
 
-from operator_prompts import AGY_STEPWISE_DIRECTIVE
+from operator_prompts import AGY_BROWSER_TOOLS, AGY_JOB_TOOLS, AGY_STEPWISE_DIRECTIVE
 
 _BROWSE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browse")
 _CONTROL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "control")
@@ -39,7 +41,7 @@ def _cockpit_pin_env() -> dict:
 
     REQUIRE_CDP kills the silent headless fallback for cockpit runs: an
     unreachable Chrome must fail loudly, not browse invisibly."""
-    instance_cdp = os.environ.get("OPERATOR_DEMO_CDP", "")
+    instance_cdp = os.environ.get("OPERATOR_DEMO_CDP") or os.environ.get("OPERATOR_CDP", "")
     if instance_cdp:
         return {"OPERATOR_DEMO_CDP": instance_cdp, "OPERATOR_REQUIRE_CDP": "1"}
     return {"BROWSE_CHROME_PORT": "9222", "OPERATOR_REQUIRE_CDP": "1"}
@@ -65,6 +67,9 @@ class RunSpec:
     run_id: str = ""
     run_credential: str = ""
     workspace_dir: str = ""
+    personal_app: bool = False
+    background_browser: bool = False
+    service_tier: str = ''
 
 
 @dataclass
@@ -170,6 +175,12 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
             "`await tools.mcp__operator_control__game_macro({...})`. "
             "Never reply that these tools are missing without actually "
             "attempting one of those calls first.")
+    if not spec.demo:
+        _bridge += (
+            "\nWhen the user explicitly asks for a named MCP or plugin, discover "
+            "and use that integration if it is available in this run. If it "
+            "cannot be reached, say so rather than silently substituting a "
+            "different source.")
     # PARITY: boot context only on the first turn of a thread (resumes already
     # carry it). Kept full, not compressed: ~92% cached after turn 1, and the
     # squad/vecgrep/store awareness is worth the one-time cold cost.
@@ -199,10 +210,30 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
     # The broader browser_use feature gates the external Playwright bridge too,
     # so disabling that feature removes the Chrome tools the user can see.
     cmd += ["-c", 'web_search="disabled"']
+    if spec.personal_app:
+        # Disable implicit AGENTS.md loading, memories and inherited persona overrides.
+        cmd += ['-c', 'project_doc_max_bytes=0', '-c', 'developer_instructions=""',
+                '-c', 'features.memories=false']
     if spec.model:
         cmd += ["-m", spec.model]
     if spec.effort:
         cmd += ["-c", "model_reasoning_effort=" + json.dumps(spec.effort)]
+    if spec.service_tier:
+        cmd += ['-c', 'service_tier=' + json.dumps(spec.service_tier)]
+    if not spec.demo:
+        from operator_resources import configured_mcps, shared_mcps
+        native = configured_mcps('gpt', spec.config_dir)
+        for name, server in shared_mcps('gpt', spec.config_dir).items():
+            if name in native:
+                continue
+            for key, value in server.items():
+                field = 'http_headers' if key == 'headers' else key
+                prefix = 'mcp_servers.' + json.dumps(name) + '.' + field
+                if isinstance(value, dict):
+                    for subkey, subvalue in value.items():
+                        cmd += ['-c', prefix + '.' + json.dumps(subkey) + '=' + json.dumps(subvalue)]
+                else:
+                    cmd += ['-c', prefix + '=' + json.dumps(value)]
     # Surface tool routing (mirrors the claude adapter): on a DESKTOP surface,
     # disable the browser Playwright MCP so GPT's only screenshot tool is the
     # surface-aware control MCP — otherwise it defaults to
@@ -230,6 +261,9 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
         # cockpit browser pin (see _cockpit_pin_env): the scrubbed MCP env
         # means the override must ride the per-server env config too.
         _pw = "mcp_servers.playwright.env."
+        if spec.background_browser:
+            cmd += ['-c', _pw + 'OPERATOR_BACKGROUND_BROWSER="1"']
+            cmd += ['-c', _pw + 'OPERATOR_BROWSER_TABS_PYTHON=' + json.dumps(sys.executable)]
         if spec.run_id:
             cmd += ['-c', _pw + 'OPERATOR_RUN_ID=' + json.dumps(spec.run_id)]
         for _k, _v in _cockpit_pin_env().items():
@@ -247,6 +281,8 @@ def build_codex_cmd(spec: RunSpec) -> LaunchPlan:
                            "OPERATOR_WORKSPACE_DIR": spec.workspace_dir}.items():
             if value:
                 cmd += ["-c", _ctl + key + "=" + json.dumps(value)]
+        from operator_browser_target import endpoint
+        cmd += ["-c", _ctl + 'OPERATOR_CDP=' + json.dumps(endpoint())]
         cmd += ["-c", _ctl + 'OPERATOR_SURFACE="' + spec.surface + '"']
         if spec.bot:
             cmd += ["-c", _ctl + 'SQUAD_STORE_BOT="' + spec.bot + '"']
@@ -370,12 +406,16 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     TEXT — the final answer only, no JSON event stream (the live trace is
     reverse-engineered from the trajectory on disk; see operator_agent's agy
     hooks). Agy has no per-run MCP flag, so this launch receives a private HOME
-    whose ~/.gemini/config contains only the servers required by its surface.
+    whose ~/.gemini/config preserves configured connectors alongside the
+    Operator servers required by its surface.
     The shared authentication, conversation, and brain state remains mounted
     into that home so multi-turn and live-trace behavior stays intact."""
     _retire_legacy_agy_mcp(spec.config_dir)
     run_home, run_gemini, real_home = _prepare_agy_run_home(spec.config_dir)
     env = {"HOME": run_home, "GEMINI_CLI_CONFIG_DIR": run_gemini}
+    if spec.background_browser:
+        env['OPERATOR_BACKGROUND_BROWSER'] = '1'
+        env['OPERATOR_BROWSER_TABS_PYTHON'] = sys.executable
     if spec.conversation_id:
         env["OPERATOR_CONVERSATION_ID"] = spec.conversation_id
     if spec.stop_path:
@@ -386,9 +426,18 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
         # and stay OUT of the shared ~/.gemini mcp_config.json, which plain
         # gemma bot sessions also read (those must keep the :9224 default).
         env.update(_cockpit_pin_env())
+        from operator_browser_target import endpoint
+        env["OPERATOR_CDP"] = endpoint()
     mcp_path = os.path.join(run_gemini, "config", "mcp_config.json")
     try:
-        servers = {}
+        from operator_resources import shared_mcps
+        servers = {} if spec.demo else shared_mcps('gemma', spec.config_dir)
+        for server in servers.values():
+            if 'url' in server:
+                server['serverUrl'] = server.pop('url')
+        # Surface-specific controls are owned by this launch, not the profile.
+        for name in ('playwright', 'operator-control', 'operator'):
+            servers.pop(name, None)
         servers["playwright"] = {"command": "bash",
             "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot],
             "env": {"HOME": real_home}}
@@ -417,7 +466,10 @@ def build_agy_cmd(spec: RunSpec) -> LaunchPlan:
     prompt = (spec.persona
               + (("\n\n=== SQUAD CONTEXT (your shared memory + roster) ===\n"
                   + spec.boot_context) if spec.boot_context else "")
-              + "\n\n" + AGY_STEPWISE_DIRECTIVE + "Task: " + spec.task)
+              + "\n\n" + AGY_STEPWISE_DIRECTIVE
+              + (AGY_BROWSER_TOOLS if spec.surface == "browser" else "")
+              + (AGY_JOB_TOOLS if spec.run_id and not spec.demo else "")
+              + "Task: " + spec.task)
     # --dangerously-skip-permissions = agy analog of codex's bypass-approvals
     # (auto-approve tool/MCP calls non-interactively). Resume: agy -p emits
     # no session id, but the id IS the new .db in its conversations dir —
@@ -451,7 +503,8 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
     # a browser tool on a desktop run would mislead the model. Demo keeps
     # the original playwright-only config (the control MCP has local-
     # perception file access the public sandbox must not inherit).
-    _op_env = {"OPERATOR_SURFACE": spec.surface,
+    from operator_browser_target import endpoint
+    _op_env = {"OPERATOR_CDP": endpoint(), "OPERATOR_SURFACE": spec.surface,
                "SQUAD_STORE_BOT": spec.bot,
                **({"OPERATOR_REAL_OK": "1"} if spec.real_ok else {}),
                **({"OPERATOR_CONVERSATION_ID": spec.conversation_id}
@@ -469,6 +522,9 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
                  "args": [os.path.join(_BROWSE, "playwright-mcp.sh"), spec.bot]}
     if not spec.demo:
         _pw_entry["env"] = _cockpit_pin_env()
+        if spec.background_browser:
+            _pw_entry['env']['OPERATOR_BACKGROUND_BROWSER'] = '1'
+            _pw_entry['env']['OPERATOR_BROWSER_TABS_PYTHON'] = sys.executable
         if spec.conversation_id:
             _pw_entry["env"]["OPERATOR_CONVERSATION_ID"] = spec.conversation_id
     if spec.demo:
@@ -477,6 +533,12 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
         servers = {"playwright": _pw_entry, "operator-control": _op_entry}
     else:
         servers = {"operator-control": _op_entry}
+    if not spec.demo:
+        from operator_resources import shared_mcps
+        for name, server in shared_mcps(spec.bot, spec.config_dir).items():
+            if 'url' in server:
+                server['type'] = 'http'
+            servers[name] = server
     try:
         os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
         with open(cfg_path, "w") as f:
@@ -495,13 +557,67 @@ def build_claude_cmd(spec: RunSpec) -> LaunchPlan:
         cmd += ["--model", spec.model]
     if spec.effort:
         cmd += ["--effort", spec.effort]
-    _env = {"CLAUDE_CONFIG_DIR": spec.config_dir}
+    # Explicit MCP configs otherwise hold the first turn until every inherited
+    # connector finishes connecting (30 s for an unavailable service). Bound
+    # that startup hold; connections continue and deferred tools remain usable.
+    # Keep resume and the full integration set, and honor a host override.
+    _env = {"CLAUDE_CONFIG_DIR": spec.config_dir, "OPERATOR_SURFACE": spec.surface,
+            "CLAUDE_CODE_MCP_STARTUP_WAIT_MS": os.environ.get(
+                "CLAUDE_CODE_MCP_STARTUP_WAIT_MS", "2000")}
+    # The bots' launchers authenticate with a long-lived token kept beside the
+    # config dir. The stored .credentials.json login has a hard refresh-token
+    # expiry and is wiped when it lapses (~/.claude, 2026-10-11), so prefer
+    # the token whenever the file exists, as the launchers do.
+    _token = _config_dir_oauth_token(spec.config_dir)
+    if _token:
+        _env["CLAUDE_CODE_OAUTH_TOKEN"] = _token
     if spec.conversation_id:
         _env["OPERATOR_CONVERSATION_ID"] = spec.conversation_id
     if spec.stop_path:
         _env["OPERATOR_STOP_PATH"] = spec.stop_path
     return LaunchPlan(cmd=cmd, env=_env,
                       mcp_config_path=cfg_path)
+
+
+def _config_dir_oauth_token(config_dir: str) -> str:
+    """The config dir's long-lived token, or '' to keep its stored login."""
+    path = os.path.join(os.path.expanduser(config_dir), "oauth-token")
+    try:
+        with open(path) as f:
+            return "".join(f.read().split())
+    except OSError:
+        return ""
+
+
+def claude_sign_in_expired(bot: str) -> str:
+    return (f"Claude sign-in for {bot or 'this bot'} has expired. Sign in again "
+            "or add a long-lived token to its config folder, then send the "
+            "message again.")
+
+
+def claude_auth_problem(config_dir: str, bot: str) -> str | None:
+    """A user-facing refusal when the config dir's stored login is known dead.
+
+    Only the shapes the CLI leaves behind are refused: credentials wiped after
+    a failed refresh, or a refresh token past its hard expiry. A missing or
+    unreadable file is not proof (macOS keeps the login in the Keychain), so
+    the run is allowed and the CLI reports for itself."""
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or _config_dir_oauth_token(config_dir):
+        return None
+    path = os.path.join(os.path.expanduser(config_dir), ".credentials.json")
+    try:
+        with open(path) as f:
+            oauth = json.load(f).get("claudeAiOauth")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(oauth, dict):
+        return None
+    refresh_expires_ms = oauth.get("refreshTokenExpiresAt") or 0
+    lapsed = isinstance(refresh_expires_ms, (int, float)) and \
+        0 < refresh_expires_ms < time.time() * 1000
+    if not oauth.get("refreshToken") or lapsed:
+        return claude_sign_in_expired(bot)
+    return None
 
 
 _ADAPTERS = {"codex": build_codex_cmd, "agy": build_agy_cmd,

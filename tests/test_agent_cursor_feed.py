@@ -27,7 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 def _hook_source() -> str:
     """The init script as it actually ships, lifted from operator_view.py."""
     src = (ROOT / "operator_view.py").read_text(encoding="utf-8")
-    m = re.search(r'await ctx\.add_init_script\("""(.*?)"""\)', src, re.S)
+    # 2dcab185 wrapped the call in asyncio.wait_for, so anchor on the call
+    # itself, not on the await in front of it.
+    m = re.search(r'ctx\.add_init_script\("""(.*?)"""\)', src, re.S)
     assert m, "the __opClick init script moved — this test cannot verify it"
     hook = m.group(1)
     assert "__opClick" in hook
@@ -158,3 +160,17 @@ def test_the_keep_alive_requires_a_visual_action():
     assert "_lastActionVisual" in body, (
         "the keep-alive re-arms on run-state alone — it will hold a stale "
         "cursor through a navigate or a DOM read")
+
+
+def test_user_tap_in_auto_mode_moves_agent_cursor_immediately_and_fast():
+    """A stage tap in AUTO mode must move #op-agent-cursor immediately on act()
+    rather than waiting up to 1.5s for /operator/status polling, and glide in
+    200ms rather than 550ms."""
+    js = _js()
+    act_body = js[js.index("async function act(action, userLabel, silent) {"):]
+    act_body = act_body[:act_body.index("\n  }")]
+    assert "showAgentClick({x: cx, y: cy})" in act_body
+    for path in ("static/operator.css", "templates/operator_demo.html"):
+        css = (ROOT / path).read_text(encoding="utf-8")
+        assert "transition: left .2s cubic-bezier(.22,1,.36,1), top .2s cubic-bezier(.22,1,.36,1)" in css
+

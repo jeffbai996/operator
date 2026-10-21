@@ -38,7 +38,7 @@ def test_astra_profile_is_compact_and_surface_specific(surface, demo):
         assert "Use 1Password's UI" not in text
 
 
-@pytest.mark.parametrize("model", ["", "gpt-6-sol", "gpt-5.6-terra", "gpt-6-luna"])
+@pytest.mark.parametrize("model", ["", "gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-luna"])
 def test_other_models_keep_their_profile_plus_shared_recipient_rule(model):
     persona = P.build_persona("BASE", "browser", False, model)
     assert persona == (

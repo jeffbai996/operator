@@ -21,6 +21,14 @@ with the correction and durable job context. Unknown native acknowledgements are
 not replayed. An interrupted purchase/booking/message must be inspected before
 retrying. Stop invalidates outstanding delivery and never starts a replacement.
 
+The paperclip opens Chat files. Uploaded files, generated files and completed
+downloads stay in that manager rather than occupying the chat or composer.
+Open a file to preview supported UTF-8 text or Markdown (up to 256 KiB), or use
+Download. Published files can be linked in replies as
+`[filename](operator-file:FILE_ID)`; IDs retain conversation ownership.
+Retrospective handoff/document requests do not require a new browser action.
+Mixed requests that also ask for live actions retain the browser evidence gate.
+
 Use the paperclip to add/download/remove chat files; desktop drops onto the
 composer and mobile file pickers use the same endpoint. Completed Chrome
 downloads are attributed by initiating frame and owned target, never foreground
@@ -124,3 +132,29 @@ OPERATOR_TEST_WINDOWS_FILES=1 PYTHONPATH=. pytest tests/test_windows_file_roundt
 The Windows fixture never attaches to :9222, :9224 or a signed-in profile. Native
 model behavior still needs observation during normal use; these tests deliberately
 do not consume a real model turn. Existing capture/viewport logic is not retuned.
+
+
+## Emulator controls
+
+The operator-control `emu_input` tool is available only on the Sandbox
+(`desktop-sandbox`) surface, alongside the existing OpenRSC perception map.
+It requires exactly one running EmulatorJS game in the sandbox browser; browser
+and real-desktop surfaces neither advertise nor permit the tool.
+
+For BaiCloud Games, use `http://localhost:8091` inside the sandbox. Open the
+selected `/play/<rom_id>?nosave=1` URL before playing. This disables the game's
+shared autosave/resume. Manual cloud save controls still use shared storage;
+use Operator checkpoints instead.
+
+Use `action=status` for emulator readiness and a screenshot. Press named
+RetroPad buttons with `button` or a sequence of at most eight `buttons`.
+A is slot 8 and B is slot 0. Inputs release in a finally block, including STOP;
+each call returns a screenshot. Default hold/gap are 120/700 ms, with a
+ten-second sequence limit. Paused games reject input until resumed.
+
+`action=save_state` and `action=load_state` use checkpoint `slot` 0–3 (default
+0). Each checkpoint is limited to 16 MiB, stays in the game tab, and never
+writes to the game server. Checkpoints survive a new agent turn on the same
+tab; reload, navigation, or closing the tab clears them. Replacing the emulator
+manager invalidates them. Status lists occupied slots. The summary reports
+emulator readiness, not game RAM, map, party health, or dialogue state.

@@ -22,6 +22,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from flask import Flask
@@ -111,6 +112,22 @@ def test_clamp_stage_bounds_and_evens_its_output() -> None:
     assert OV._clamp_stage(1280, 50)[1] >= 480
     w, h = OV._clamp_stage(1281, 901)
     assert w % 2 == 0 and h % 2 == 0
+
+
+def test_clamp_stage_keeps_the_shape_of_a_large_desktop_stage() -> None:
+    """The width cap used to apply without scaling the height, then the area
+    cap trimmed the height: every big stage came out 1600x1186 whatever its
+    shape, and its frame showed with bars down the sides (2026-10-06)."""
+    for stage in ((1914, 1294), (1925, 1410), (2224, 1434), (1600, 900)):
+        w, h = OV._clamp_stage(*stage)
+        assert w <= 1600 and h <= 1300 and w * h <= 1_900_000, (stage, w, h)
+        assert abs((w / h) - (stage[0] / stage[1])) < 0.01, (stage, w, h)
+
+
+def test_clamp_stage_never_drops_below_the_desktop_width() -> None:
+    w, h = OV._clamp_stage(1000, 2400)
+    assert w >= OV.DESKTOP_LAYOUT_MIN_W
+    assert h <= 1300
 
 
 def test_clamp_stage_rejects_a_degenerate_reading() -> None:
@@ -370,21 +387,21 @@ def test_native_select_click_uses_in_page_overlay() -> None:
     assert "new Event('change', {bubbles:true})" in src
 
 
-def test_code_block_scroll_forwards_to_chat_log() -> None:
-    # code blocks stole wheel/touch scroll ("sticks on a code block", the owner
-    # 2026-07-21). The fix wires each <pre> directly (capture phase) + a
-    # MutationObserver for future ones, forwarding vertical deltas to the log
-    # unless the pre has its OWN scroll. Bubbling-delegate approach is gone —
-    # it missed when the event never reached the log.
-    js = (Path(__file__).resolve().parents[1] / "static/js/operator.js").read_text(encoding="utf-8")
-    assert "function _wirePre(pre)" in js
-    assert "capture: true" in js
-    assert "new MutationObserver(_wireAllPres)" in js
-    # both axes handled on the pre itself
-    assert "pre.addEventListener('wheel'" in js
-    assert "pre.addEventListener('touchmove'" in js
-    # forwards to the log, not the pre
-    assert "log.scrollTop += e.deltaY" in js
+def test_code_blocks_leave_vertical_scrolling_to_the_browser() -> None:
+    root = Path(__file__).resolve().parents[1] / "static"
+    js = (root / "js/operator.js").read_text(encoding="utf-8")
+    css = (root / "operator.css").read_text(encoding="utf-8")
+    rich_css = (root / "workbench.css").read_text(encoding="utf-8")
+    # Synthetic scrollTop deltas bypass native wheel scaling and momentum.
+    assert "function _wirePre(pre)" not in js
+    assert "pre.addEventListener('wheel'" not in js
+    assert "pre.addEventListener('touchmove'" not in js
+    assert "log.scrollTop += e.deltaY" not in js
+    # Wrapped code cannot own vertical scrolling, while wide blocks can still
+    # pan horizontally and all code remains touch-scrollable in the log.
+    assert "overflow-y: visible; touch-action: pan-y pinch-zoom" in css
+    assert "overflow-x: auto; overflow-y: hidden;" in css
+    assert "overflow-x: auto; overflow-y: hidden; touch-action: pan-x pan-y pinch-zoom" in rich_css
 
 
 def test_ios_page_zoom_remains_available_over_operator_stage_and_input() -> None:
@@ -461,7 +478,9 @@ def test_recovery_notice_uses_product_copy_not_guard_internals() -> None:
     js = (root / "static/js/operator.js").read_text(encoding="utf-8")
     agent = (root / "operator_agent.py").read_text(encoding="utf-8")
 
-    assert "Operator may be stuck" in js
+    assert "Operator may be stuck" not in js
+    assert "Checking result" in js
+    assert "Repeated actions" in js
     assert "Re-grounding" not in js
     assert "reading the screen is not recovery" not in agent
     assert "browser_snapshot and continue from fresh element refs" not in agent
@@ -593,12 +612,11 @@ def test_release_version_surfaces_stay_in_sync() -> None:
     root = Path(__file__).resolve().parents[1]
     live = (root / "templates/operator.html").read_text(encoding="utf-8")
     demo = (root / "templates/operator_demo.html").read_text(encoding="utf-8")
-    readme = (root / "README.md").read_text(encoding="utf-8")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
 
     assert re.fullmatch(r"\d+\.\d+\.\d+", OV.OP_VERSION)
-    assert OV.OP_VERSION == "1.2.1"
-    release_heading = re.search(r"^## v(\d+\.\d+\.\d+)\b", readme, re.MULTILINE)
+    assert OV.OP_VERSION == "1.2.7"
+    release_heading = re.search(r"^## v(\d+\.\d+\.\d+)\b", changelog, re.MULTILINE)
     assert release_heading and release_heading.group(1) == OV.OP_VERSION
     assert f"| v{OV.OP_VERSION} |" in changelog
     for template, suffix in ((live, ""), (demo, " demo")):
@@ -739,12 +757,15 @@ class FakeRunner:
         self.takeover_conversation_id = None
 
     def start(self, bot, task, model="", effort="", demo=False,
-              surface="browser", real_ok=False, conversation_id=None, authorization=None):
+              surface="browser", real_ok=False, conversation_id=None, authorization=None,
+              prepare_browser=None, service_tier=""):
         self.authorization = authorization
         self.calls.append({"bot": bot, "task": task, "model": model,
                            "effort": effort, "demo": demo,
                            "surface": surface, "real_ok": real_ok,
                            "conversation_id": conversation_id})
+        if service_tier:
+            self.calls[-1]['service_tier'] = service_tier
         if self.ok:
             return {"ok": True, "bot": bot, "pid": 4242}
         return {"ok": False, "error": "already running"}
@@ -892,7 +913,7 @@ def test_demo_task_run_applies_dispatch_lock(demo, fake_runner, monkeypatch):
     assert resp.status_code == 200
     call = fake_runner.calls[0]
     assert call["bot"] == "gemma"
-    assert call["model"] == "gemini-3.8-flash-low"   # off-list stored model → default
+    assert call["model"] == "gemini-4-argon-low"   # off-list stored model → default
     assert call["effort"] == ""
     assert call["demo"] is True
 
@@ -969,8 +990,8 @@ def test_models_locked_to_two_model_choice_in_demo(demo):
     # 4.6 as the only alt; tier baked into the value, effort control hidden.
     client, _ = demo
     assert client.get("/operator/models").get_json()["models"] == [
-        {"value": "gemini-3.8-flash-low", "label": "3.8 Flash"},
-        {"value": "Claude Sonnet 4.6 (Thinking)", "label": "Sonnet 4.6"},
+        {"value": "gemini-4-argon-low", "label": "4 Argon"},
+        {"value": "claude-sonnet-5-5-medium", "label": "Sonnet 5.5 (Medium)"},
     ]
 
 
@@ -1001,6 +1022,27 @@ def test_dispatch_live_calls_runner_with_expected_args(live, fake_runner, monkey
     assert call["real_ok"] is False
 
 
+@pytest.mark.parametrize('tier', ['priority', 'ultrafast'])
+def test_dispatch_forwards_supported_gpt_speed(live, fake_runner, monkeypatch, tier):
+    client, mod = live
+    _patch_streamer(monkeypatch, mod, FakeStreamer())
+    response = client.post('/operator/dispatch', json={
+        'bot': 'gpt', 'task': 'Review this page', 'model': 'gpt-6.1-sol',
+        'service_tier': tier})
+    assert response.status_code == 200
+    assert fake_runner.calls[-1]['service_tier'] == tier
+
+
+def test_dispatch_refuses_unsupported_speed_before_acquiring_browser(live, fake_runner, monkeypatch):
+    client, mod = live
+    streamer = FakeStreamer(); _patch_streamer(monkeypatch, mod, streamer)
+    response = client.post('/operator/dispatch', json={
+        'bot': 'gpt', 'task': 'Review this page', 'model': 'unknown-model',
+        'service_tier': 'ultrafast'})
+    assert response.status_code == 400
+    assert fake_runner.calls == []
+
+
 def test_dispatch_demo_forces_gemma_and_default_model_and_demo_true(demo, fake_runner, monkeypatch):
     client, mod = demo
     _patch_streamer(monkeypatch, mod, FakeStreamer())
@@ -1010,7 +1052,7 @@ def test_dispatch_demo_forces_gemma_and_default_model_and_demo_true(demo, fake_r
     assert resp.status_code == 200
     call = fake_runner.calls[0]
     assert call["bot"] == "gemma"                          # forced, client bot ignored
-    assert call["model"] == "gemini-3.8-flash-low"       # off-list model → default
+    assert call["model"] == "gemini-4-argon-low"       # off-list model → default
     assert call["effort"] == ""                            # lock owns effort (tier in model string)
     assert call["demo"] is True                            # strips squad context
 
@@ -1021,11 +1063,11 @@ def test_dispatch_demo_honors_sonnet_alt(demo, fake_runner, monkeypatch):
     _patch_streamer(monkeypatch, mod, FakeStreamer())
     resp = client.post("/operator/dispatch", json={
         "bot": "claude-a", "task": "do it",
-        "model": "Claude Sonnet 4.6 (Thinking)", "effort": "max"})
+        "model": "claude-sonnet-5-5-medium", "effort": "max"})
     assert resp.status_code == 200
     call = fake_runner.calls[0]
     assert call["bot"] == "gemma"
-    assert call["model"] == "Claude Sonnet 4.6 (Thinking)"  # allowlisted alt honored
+    assert call["model"] == "claude-sonnet-5-5-medium"  # allowlisted alt honored
     assert call["effort"] == ""                            # injected effort still ignored
     assert call["demo"] is True
 
@@ -1036,11 +1078,11 @@ def test_dispatch_demo_sandbox_surface_forces_sonnet(demo, fake_runner, monkeypa
     client, mod = demo
     _patch_streamer(monkeypatch, mod, FakeStreamer())
     resp = client.post("/operator/dispatch", json={
-        "bot": "x", "task": "open the editor", "model": "gemini-3.8-flash-low",
+        "bot": "x", "task": "open the editor", "model": "gemini-4-argon-low",
         "surface": "desktop-sandbox"})
     assert resp.status_code == 200
     call = fake_runner.calls[0]
-    assert call["model"] == "Claude Sonnet 4.6 (Thinking)"
+    assert call["model"] == "claude-sonnet-5-5-medium"
     assert call["surface"] == "desktop-sandbox"
     assert call["demo"] is True
 
@@ -1141,6 +1183,8 @@ STEER_CASES = [
     ("goto value", {"kind": "goto", "value": "example.test"}, "goto",
      {"value": "example.test"}),
     ("type value", {"kind": "type", "value": "hello"}, "type", {"value": "hello"}),
+    ("paste value", {"kind": "paste", "value": "one\ntwo"}, "paste",
+     {"value": "one\ntwo"}),
     ("key value", {"kind": "key", "value": "Enter"}, "key", {"value": "Enter"}),
     ("stage size force",
      {"kind": "stage_size", "value": "704x615", "cid": "tab-a", "force": True},
@@ -1184,6 +1228,46 @@ def test_steer_missing_kind_is_400(live, monkeypatch):
     resp = client.post("/operator/steer", json={"value": "x"})
     assert resp.status_code == 400
     assert resp.get_json() == {"ok": False, "error": "missing action kind"}
+
+
+@pytest.mark.parametrize("value", ["", "x" * 65537, "\ud800", ["not text"]])
+def test_steer_rejects_invalid_paste(live, monkeypatch, value):
+    client, mod = live
+    fs = FakeStreamer()
+    _patch_streamer(monkeypatch, mod, fs)
+    resp = client.post("/operator/steer", json={"kind": "paste", "value": value})
+    assert resp.status_code == 400
+    assert fs.actions == []
+
+
+def test_browser_paste_uses_one_cdp_insert_without_replacing_clipboard(monkeypatch):
+    s = OV._Streamer()
+    s._page = SimpleNamespace(url="https://example.test/")
+    calls = []
+
+    async def send(method, params):
+        calls.append((method, params))
+
+    async def cdp_session(_page):
+        return SimpleNamespace(send=send)
+
+    monkeypatch.setattr(s, "_cdp_session", cdp_session)
+    result = asyncio.run(s._do_action({"kind": "paste", "value": "line 1\n\u00e9"}))
+    assert result["ok"] is True
+    assert calls == [("Input.insertText", {"text": "line 1\n\u00e9"})]
+
+
+@pytest.mark.parametrize("surface", ["desktop-real", "desktop-sandbox"])
+def test_desktop_paste_types_into_selected_surface(monkeypatch, surface):
+    calls = []
+    fake = SimpleNamespace(size=lambda: (800, 600),
+                           execute=lambda *args: calls.append(args))
+    monkeypatch.setitem(OV._active_surface, "name", surface)
+    monkeypatch.setattr(OV, "_load_cu", lambda _name: fake)
+    monkeypatch.setattr(OV, "_img_dims", lambda _frame: (800, 600))
+    assert OV._desktop_steer({"kind": "paste", "value": "line 1\n\u00e9"}) == {"ok": True}
+    assert calls[0][0] == {"action": "paste_text", "text": "line 1\n\u00e9"}
+    assert len(calls[0]) == (2 if surface == "desktop-real" else 1)
 
 
 def test_steer_accepts_form_encoded_body(live, monkeypatch):
@@ -1397,6 +1481,88 @@ def test_saved_task_run_cannot_bypass_browser_readiness(
     assert resp.get_json() == {
         "ok": False, "error": "browser connection failed"}
     assert fake_runner.calls == []
+
+
+# Audit F04 (2026-10-10): a saved task's start_url used to navigate the
+# streamer's current page before admission, so a refused run could move an
+# admitted run's page. The start page now opens on the task's own page, inside
+# RunnerRegistry admission.
+
+class _InertRunner:
+    def __init__(self, conversation_id, **_kwargs):
+        self.conversation_id, self.running, self.started = conversation_id, False, []
+
+    def is_running(self):
+        return self.running
+
+    def start(self, bot, task, **_kwargs):
+        self.started.append(bot)
+        self.running = True
+        return {"ok": True, "bot": bot}
+
+
+def _start_url_task(monkeypatch, mod):
+    import operator_tasks as OT
+    monkeypatch.setattr(mod, "operator_tasks_store", OT)
+    monkeypatch.setattr(OT, "get_task", lambda slug: {
+        "prompt": "read the filings", "bot": "claude-a", "model": "opus", "effort": "high",
+        "sites": [], "start_url": "example.com/filings"})
+    monkeypatch.setattr(OT, "sites_preamble", lambda sites: "")
+    monkeypatch.setattr(OT, "mark_run", lambda slug: None)
+    import operator_browser_jobs
+    opened = []
+
+    def _open(cid, endpoint, url, ensure_browser):
+        opened.append((cid, endpoint, url))
+        return None
+    monkeypatch.setattr(operator_browser_jobs, "open_start_page", _open)
+    return opened
+
+
+@pytest.mark.parametrize("busy", ["conversation", "global"])
+def test_a_refused_saved_task_never_navigates_a_page(live, monkeypatch, busy):
+    client, mod = live
+    fs = FakeStreamer()
+    _patch_streamer(monkeypatch, mod, fs)
+    registry = OA.RunnerRegistry(runner_factory=_InertRunner,
+                                 global_limit=1 if busy == "global" else 3)
+    monkeypatch.setattr(OA, "runner", registry)
+    holder = {"conversation": ("gemma", "conv-1"), "global": ("gemma", "conv-2")}[busy]
+    assert registry.start(holder[0], "already running", conversation_id=holder[1])["ok"]
+    opened = _start_url_task(monkeypatch, mod)
+    resp = client.post("/operator/tasks/deepdive/run", json={"conversation_id": "conv-1"})
+    assert resp.status_code == 409
+    assert opened == [] and fs.actions == []
+
+
+def test_an_admitted_saved_task_opens_its_start_page_on_its_own_page(live, monkeypatch):
+    client, mod = live
+    fs = FakeStreamer()
+    _patch_streamer(monkeypatch, mod, fs)
+    registry = OA.RunnerRegistry(runner_factory=_InertRunner, global_limit=3)
+    monkeypatch.setattr(OA, "runner", registry)
+    opened = _start_url_task(monkeypatch, mod)
+    resp = client.post("/operator/tasks/deepdive/run", json={"conversation_id": "conv 1"})
+    assert resp.status_code == 200
+    assert opened == [("conv-1", mod.CDP_URL, "example.com/filings")]
+    assert fs.actions == []
+    assert registry.get("conv-1").started == ["claude-a"]
+
+
+def test_a_start_page_that_cannot_open_releases_the_slot(live, monkeypatch):
+    client, mod = live
+    _patch_streamer(monkeypatch, mod, FakeStreamer())
+    registry = OA.RunnerRegistry(runner_factory=_InertRunner, global_limit=3)
+    monkeypatch.setattr(OA, "runner", registry)
+    _start_url_task(monkeypatch, mod)
+    import operator_browser_jobs
+    monkeypatch.setattr(operator_browser_jobs, "open_start_page",
+                        lambda *a: "the task's start page could not be opened")
+    resp = client.post("/operator/tasks/deepdive/run", json={"conversation_id": "conv-1"})
+    assert resp.status_code == 503
+    assert resp.get_json()["error"] == "the task's start page could not be opened"
+    assert registry.get("conv-1").started == []
+    assert registry.start("claude-a", "next", conversation_id="conv-1")["ok"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2205,10 +2371,11 @@ def test_streamer_attach_has_a_hard_timeout(monkeypatch) -> None:
         return None
 
     monkeypatch.setattr(OV, "BROWSER_ATTACH_TIMEOUT", 0.01)
-    monkeypatch.setattr(streamer, "_attach", never_attaches)
+    monkeypatch.setattr(streamer, "_ensure_chrome_alive", lambda: None)
+    monkeypatch.setattr(streamer, "_attach_browser", never_attaches)
     monkeypatch.setattr(streamer, "_teardown", inert_teardown)
 
-    with pytest.raises(asyncio.TimeoutError):
+    with pytest.raises(asyncio.TimeoutError, match="browser connection timed out"):
         asyncio.run(streamer._grab_loop())
 
 
@@ -2218,17 +2385,18 @@ def test_look_for_machine_grabs_the_conversations_own_tab(monkeypatch):
     """The frame comes from the registry's target for THAT conversation,
     never from whatever the streamer happens to show."""
     asked = {}
-    monkeypatch.setattr(OV, "_registry_targets", lambda cid: ["T-agent"] if cid == "c1" else [])
-    monkeypatch.setattr(OV._streamer, "require_ready", lambda: None)
+    import operator_browser_jobs as jobs
+    monkeypatch.setattr(OV._streamer, 'require_ready', lambda: pytest.fail('started cockpit'))
 
-    def grab(targets):
-        asked["targets"] = list(targets)
-        return {"jpeg": b"\xff\xd8jpeg", "url": "https://example.com/x", "title": "X"}
-    monkeypatch.setattr(OV._streamer, "grab_target", grab)
+    def grab(cid, endpoint):
+        asked['conversation_id'] = cid
+        return ({'jpeg_b64': '/9hqcGVn', 'url': 'https://example.com/x', 'title': 'X'}
+                if cid == 'c1' else None)
+    monkeypatch.setattr(jobs, 'look', grab)
 
     payload, status = OV.look_for_machine({"conversation_id": "c1"})
     assert status == 200 and payload["ok"]
-    assert asked["targets"] == ["T-agent"]
+    assert asked['conversation_id'] == 'c1'
     assert payload["url"] == "https://example.com/x" and payload["title"] == "X"
     import base64
     assert base64.b64decode(payload["jpeg_b64"]) == b"\xff\xd8jpeg"
@@ -2251,7 +2419,125 @@ def test_prune_delegated_conversations_releases_tabs_and_workspace(monkeypatch):
     monkeypatch.setattr(OV, "_browser_tab_command", lambda action, sid, **kw: calls.append((action, sid)) or True)
     monkeypatch.setattr(OV.operator_agent.runner, "conversation_summaries",
                         lambda: {"c-run": {"alive": True}})
+    monkeypatch.setattr(OV.operator_agent.runner, "retire", lambda sid: {"ok": True})
     gone = OV.prune_delegated_conversations()
     assert gone == ["c-old"]
     assert ("ws", "c-old") in calls and ("release", "c-old") in calls and ("delete", "c-old") in calls
     assert not any(sid == "c-run" for _, sid in calls)
+
+
+def test_prune_retires_each_pruned_conversations_runner(monkeypatch):
+    # Audit F08: pruning removed the chat but left its runner in worker memory.
+    import operator_session as sess
+    import operator_workspace as ws
+    retired = []
+    monkeypatch.setattr(sess, "prune_candidates", lambda now=None: ["c-old", "c-run"])
+    monkeypatch.setattr(sess, "delete", lambda sid, **kw: {})
+    monkeypatch.setattr(ws, "delete_conversation", lambda sid: None)
+    monkeypatch.setattr(OV, "_browser_tab_command", lambda action, sid, **kw: True)
+    monkeypatch.setattr(OV.operator_agent.runner, "conversation_summaries",
+                        lambda: {"c-run": {"alive": True}})
+    monkeypatch.setattr(OV.operator_agent.runner, "retire",
+                        lambda sid: retired.append(sid) or {"ok": True})
+    assert OV.prune_delegated_conversations() == ["c-old"]
+    assert retired == ["c-old"]
+
+
+def test_negative_browser_probe_refreshes_promptly(live, monkeypatch):
+    _, mod = live
+    mod._cdp_probe.update(up=False, ts=time.monotonic() - 0.3, running=False)
+    done = threading.Event()
+    def probe():
+        done.set()
+        return True
+    monkeypatch.setattr(mod._streamer, '_cdp_alive', probe)
+    assert mod._cdp_up_cached() is False
+    assert done.wait(1), 'a recent negative must not hide an open browser for ten seconds'
+
+
+def test_frame_pull_resumes_after_worker_restart_without_booting_absent_chrome(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    streamer = SimpleNamespace(status='idle', ensure_running=lambda: calls.append('attach'))
+    monkeypatch.setattr(OV, '_streamer', streamer)
+    monkeypatch.setitem(OV._active_surface, 'name', 'browser')
+    monkeypatch.setattr(OV, '_cdp_up_cached', lambda: False)
+    assert OV._frame_source()[1] is streamer
+    assert calls == []
+    monkeypatch.setattr(OV, '_cdp_up_cached', lambda: True)
+    OV._frame_source()
+    assert calls == ['attach']
+    streamer.status = 'error'
+    OV._frame_source()
+    assert calls == ['attach']
+
+
+def test_each_viewer_gets_its_quality_without_reflowing_shared_capture(live, monkeypatch):
+    import io
+    from PIL import Image
+    client, mod = live
+    fs = FakeStreamer()
+    output=io.BytesIO()
+    Image.new("RGB", (1600, 1000), "white").save(output,"JPEG",quality=60)
+    fs.frame,fs.frame_id,fs.status=output.getvalue(),7,"live"
+    _patch_streamer(monkeypatch, mod, fs)
+    monkeypatch.setattr(mod, "_TIER_SEEN", {})
+    mod._active_surface["name"]="browser"
+    high=client.get("/operator/frame?cid=desktop&tier=hi")
+    low=client.get("/operator/frame?cid=phone&tier=eco")
+    assert high.data==fs.frame
+    assert Image.open(io.BytesIO(low.data)).size==(640,400)
+    assert fs.tier=="hi"
+    token=low.headers["X-Operator-Frame-ID"]
+    quiet=client.get("/operator/frame?cid=phone&tier=eco&since="+token)
+    assert quiet.status_code==204
+    changed=client.get("/operator/frame?cid=phone&tier=hi&since="+token)
+    assert changed.status_code==200 and changed.data==fs.frame
+
+
+def test_a_manual_gesture_is_noted_for_the_tab_owner_or_the_active_chat(live, monkeypatch, tmp_path):
+    """What the user does on the stage by hand reaches the model as a note
+    (operator_steer.note_manual): the gesture's tab names its conversation,
+    a tab nobody owns goes to the active chat, beacons are not gestures."""
+    import json
+    import operator_steer as steer_store
+    import operator_session
+    client, mod = live
+    fs = FakeStreamer()
+    fs.cur_url = "https://shop.test/cart"
+    _patch_streamer(monkeypatch, mod, fs)
+    monkeypatch.setenv("OPERATOR_STEER_PATH", str(tmp_path / "steer.ndjson"))
+    registry = tmp_path / "tabs.json"
+    registry.write_text(json.dumps({"conv-owner": ["TARGET-1"]}))
+    monkeypatch.setenv("OPERATOR_BROWSER_TABS_PATH", str(registry))
+    monkeypatch.setattr(operator_session, "active_id", lambda: "conv-active")
+
+    assert client.post("/operator/steer", json={"kind": "click_at", "x": .5, "y": .5,
+                                               "target_id": "TARGET-1"}).status_code == 200
+    assert client.post("/operator/steer", json={"kind": "type", "value": "venti",
+                                               "target_id": "TARGET-unowned"}).status_code == 200
+    assert client.post("/operator/steer", json={"kind": "stage_size", "value": "704x615",
+                                               "cid": "tab-a"}).status_code == 200
+
+    owner = steer_store.pending_manual("conv-owner")
+    assert owner["counts"] == {"click": 1} and owner["url"] == "https://shop.test/cart"
+    active = steer_store.pending_manual("conv-active")
+    assert active["counts"] == {"typed": 1} and active["typed"] == ["venti"]
+
+
+def test_the_tab_list_follows_the_dragged_order(live, monkeypatch, tmp_path):
+    """Chrome cannot move a tab over CDP, so the strip's drag order is the
+    cockpit's own, stored by target id and applied when tabs are listed."""
+    import operator_prefs
+    client, mod = live
+    monkeypatch.setattr(operator_prefs, "_PATH", str(tmp_path / "prefs.json"))
+    operator_prefs._cache_clear()
+    fs = FakeStreamer()
+    fs.tabs = [{"i": 0, "id": "A", "title": "a", "url": "https://a.test", "active": True},
+               {"i": 1, "id": "B", "title": "b", "url": "https://b.test", "active": False},
+               {"i": 2, "id": "C", "title": "c", "url": "https://c.test", "active": False}]
+    _patch_streamer(monkeypatch, mod, fs)
+    assert client.post("/operator/tabs/order", json={"ids": ["C", "A"]}).status_code == 200
+    assert [t["i"] for t in client.get("/operator/tabs").get_json()["tabs"]] == [2, 0, 1]
+    assert client.post("/operator/tabs/order", json={"ids": "C"}).status_code == 400
+    operator_prefs._cache_clear()

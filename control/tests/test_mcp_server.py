@@ -16,6 +16,9 @@ class FakeSurface:
     def __init__(self):
         self.calls = []
 
+    def _check_stop(self):
+        pass
+
     def frame(self):
         a = np.zeros((60, 80, 3), dtype=np.uint8)
         a[10:20, 30:50] = (40, 220, 70)      # a green blob perceive can find
@@ -107,8 +110,9 @@ def test_emu_input_only_on_sandbox_surface():
     assert "emu_input" not in browser
 
 
-def test_emu_input_blocked_off_sandbox(tmp_path):
-    srv = server("desktop-real", tmp_path=tmp_path)
+@pytest.mark.parametrize("surface", ["desktop-real", "browser"])
+def test_emu_input_blocked_off_sandbox(tmp_path, surface):
+    srv = server(surface, tmp_path=tmp_path)
     r = call(srv, "tools/call", {"name": "emu_input",
                                  "arguments": {"button": "a"}})
     _, is_err = tool_result(r)
@@ -135,8 +139,12 @@ def test_emu_input_uses_one_loopback_tunnel_for_server_lifetime(monkeypatch):
             return tunnel
 
     class FakeEmu:
-        def __init__(self, url):
+        def __init__(self, url, check_stop):
+            assert callable(check_stop)
             calls.append(("emu", url))
+
+        def close(self):
+            pass
 
     monkeypatch.setattr(S, "_load_cu_module", lambda name: FakeSandbox())
     monkeypatch.setattr(S.emu_input_mod, "EmuInput", FakeEmu)
@@ -471,3 +479,48 @@ def test_failed_type_gets_no_auto_look(tmp_path, monkeypatch):
     data, _ = tool_result(r)
     assert data["verified"]["changed"] is False
     assert "look" not in data["verified"]
+
+
+def test_browser_emulator_refuses_without_starting_sandbox(monkeypatch):
+    monkeypatch.setattr(S, "_load_cu_module", lambda name: pytest.fail("must not start sandbox"))
+    with pytest.raises(S.SurfaceError, match="Sandbox"):
+        server("browser")._get_emu()
+
+
+def test_emulator_status_returns_screen_and_state(tmp_path):
+    srv = server("desktop-sandbox", tmp_path=tmp_path)
+    class Emu:
+        def input(self, buttons, **kw):
+            assert buttons == []
+            return {"ok": True, "pressed": [], "paused": True}, b"png"
+    srv._emu = Emu()
+    result = call(srv, "tools/call", {"name": "emu_input", "arguments": {"action": "status"}})
+    data, error = tool_result(result)
+    assert not error and data["paused"]
+    assert result["result"]["content"][1]["mimeType"] == "image/png"
+
+
+@pytest.mark.parametrize("action", ["save_state", "load_state"])
+def test_emulator_checkpoint_dispatch(tmp_path, action):
+    srv = server("desktop-sandbox", tmp_path=tmp_path)
+    class Emu:
+        def checkpoint(self, got_action, slot):
+            assert (got_action, slot) == (action, 2)
+            return {"ok": True, "action": action, "slot": slot, "size": 4}, b"png"
+    srv._emu = Emu()
+    data, error = tool_result(call(srv, "tools/call", {
+        "name": "emu_input", "arguments": {"action": action, "slot": 2}}))
+    assert not error and data["size"] == 4
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("perceive", {"return_image": True}),
+    ("game_macro", {"ops": [], "return_image": True}),
+    ("game_macro", {"ops": [{"op": "yield_to_planner", "reason": "inspect"}],
+                    "return_image": True}),
+])
+def test_vision_loop_returns_fresh_image_without_map(tmp_path, tool, args):
+    result = call(server("desktop-sandbox", tmp_path=tmp_path), "tools/call",
+                  {"name": tool, "arguments": args})
+    assert not result["result"].get("isError")
+    assert result["result"]["content"][1]["mimeType"] == "image/jpeg"

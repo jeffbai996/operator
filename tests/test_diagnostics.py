@@ -1,19 +1,22 @@
 import json
 import time
 
+import pytest
+
 import operator_diagnostics as metrics
 import operator_workspace as ws
 
 
-def test_metrics_are_metadata_only_and_aggregated(monkeypatch):
+@pytest.mark.parametrize('metric_name', ['capture_ms', 'capture_geometry_failures'])
+def test_metrics_are_metadata_only_and_aggregated(monkeypatch, metric_name):
     with metrics._LOCK:
         metrics._buckets.clear(); metrics._debug.clear()
     metrics.debug_recording(True)
     metrics.record('prompt', 'sensitive text')
     metrics.record('page_url', 'https://secret.test/account')
-    metrics.record('capture_ms', 4)
-    metrics.record('capture_ms', 8)
-    metrics.record('capture_ms', float('nan'))
+    metrics.record(metric_name, 4)
+    metrics.record(metric_name, 8)
+    metrics.record(metric_name, float('nan'))
     data = metrics.snapshot()
     assert len(data['metrics']) == 1
     assert data['metrics'][0]['count'] == 2

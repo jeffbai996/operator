@@ -107,6 +107,32 @@ def _new_target(endpoint: str) -> str:
     return target
 
 
+def _new_background_target(endpoint: str) -> str:
+    # A separate window shares the existing profile, including extensions.
+    # Incognito contexts lose those sign-ins; ordinary background tabs still
+    # clutter the human's window. Chrome's experimental hidden targets cannot
+    # currently be driven by the existing Playwright page facade.
+    client = TabCleanupClient(endpoint, timeout=5)
+    ws = client._get('/json/version')['webSocketDebuggerUrl']
+    result = client._rpc(ws, 'Target.createTarget', {
+        'url': 'about:blank', 'newWindow': True, 'background': True,
+        'windowState': 'minimized', 'width': 1280, 'height': 800})
+    target = str(result.get('targetId') or '')
+    if not target:
+        raise RuntimeError('Chrome did not create a background page')
+    # Native window managers can map a newly created window after Chrome has
+    # applied createTarget's initial state. Reassert the state on that exact
+    # new window instead of letting it surface when the mapping finishes.
+    try:
+        window = client._rpc(ws, 'Browser.getWindowForTarget', {'targetId': target})
+        client._rpc(ws, 'Browser.setWindowBounds', {
+            'windowId': window['windowId'], 'bounds': {'windowState': 'minimized'}})
+    except Exception:
+        _close_target(endpoint, target)  # this new page has not yet been registered
+        raise
+    return target
+
+
 def _close_target(endpoint: str, target: str) -> None:
     try:
         _command(endpoint, "/json/close/" + urllib.parse.quote(target, safe=""))
@@ -127,7 +153,8 @@ def _locked(path: Path):
 
 
 def reserve(conversation_id: str, endpoint: str,
-            path: Path = DEFAULT_REGISTRY) -> str:
+            path: Path = DEFAULT_REGISTRY, *, background: bool = False,
+            fresh: bool = False) -> str:
     conversation_id = str(conversation_id or "").strip()
     if not conversation_id:
         raise ValueError("conversation id is required")
@@ -137,14 +164,14 @@ def reserve(conversation_id: str, endpoint: str,
         live = _page_targets(endpoint)
         targets = registry.get(conversation_id, [])
         target = next((target for target in targets if target in live), "")
-        if target:
+        if target and not fresh:
             # Write the v1 -> v2 shape while this conversation is already
             # touching the lock, so a later popup claim has one canonical form.
             registry[conversation_id] = targets
             _write_registry(registry, path)
             return target
-        target = _new_target(endpoint)
-        registry[conversation_id] = [target]
+        target = _new_background_target(endpoint) if background else _new_target(endpoint)
+        registry[conversation_id] = [tid for tid in targets if tid in live] + [target]
         _write_registry(registry, path)
         return target
     finally:
@@ -208,13 +235,19 @@ def release(conversation_id: str, endpoint: str,
 
 
 def activate(conversation_id: str, endpoint: str,
-             path: Path = DEFAULT_REGISTRY) -> bool:
+             path: Path = DEFAULT_REGISTRY, *, background: bool = False) -> bool:
     lock = _locked(path)
     try:
         targets = _read_registry(path).get(str(conversation_id), [])
         target = targets[0] if targets else ""
         if not target or target not in _page_targets(endpoint):
             return False
+        if background:
+            client = TabCleanupClient(endpoint, timeout=2)
+            ws = client._get('/json/version')['webSocketDebuggerUrl']
+            window = client._rpc(ws, 'Browser.getWindowForTarget', {'targetId': target})
+            client._rpc(ws, 'Browser.setWindowBounds', {
+                'windowId': window['windowId'], 'bounds': {'windowState': 'normal'}})
         _activate_target(endpoint, target)
         return True
     finally:
@@ -402,14 +435,16 @@ class IdleTabReaper:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("reserve", "claim", "release", "activate"))
+    parser.add_argument("action", choices=("reserve", "new", "claim", "release", "activate"))
     parser.add_argument("conversation_id")
     parser.add_argument("endpoint")
     parser.add_argument("target_id", nargs="?")
     parser.add_argument("--close", action="store_true")
+    parser.add_argument("--background", action="store_true")
     args = parser.parse_args(argv)
-    if args.action == "reserve":
-        print(reserve(args.conversation_id, args.endpoint))
+    if args.action in {"reserve", "new"}:
+        print(reserve(args.conversation_id, args.endpoint,
+                      background=args.background, fresh=args.action == 'new'))
     elif args.action == "claim":
         if not args.target_id:
             parser.error("claim needs a target id")
@@ -417,7 +452,8 @@ def main(argv=None) -> int:
     elif args.action == "release":
         release(args.conversation_id, args.endpoint, close=args.close)
     else:
-        print("1" if activate(args.conversation_id, args.endpoint) else "0")
+        print("1" if activate(args.conversation_id, args.endpoint,
+                             background=args.background) else "0")
     return 0
 
 

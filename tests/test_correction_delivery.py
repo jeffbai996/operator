@@ -101,3 +101,121 @@ def test_nothing_is_invented_when_the_run_had_said_nothing(monkeypatch, tmp_path
     r._deliver_correction('quiet room', 'correction', rid, r._steer_generation)
 
     assert [m["role"] for m in r._transcript] == ["user"]
+
+
+def _redirected_runner(monkeypatch, tmp_path, bot):
+    monkeypatch.setenv('OPERATOR_STATE_PATH', str(tmp_path / 'state.json'))
+    monkeypatch.setenv('OPERATOR_SESSION_ROOT', str(tmp_path / 'sessions'))
+    monkeypatch.setattr(agent, '_squad_boot_context', lambda *a: '')
+    r = agent.AgentRunner('a')
+    r.state = 'running'
+    r.bot = bot
+    r.started_ts = 1
+    r._save_state = lambda: None
+    r._completion_gate_check = lambda: None
+    r._steer_followup_check = lambda: None
+    r._persona_for_run = lambda b: ''
+    r._reap_owned_browser_helpers = lambda: 0
+    monkeypatch.setattr(agent.operator_runtimes, 'cleanup_launch_plan', lambda p: None)
+    return r
+
+
+def test_a_correction_resumes_the_claude_session(monkeypatch, tmp_path):
+    """The replacement turn after a correction started a FRESH session briefed
+    from final text alone, so it forgot its own clicks: it had put a Venti in
+    the cart, then "fixed" a Tall (the owner 2026-10-19, "retrograde amnesia"). A
+    killed claude session resumes with its tool history, so its id is kept."""
+    import io
+    import json
+    import subprocess
+    from types import SimpleNamespace
+    r = _redirected_runner(monkeypatch, tmp_path, 'claude-a')
+
+    def stdout():
+        yield json.dumps({'type': 'system', 'subtype': 'init', 'session_id': 'claude-thread-1'}) + '\n'
+        r._redirect_prompt = 'Actually make that a trenta'   # the correction worker killed the run
+
+    proc = SimpleNamespace(pid=1234567, stdin=io.StringIO(), stdout=stdout(), returncode=None)
+    proc.poll = lambda: proc.returncode
+
+    def wait(timeout=None):
+        proc.returncode = -15
+        return -15
+    proc.wait = wait
+    monkeypatch.setattr(agent.subprocess, 'Popen', lambda *a, **k: proc)
+    monkeypatch.setattr(agent.operator_runtimes, 'build_cmd',
+                        lambda *a: SimpleNamespace(cmd=['claude', '-p', 'hello'], env={}))
+
+    followup = r._run_inner('claude', {'runtime': 'claude', 'config_dir': ''}, 'order a cold brew')
+
+    assert followup == 'Actually make that a trenta'
+    assert r._session_ids['claude-a'] == 'claude-thread-1'
+
+
+def test_a_correction_still_drops_a_killed_codex_thread(monkeypatch, tmp_path):
+    """codex keeps the old rule: a half-killed native thread is not resumed."""
+    import io
+    from types import SimpleNamespace
+    import operator_codex_transport as transport
+    monkeypatch.setenv('OPERATOR_CODEX_APP_SERVER', '1')
+    r = _redirected_runner(monkeypatch, tmp_path, 'gpt')
+    proc = SimpleNamespace(pid=1234567, stdin=io.StringIO(), returncode=None)
+    proc.poll = lambda: proc.returncode
+
+    def wait(timeout=None):
+        proc.returncode = -15
+        return -15
+    proc.wait = wait
+    monkeypatch.setattr(transport.os, 'killpg', lambda pid, sig: None)
+    monkeypatch.setattr(agent.subprocess, 'Popen', lambda *a, **k: proc)
+    monkeypatch.setattr(agent.operator_runtimes, 'build_cmd',
+                        lambda *a: SimpleNamespace(cmd=['codex', 'exec', 'hello'], env={}))
+
+    class Wire:
+        thread_id = 'codex-thread-1'
+
+        def __init__(self, process): pass
+
+        def begin(self, **kwargs): pass
+
+        def notifications(self):
+            r._redirect_prompt = 'Actually make that a trenta'
+            yield {'method': 'turn/completed', 'params': {'turn': {'status': 'interrupted'}}}
+    monkeypatch.setattr(transport, 'AppServer', Wire)
+
+    followup = r._run_inner('codex', {'runtime': 'codex', 'config_dir': ''}, 'order a cold brew')
+
+    assert followup == 'Actually make that a trenta'
+    assert 'gpt' not in r._session_ids
+
+
+def test_the_next_prompt_carries_what_the_user_did_by_hand(monkeypatch, tmp_path):
+    """A manual-control note (operator_steer.note_manual) rides at the top of
+    whatever prompt _run_inner builds next, then is consumed."""
+    import io
+    from types import SimpleNamespace
+    monkeypatch.setenv('OPERATOR_STEER_PATH', str(tmp_path / 'steer.ndjson'))
+    r = _redirected_runner(monkeypatch, tmp_path, 'claude-a')
+    queue.note_manual({'kind': 'click_at'}, 'a', url='https://shop.test/cart')
+    seen = []
+    proc = SimpleNamespace(pid=1234567, stdin=io.StringIO(), stdout=iter(()), returncode=None)
+    proc.poll = lambda: proc.returncode
+
+    def wait(timeout=None):
+        proc.returncode = 0
+        return 0
+    proc.wait = wait
+    monkeypatch.setattr(agent.subprocess, 'Popen', lambda *a, **k: proc)
+
+    def build(runtime, spec):
+        seen.append(spec.task)
+        return SimpleNamespace(cmd=['claude', '-p', spec.task], env={})
+    monkeypatch.setattr(agent.operator_runtimes, 'build_cmd', build)
+
+    r._run_inner('claude', {'runtime': 'claude', 'config_dir': ''}, 'now add a sandwich')
+
+    assert len(seen) == 1
+    note = seen[0].index('[The user drove the browser themselves')
+    assert 'https://shop.test/cart' in seen[0]
+    assert note < seen[0].index('now add a sandwich')   # the note precedes the request
+    assert queue.pending_manual('a') is None

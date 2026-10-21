@@ -9,8 +9,8 @@
 # own gameManager.simulateInput(player, buttonId, value) — verified live: it
 # advanced the title → NEW GAME/OPTION menu when X11 Enter did nothing. Button
 # ids (EmulatorJS GBA, dumped from window.EJS_emulator.controls[0]):
-#   0=A  8=B  2=Select  3=Start  4=Up  5=Down  6=Left  7=Right  10=L  11=R
-# The default keyboard bindings, if a key path is ever needed: A=X B=Z
+#   0=B  8=A  2=Select  3=Start  4=Up  5=Down  6=Left  7=Right  10=L  11=R
+# The default keyboard bindings, if a key path is ever needed: A=Z B=X
 # Start=Enter Select=V dpad=arrows L=Q R=E.
 #
 # So this map is perception-only (region OCR + menu-cursor color). The action

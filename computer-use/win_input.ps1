@@ -3,7 +3,7 @@
 # requests into a user-private queue; the Explorer launch is what gives this
 # process real input-desktop access. It exits after an idle grace period.
 #
-# Args: -Action <move|left_click|right_click|double_click|type|key|hotkey|scroll>
+# Args: -Action <move|left_click|right_click|double_click|type|paste_text|key|hotkey|scroll>
 #       -X <int> -Y <int>            (for move/click/scroll)
 #       -Text <string>               (for type)
 #       -Key <string>                (for key — SendKeys syntax, e.g. {ENTER};
@@ -79,9 +79,21 @@ namespace W {
     [DllImport("user32.dll", SetLastError=true)] static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint data, int extra);
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, int extra);
+    [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT {
+      public ushort wVk, wScan; public uint dwFlags, time; public IntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Explicit)] struct INPUTUNION {
+      [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct INPUT {
+      public uint type; public INPUTUNION u;
+    }
+    [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(
+      uint count, [In] INPUT[] inputs, int size);
 
     const uint GENERIC_ALL=0x10000000, LEFTDOWN=0x02, LEFTUP=0x04,
-      RIGHTDOWN=0x08, RIGHTUP=0x10, WHEEL=0x0800;
+      RIGHTDOWN=0x08, RIGHTUP=0x10, WHEEL=0x0800,
+      INPUT_KEYBOARD=1, KEYEVENTF_UNICODE=0x0004, KEYEVENTF_KEYUP=0x0002;
     static readonly Dictionary<string, byte> Keys = new Dictionary<string, byte>(StringComparer.OrdinalIgnoreCase) {
       {"ctrl",0x11},{"control",0x11},{"alt",0x12},{"shift",0x10},
       {"win",0x5B},{"windows",0x5B},{"super",0x5B},{"meta",0x5B},{"cmd",0x5B},
@@ -116,6 +128,29 @@ namespace W {
       for (int i=0;i<names.Length;i++) { codes[i]=KeyCode(names[i]); keybd_event(codes[i],0,Extended(codes[i])?1u:0u,0); Thread.Sleep(15); }
       for (int i=codes.Length-1;i>=0;i--) { keybd_event(codes[i],0,Extended(codes[i])?3u:2u,0); Thread.Sleep(15); }
     }
+    static void PasteText(string text) {
+      // SendKeys treats +, ^, %, braces, and parentheses as commands. A paste
+      // must be literal and must not replace the user's Windows clipboard.
+      // KEYEVENTF_UNICODE sends UTF-16 code units through VK_PACKET, including
+      // surrogate pairs, without depending on the active keyboard layout.
+      var batch=new List<INPUT>(512);
+      foreach (char ch in text ?? "") {
+        foreach (uint flags in new uint[] {KEYEVENTF_UNICODE,
+                                           KEYEVENTF_UNICODE|KEYEVENTF_KEYUP}) {
+          batch.Add(new INPUT {type=INPUT_KEYBOARD,
+            u=new INPUTUNION {ki=new KEYBDINPUT {wScan=ch, dwFlags=flags}}});
+        }
+        if (batch.Count >= 512) {
+          uint sent=SendInput((uint)batch.Count,batch.ToArray(),Marshal.SizeOf(typeof(INPUT)));
+          if (sent != batch.Count) throw new Win32Exception(Marshal.GetLastWin32Error(),"SendInput paste failed");
+          batch.Clear();
+        }
+      }
+      if (batch.Count > 0) {
+        uint sent=SendInput((uint)batch.Count,batch.ToArray(),Marshal.SizeOf(typeof(INPUT)));
+        if (sent != batch.Count) throw new Win32Exception(Marshal.GetLastWin32Error(),"SendInput paste failed");
+      }
+    }
     static void Execute(string kind,int x,int y,string text,string key,int amount) {
       if (kind=="probe") { POINT p; if (!GetCursorPos(out p)) throw new Win32Exception(); Move(p.X,p.Y); }
       else if (kind=="move") Move(x,y);
@@ -123,6 +158,7 @@ namespace W {
       else if (kind=="right_click") { Move(x,y); mouse_event(RIGHTDOWN,0,0,0,0); mouse_event(RIGHTUP,0,0,0,0); }
       else if (kind=="double_click") { Move(x,y); mouse_event(LEFTDOWN,0,0,0,0); mouse_event(LEFTUP,0,0,0,0); Thread.Sleep(60); mouse_event(LEFTDOWN,0,0,0,0); mouse_event(LEFTUP,0,0,0,0); }
       else if (kind=="type") SendKeys.SendWait(text ?? "");
+      else if (kind=="paste_text") PasteText(text);
       else if (kind=="key") SendKeys.SendWait(key ?? "");
       else if (kind=="hotkey") Hotkey(key ?? "");
       else if (kind=="scroll") { Move(x,y); mouse_event(WHEEL,0,0,unchecked((uint)(amount*120)),0); }

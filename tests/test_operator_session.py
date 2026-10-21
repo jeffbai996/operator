@@ -45,6 +45,13 @@ def _app(demo: bool, tmp_path, monkeypatch):
 
 # ------------------------------------------------------------- store unit --
 
+def test_save_preserves_server_owned_app_origin(store):
+    sid = store.create('Personal task', origin='app')['id']
+    store.save({'log': '', 'origin': 'mcp'}, conversation_id=sid)
+    assert store.is_personal_app(sid)
+    assert store.create('Another task')['id'] != sid
+
+
 def test_store_round_trip(store):
     assert store.load() == {"rev": 0, "conversation_rev": 0, "data": None}
     r1 = store.save({"log": "<div>hi</div>", "mode": "auto"})
@@ -79,7 +86,7 @@ def test_session_routes_round_trip(tmp_path, monkeypatch):
     r = c.get("/operator/session")
     assert r.status_code == 200 and r.get_json() == {
         "ok": True, "rev": 0, "conversation_rev": 0,
-        "data": None, "conversation_id": "legacy"}
+        "data": None, "conversation_id": "legacy", 'browser_job': False}
     r = c.post("/operator/session",
                json={"data": {"log": "<div>from ipad</div>", "mode": "man"}})
     assert r.status_code == 200 and r.get_json()["rev"] == 1
@@ -276,7 +283,7 @@ def test_device_control_is_observer_first_and_takeover_is_explicit(store):
     assert old["controller_label"] == "iPhone"
 
 
-def test_abandoned_device_control_expires(store, monkeypatch):
+def test_expired_phone_lease_requires_explicit_takeover(store, monkeypatch):
     now = [100.0]
     monkeypatch.setattr(store, "_clock", lambda: now[0])
     store.save({"log": "thread"}, conversation_id="legacy")
@@ -284,8 +291,16 @@ def test_abandoned_device_control_expires(store, monkeypatch):
 
     now[0] += store.PRESENCE_TTL + 0.1
     claimed = store.touch_presence("legacy", "desktop", "Windows")
-    assert claimed["can_control"] is True
-    assert claimed["controller_label"] == "Windows"
+    assert claimed["can_control"] is False
+    assert claimed["controller_label"] == "iPhone"
+    # Reads cannot erase the expired reservation either.
+    assert store.presence('legacy', 'desktop')['controller_label'] == 'iPhone'
+    assert not store.touch_presence('legacy', 'desktop', 'Windows')['can_control']
+    assert store.touch_presence('legacy', 'phone', 'iPhone')['can_control']
+    now[0] += store.PRESENCE_TTL + 0.1
+    taken = store.touch_presence('legacy', 'desktop', 'Windows', take_over=True)
+    assert taken['can_control']
+    assert not store.touch_presence('legacy', 'phone', 'iPhone')['can_control']
 
 
 def test_rename_sticks_and_is_clipped(store):
@@ -491,6 +506,21 @@ def test_conversation_routes_reject_a_bad_id_and_action(tmp_path, monkeypatch):
                   json={"action": "rename"}).status_code == 400
 
 
+def test_deleting_a_chat_retires_its_runner(tmp_path, monkeypatch):
+    # Audit F08: the library row and workspace went, the worker's runner stayed.
+    app = _app(False, tmp_path, monkeypatch)
+    c = app.test_client()
+    c.post("/operator/session", json={"data": {"log": "x"}})
+    sid = c.get("/operator/sessions").get_json()["active"]
+    mod = importlib.import_module("operator_view")
+    retired = []
+    monkeypatch.setattr(mod.operator_agent.runner, "retire",
+                        lambda cid: retired.append(cid) or {"ok": True})
+    monkeypatch.setattr(mod, "_browser_tab_command", lambda *a, **k: True)
+    assert c.delete(f"/operator/sessions/{sid}").status_code == 200
+    assert retired == [sid]
+
+
 def test_conversation_routes_demo_gated(tmp_path, monkeypatch):
     app = _app(True, tmp_path, monkeypatch)
     c = app.test_client()
@@ -570,3 +600,11 @@ def test_prune_never_takes_the_active_chat(store):
     made = store.create("bot", activate=True, reuse_draft=False, origin="mcp")
     store._touch_for_test(made["id"], 1.0)
     assert store.prune_delegations(now=10 * 86400) == []
+
+
+def test_personal_app_chat_is_not_reused_or_pruned(store):
+    app = store.create('Personal app', activate=False, reuse_draft=False, origin='app')
+    human = store.create('Cockpit')
+    assert human['id'] != app['id']
+    store._touch_for_test(app['id'], 1)
+    assert app['id'] not in store.prune_candidates(now=10 * 86400)

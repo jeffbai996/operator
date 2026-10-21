@@ -1,12 +1,22 @@
 version: 1
 defaults:
-  runtime: agy-flash
+  runtime: agy-argon
   gpt-api: codex-luna
   gpt-codex: codex-sol
   summarization: qwen-local
+  claude-bot: claude-opus
+  gem-api: agy-argon
+  librarian: agy-flash
+  fragwire-claude: claude-sonnet
+  fragwire-agy: agy-argon
+  fragwire-gemini: agy-argon
+  fragwire-codex: codex-terra
+  fragwire-ollama: qwen-local
+  fragwire-flash-next: fragmini-flash-next
 models:
   codex-astra:
     slug: gpt-6-astra
+    speeds: [fast, ultrafast]
     label: GPT 6 Astra
     transport: codex
     efforts:
@@ -23,9 +33,10 @@ models:
       output: 50.0
       cache_read: 1.0
       cache_write: 12.5
-      cache_write_1h: 20.0
+      cache_write_1h: null
   codex-terra:
     slug: gpt-5.6-terra
+    speeds: [fast]
     label: GPT 5.6 Terra
     transport: codex
     efforts:
@@ -42,10 +53,11 @@ models:
       output: 12.0
       cache_read: 0.2
       cache_write: 2.5
-      cache_write_1h: 4.0
+      cache_write_1h: null
   codex-sol:
-    slug: gpt-6-sol
-    label: GPT 6 Sol
+    slug: gpt-6.1-sol
+    speeds: [fast, ultrafast]
+    label: GPT 6.1 Sol
     transport: codex
     efforts:
     - low
@@ -59,11 +71,40 @@ models:
     rates:
       input: 2.0
       output: 10.0
-      cache_read: 0.2
+      cache_read: 0.1
       cache_write: 2.5
-      cache_write_1h: 4.0
+      cache_write_1h: null
+  agy-argon:
+    slug: gemini-4-argon
+    label: Gemini 4 Argon
+    transport: agy
+    efforts:
+    - low
+    - medium
+    - high
+    default_effort: medium
+    runtime: true
+    timeout_s: 1200
+    max_output_tokens: 65536
+    cache_min_tokens: 4096
+    capabilities:
+      explicit_cache: false
+      thinking_levels: [low, medium, high]
+      max_output_tokens: 32768
+    rates:
+      input: 2.0
+      output: 10.0
+      cache_read: 0.1
+      cache_write: null
+      cache_write_1h: null
+    rates_after:
+      at: '2026-12-01T00:00:00+00:00'
+      input: 4.0
+      output: 20.0
+      cache_read: 0.2
   agy-flash:
     slug: gemini-3.8-flash
+    cache_min_tokens: 1024
     label: Gemini 3.8 Flash
     transport: agy
     efforts:
@@ -72,16 +113,19 @@ models:
     - high
     default_effort: high
     runtime: true
+    # A dream writes 50-60K output tokens. Flash through agy ran ~400 tok/s
+    # until 2026-10-05 and measured 100-200 tok/s on 2026-10-07, so the
+    # 300 s default timed out every scheduled pass from 2026-10-06 07:05.
+    timeout_s: 600
     rates:
       input: 0.75
       output: 3.75
       cache_read: 0.07500000000000001
       cache_write: null
       cache_write_1h: null
-    price_in_ledger: false
   claude-sonnet:
-    slug: claude-sonnet-5
-    label: Claude Sonnet 5
+    slug: claude-sonnet-5-5
+    label: Claude Sonnet 5.5
     transport: claude
     efforts:
     - low
@@ -95,11 +139,29 @@ models:
     rates:
       input: 2.0
       output: 10.0
-      cache_read: 0.2
+      cache_read: 0.1
       cache_write: 2.5
       cache_write_1h: 4.0
     pin_variants:
     - ''
+  legacy-claude-sonnet-5:
+    slug: claude-sonnet-5
+    label: Claude Sonnet 5
+    transport: historical
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    default_effort: medium
+    retired_by: claude-sonnet
+    rates:
+      input: 2.0
+      output: 10.0
+      cache_read: 0.2
+      cache_write: 2.5
+      cache_write_1h: 4.0
   claude-opus:
     slug: claude-opus-5-5
     label: Claude Opus 5.5
@@ -145,6 +207,39 @@ models:
     pin_variants:
     - ''
     - '[1m]'
+  claude-mythos:
+    slug: claude-mythos-5-1
+    label: Claude Mythos 5.1
+    transport: claude
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    default_effort: high
+    alias: mythos
+    rates:
+      input: 10.0
+      output: 50.0
+      cache_read: 0.25
+      cache_write: 12.5
+      cache_write_1h: 20.0
+    pin_variants:
+    - ''
+    - '[1m]'
+  fragmini-flash-next:
+    slug: qwen3.8-flash-next
+    label: Qwen3.8 Flash-Next · local
+    transport: llamacpp
+    efforts:
+    - standard
+    default_effort: standard
+    runtime: true
+    endpoint: fragmini_llama
+    max_output_tokens: 8192
+    timeout_s: 900
+    fallback: agy-flash
   qwen-local:
     slug: qwen3.8:27b
     label: Qwen 3.8 27B · local
@@ -155,6 +250,7 @@ models:
     runtime: true
   codex-luna:
     slug: gpt-6-luna
+    speeds: [fast]
     label: GPT 6 Luna
     transport: codex
     efforts:
@@ -169,7 +265,7 @@ models:
       output: 0.5
       cache_read: 0.010000000000000002
       cache_write: 0.125
-      cache_write_1h: 0.2
+      cache_write_1h: null
   codex-daybreak:
     slug: gpt-daybreak-blue-latest
     label: Daybreak Blue
@@ -187,24 +283,43 @@ models:
       output: 20.0
       cache_read: 0.4
       cache_write: 5.0
-      cache_write_1h: 8.0
+      cache_write_1h: null
     rate_match: gpt-daybreak-blue
   claude-haiku:
+    slug: claude-haiku-5-5
+    label: Claude Haiku 5.5
+    transport: claude
+    efforts:
+    - low
+    - medium
+    - high
+    - xhigh
+    - max
+    default_effort: medium
+    runtime: true
+    alias: haiku
+    rates:
+      input: 0.1
+      output: 0.5
+      cache_read: 0.01
+      cache_write: 0.125
+      cache_write_1h: 0.2
+    pin_variants:
+    - ''
+  legacy-claude-haiku-4-5:
     slug: claude-haiku-4-5
     label: Claude Haiku 4.5
-    transport: claude
+    transport: historical
     efforts: []
     default_effort: null
-    alias: haiku
+    retired_by: claude-haiku
+    rate_match: haiku
     rates:
       input: 1.0
       output: 5.0
       cache_read: 0.1
       cache_write: 1.25
       cache_write_1h: 2.0
-    pin_variants:
-    - ''
-    rate_match: haiku
   legacy-opus:
     slug: opus
     label: opus
@@ -232,6 +347,7 @@ models:
       cache_write: 3.75
       cache_write_1h: 6.0
   legacy-mythos:
+    retired_by: claude-mythos
     slug: mythos
     label: mythos
     transport: historical
@@ -256,7 +372,7 @@ models:
       output: 75.0
       cache_read: 1.25
       cache_write: 15.625
-      cache_write_1h: 25.0
+      cache_write_1h: null
   legacy-gpt-5.6-luna:
     slug: gpt-5.6-luna
     label: gpt-5.6-luna
@@ -269,7 +385,7 @@ models:
       output: 1.2
       cache_read: 0.020000000000000004
       cache_write: 0.25
-      cache_write_1h: 0.4
+      cache_write_1h: null
     retired_by: codex-luna
   legacy-gpt-5.6-sol:
     slug: gpt-5.6-sol
@@ -283,7 +399,22 @@ models:
       output: 20.0
       cache_read: 0.4
       cache_write: 5.0
-      cache_write_1h: 8.0
+      cache_write_1h: null
+    retired_by: codex-sol
+  legacy-gpt-6-sol:
+    slug: gpt-6-sol
+    speeds: [fast]
+    label: gpt-6-sol
+    transport: historical
+    efforts: []
+    default_effort: null
+    rate_match: gpt-6-sol
+    rates:
+      input: 2.0
+      output: 10.0
+      cache_read: 0.2
+      cache_write: 2.5
+      cache_write_1h: null
     retired_by: codex-sol
   legacy-gpt-5.4-mini:
     slug: gpt-5.4-mini
@@ -296,8 +427,8 @@ models:
       input: 0.75
       output: 4.5
       cache_read: 0.07500000000000001
-      cache_write: 0.9375
-      cache_write_1h: 1.5
+      cache_write: null
+      cache_write_1h: null
   legacy-gpt-5.3-codex:
     slug: gpt-5.3-codex
     label: gpt-5.3-codex
@@ -309,8 +440,8 @@ models:
       input: 1.75
       output: 14.0
       cache_read: 0.17500000000000002
-      cache_write: 2.1875
-      cache_write_1h: 3.5
+      cache_write: null
+      cache_write_1h: null
   legacy-gpt-5.5:
     slug: gpt-5.5
     label: gpt-5.5
@@ -322,8 +453,8 @@ models:
       input: 5.0
       output: 30.0
       cache_read: 0.5
-      cache_write: 6.25
-      cache_write_1h: 10.0
+      cache_write: null
+      cache_write_1h: null
   legacy-gpt-5.4:
     slug: gpt-5.4
     label: gpt-5.4
@@ -335,8 +466,8 @@ models:
       input: 2.5
       output: 15.0
       cache_read: 0.25
-      cache_write: 3.125
-      cache_write_1h: 5.0
+      cache_write: null
+      cache_write_1h: null
   legacy-daybreak:
     slug: daybreak
     label: daybreak
@@ -349,7 +480,7 @@ models:
       output: 20.0
       cache_read: 0.4
       cache_write: 5.0
-      cache_write_1h: 8.0
+      cache_write_1h: null
   legacy-gpt-5:
     slug: gpt-5
     label: gpt-5
@@ -361,8 +492,8 @@ models:
       input: 1.25
       output: 10.0
       cache_read: 0.125
-      cache_write: 1.5625
-      cache_write_1h: 2.5
+      cache_write: null
+      cache_write_1h: null
   legacy-codex:
     slug: codex
     label: codex
@@ -374,8 +505,8 @@ models:
       input: 1.25
       output: 10.0
       cache_read: 0.125
-      cache_write: 1.5625
-      cache_write_1h: 2.5
+      cache_write: null
+      cache_write_1h: null
   legacy-fable:
     slug: claude-fable-5
     label: Claude Fable 5
@@ -406,21 +537,72 @@ models:
     efforts: []
     default_effort: null
     retired_by: agy-flash
+  agy-sonnet-5-5-medium:
+    slug: claude-sonnet-5-5-medium
+    agy_id: claude-sonnet-5-5-medium
+    label: Claude Sonnet 5.5 (Medium)
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-sonnet-5-5-high:
+    slug: claude-sonnet-5-5-high
+    agy_id: claude-sonnet-5-5-high
+    label: Claude Sonnet 5.5 (High)
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-sonnet-5-5-low:
+    slug: claude-sonnet-5-5-low
+    agy_id: claude-sonnet-5-5-low
+    label: Claude Sonnet 5.5 (Low)
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-opus-5-5-medium:
+    slug: claude-opus-5-5-medium
+    agy_id: claude-opus-5-5-medium
+    label: Claude Opus 5.5 (Medium)
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-opus-5-5-high:
+    slug: claude-opus-5-5-high
+    agy_id: claude-opus-5-5-high
+    label: Claude Opus 5.5 (High)
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-opus-5-5-low:
+    slug: claude-opus-5-5-low
+    agy_id: claude-opus-5-5-low
+    label: Claude Opus 5.5 (Low)
+    transport: agy
+    efforts: []
+    default_effort: null
   agy-claude-sonnet-4-6-thinking:
     slug: Claude Sonnet 4.6 (Thinking)
+    agy_id: claude-sonnet-4-6
     label: Sonnet 4.6
     transport: agy
     efforts: []
     default_effort: null
   agy-claude-opus-4-6-thinking:
     slug: Claude Opus 4.6 (Thinking)
+    agy_id: claude-opus-4-6-thinking
     label: Opus 4.6
     transport: agy
     efforts: []
     default_effort: null
   agy-gpt-oss-120b-medium:
     slug: GPT-OSS 120B (Medium)
+    agy_id: gpt-oss-120b-medium
     label: GPT-OSS 120B
+    transport: agy
+    efforts: []
+    default_effort: null
+  agy-argon-low:
+    slug: gemini-4-argon-low
+    label: 4 Argon
     transport: agy
     efforts: []
     default_effort: null
@@ -432,6 +614,8 @@ models:
     default_effort: null
   api-pro:
     slug: gemini-3.1-pro-preview
+    agy_id: gemini-3.1-pro
+    cache_min_tokens: 4096
     label: Pro 3.1
     transport: gemini
     efforts: []
@@ -442,7 +626,6 @@ models:
       cache_read: 0.2
       cache_write: null
       cache_write_1h: null
-    price_in_ledger: false
 surfaces:
   operator-claude:
   - &id001
@@ -464,18 +647,20 @@ surfaces:
   - key: codex-luna
     value: slug
   operator-gem:
+  - key: agy-argon
+    value: slug
   - key: agy-flash
     value: slug
-  - key: agy-claude-sonnet-4-6-thinking
+  - key: agy-sonnet-5-5-medium
     value: slug
-  - key: agy-claude-opus-4-6-thinking
+  - key: agy-opus-5-5-medium
     value: slug
   - key: agy-gpt-oss-120b-medium
     value: slug
   operator-demo:
-  - key: agy-gemini-3-8-flash-low
+  - key: agy-argon-low
     value: slug
-  - key: agy-claude-sonnet-4-6-thinking
+  - key: agy-sonnet-5-5-medium
     value: slug
   operator-claude-a:
   - key: claude-fable
@@ -483,6 +668,43 @@ surfaces:
   - *id001
   - *id002
   - *id003
+  claude-cli:
+  - key: claude-fable
+  - key: claude-mythos
+  - key: claude-opus
+  - key: claude-sonnet
+  - key: claude-haiku
+  claude-bot:
+  - key: claude-fable
+  - key: claude-mythos
+  - key: claude-opus
+    saved_aliases:
+    - claude-opus-5
+  - key: claude-sonnet
+  - key: claude-haiku
+    saved_aliases:
+    - claude-haiku-4-5
+  gem-api:
+  - key: agy-argon
+  - key: agy-flash
+  - key: api-pro
+    label: Gemini 3.1 Pro
+  gem-agy:
+  - key: agy-argon
+    variants: [medium, high, low]
+  - key: agy-flash
+    variants:
+    - medium
+    - high
+    - low
+  - key: agy-sonnet-5-5-medium
+  - key: agy-sonnet-5-5-high
+  - key: agy-sonnet-5-5-low
+  - key: agy-opus-5-5-medium
+  - key: agy-opus-5-5-high
+  - key: agy-opus-5-5-low
+  - key: agy-gpt-oss-120b-medium
+    label: GPT-OSS 120B (Medium)
   gpt:
   - key: codex-astra
   - key: codex-sol
@@ -490,20 +712,20 @@ surfaces:
   - key: codex-luna
   - key: codex-daybreak
   ticker:
+  - key: agy-argon
+    name: argon
+    options:
+      provider: gemini
+      thinking_level: low
+      explicit_cache: false
+      cot: true
+      max_context: 900000
+      max_output_tokens: 65536
   - key: agy-flash
     name: flash
     options:
       provider: gemini
       thinking_budget: 1024
-      key_env: GEMINI_API_KEY
-      cot: true
-      max_context: 900000
-  - key: api-pro
-    name: pro
-    options:
-      provider: gemini
-      thinking_budget: 2048
-      key_env: GEMINI_API_KEY
       cot: true
       max_context: 900000
   - key: claude-sonnet
@@ -513,7 +735,6 @@ surfaces:
       thinking_budget: 4096
       thinking_mode: adaptive
       effort: high
-      key_env: ANTHROPIC_API_KEY
       cot: true
       max_context: 1000000
   - key: claude-opus
@@ -523,7 +744,6 @@ surfaces:
       thinking_budget: 8192
       thinking_mode: adaptive
       effort: high
-      key_env: ANTHROPIC_API_KEY
       cot: true
       max_context: 180000
   - key: claude-fable
@@ -532,7 +752,6 @@ surfaces:
       provider: anthropic
       thinking_mode: adaptive
       effort: medium
-      key_env: ANTHROPIC_API_KEY
       cot: false
       max_context: 180000
   - key: codex-sol
@@ -541,7 +760,6 @@ surfaces:
       provider: openai
       thinking_budget: 0
       reasoning_effort: low
-      key_env: OPENAI_API_KEY
       cot: true
       max_context: 120000
   - key: codex-terra
@@ -550,7 +768,6 @@ surfaces:
       provider: openai
       thinking_budget: 0
       reasoning_effort: high
-      key_env: OPENAI_API_KEY
       cot: true
       max_context: 120000
   - key: codex-luna
@@ -559,7 +776,6 @@ surfaces:
       provider: openai
       thinking_budget: 0
       reasoning_effort: high
-      key_env: OPENAI_API_KEY
       cot: true
       max_context: 120000
   - key: codex-astra
@@ -568,9 +784,57 @@ surfaces:
       provider: openai
       thinking_budget: 0
       reasoning_effort: medium
-      key_env: OPENAI_API_KEY
       cot: true
       max_context: 120000
+  fragwire:
+  - key: qwen-local
+    label: Qwen 3.8-27B
+    group: Local
+    fixed_effort: high
+  - key: fragmini-flash-next
+    name: qwen-flash-next
+    label: Qwen Flash-Next
+    group: Local
+    fixed_effort: medium
+  - key: agy-argon
+    group: Antigravity
+  - key: agy-flash
+    group: Antigravity
+  - key: claude-sonnet
+    group: Claude Code
+  - key: claude-opus
+    group: Claude Code
+    value: alias
+  - key: claude-opus
+    name: agy-opus
+    group: Antigravity
+    runtime: agy
+    fixed_effort: medium
+  - key: codex-astra
+    name: gpt-astra
+    group: Codex
+  - key: codex-terra
+    name: gpt-terra
+    group: Codex
+    default_effort: high
+  - key: codex-sol
+    name: gpt-sol
+    group: Codex
+    default_effort: low
+  fragwire-family:
+  - key: claude-sonnet
+    name: family-sonnet
+    group: Antigravity
+    fixed_effort: medium
+  - key: claude-opus
+    name: family-opus
+    group: Antigravity
+    fixed_effort: low
+  - key: agy-argon
+    name: family-flash
+    group: Antigravity
+    fixed_effort: low
+    fallback: true
 legacy_pins:
 - claude-fable-5
 - claude-opus-4-8

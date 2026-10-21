@@ -174,9 +174,22 @@ class BrowserSurface(_BaseSurface):
         await self._pick_page()
 
     async def _pick_page(self) -> None:
-        """Bind to the visible page (fallback: the most recent one)."""
+        """Bind to the conversation's owned target; unscoped local control follows visibility."""
         if not self._browser.contexts:
             raise SurfaceError("no browser context on the CDP endpoint")
+        cid = os.environ.get("OPERATOR_CONVERSATION_ID", "")
+        if cid:
+            from operator_browser_target import resolve_owned_page
+            if not hasattr(self, "_target_ids"):
+                self._target_ids = {}
+            try:
+                chosen = await resolve_owned_page(self._browser, cid, self._page, self._target_ids)
+            except RuntimeError as e:
+                raise SurfaceError(str(e)) from e
+            if chosen is not self._page:
+                self._page, self._sess = chosen, None
+                await self._force_dark_media()
+            return
         pages = [p for p in self._browser.contexts[0].pages if not p.is_closed()]
         if not pages:
             raise SurfaceError("no open pages")
@@ -238,6 +251,12 @@ class BrowserSurface(_BaseSurface):
 
     async def _send(self, method: str, params: dict | None = None,
                     timeout: float = 4.0):
+        cid = os.environ.get("OPERATOR_CONVERSATION_ID", "")
+        if cid:
+            from operator_browser_target import owned_targets
+            if (self._page is None or self._page.is_closed()
+                    or self._target_ids.get(self._page) not in owned_targets(cid)):
+                raise SurfaceError("owned browser target changed; capture a fresh frame")
         sess = await self._session()
         try:
             return await asyncio.wait_for(sess.send(method, params or {}),

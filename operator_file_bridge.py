@@ -227,7 +227,15 @@ class DownloadBridge:
                         await self.session.send('Browser.cancelDownload', {'guid': guid})
                     await asyncio.to_thread(self.failed, guid, 'Storage limit reached' if over_limit else 'Download canceled')
                     return
+                if event.get('state') == 'inProgress':
+                    return
                 if event.get('state') != 'completed':
+                    # CDP Browser.downloadProgress reports inProgress, completed
+                    # or canceled. Anything else is a state this code has not
+                    # seen: fail the transfer visibly instead of leaving it
+                    # "downloading" for good.
+                    await asyncio.to_thread(
+                        self.failed, guid, f"Download ended in unrecognised state {event.get('state')!r}")
                     return
                 await asyncio.to_thread(self.complete, asset)
             except Exception:
@@ -299,6 +307,8 @@ class DownloadService:
 
     async def serve(self):
         from playwright.async_api import async_playwright
+        from operator_observability import quiet_closed_target_futures
+        asyncio.get_running_loop().set_exception_handler(quiet_closed_target_futures)
         endpoint = os.environ.get('OPERATOR_DEMO_CDP') or 'http://127.0.0.1:9222'
         async with async_playwright() as pw:
             while time.monotonic() - self.last_use < 60 or await asyncio.to_thread(_background_work):

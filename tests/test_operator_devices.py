@@ -40,3 +40,11 @@ def test_timeout_miss_is_cached_and_preserves_device_fallback(monkeypatch):
     assert devices.device_label('100.100.10.20', 'Windows') == 'Windows'
     assert devices.device_label('100.100.10.20', 'Mac') == 'Mac'
     assert len(calls) == 1
+
+
+def test_phone_localhost_uses_browser_device_label(monkeypatch):
+    monkeypatch.setattr(devices.subprocess, 'run', lambda *a, **kw: SimpleNamespace(
+        stdout=json.dumps({'Node': {'Name': 'iphone184.example.ts.net.',
+                                   'Hostinfo': {'Hostname': 'localhost'}}})))
+    assert devices.device_label('100.100.10.20', 'iPhone') == 'iPhone'
+    assert devices.device_label('100.100.10.20', 'iPhone') == 'iPhone'

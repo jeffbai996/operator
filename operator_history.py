@@ -17,8 +17,10 @@ import json
 import logging
 import os
 import sqlite3
+import re
 import threading
 import time
+from operator_observability import public_data, public_text
 
 log = logging.getLogger("operator.history")
 
@@ -64,6 +66,8 @@ def _conn() -> sqlite3.Connection:
     cols = {row[1] for row in c.execute("PRAGMA table_info(runs)")}
     if "conversation_id" not in cols:
         c.execute("ALTER TABLE runs ADD COLUMN conversation_id TEXT DEFAULT ''")
+    if "usage_json" not in cols:
+        c.execute("ALTER TABLE runs ADD COLUMN usage_json TEXT")
     c.execute("CREATE INDEX IF NOT EXISTS runs_conversation_id ON runs(conversation_id, id)")
     return c
 
@@ -76,7 +80,7 @@ def clear_conversation_history(conversation_id: str) -> None:
 
 
 def conversation_turns(conversation_id: str, *, before: int = 0, after: int = 0, limit: int = 30) -> dict:
-    """Bounded, conversation-scoped transcript pages, without bulky tool traces.
+    """Conversation-scoped transcript pages with bounded public activity.
 
     Historical rows with no conversation identity are intentionally not guessed
     into legacy. Original trace details remain available via get(run_id).
@@ -86,20 +90,30 @@ def conversation_turns(conversation_id: str, *, before: int = 0, after: int = 0,
         boundary = c.execute('SELECT through_id, cleared_ts FROM conversation_clears WHERE conversation_id=?',
                              (conversation_id,)).fetchone()
         floor = max(after, boundary[0] if boundary else 0)
-        rows = c.execute('SELECT id, started_ts, task, state, bot, model, trace FROM runs '
+        rows = c.execute('SELECT id, started_ts, task, state, bot, model, trace, ended_ts, effort, cum_in_tokens, usage_json FROM runs '
             'WHERE conversation_id=? AND demo=0 AND id>? AND (?=0 OR id<?) AND COALESCE(started_ts, 0)>? '
             'ORDER BY id DESC LIMIT ?', (conversation_id, floor, before, before, boundary[1] if boundary else -1, limit + 1)).fetchall()
     more = len(rows) > limit
     turns = []
-    for ident, started, task, state, bot, model, raw in reversed(rows[:limit]):
+    for ident, started, task, state, bot, model, raw, ended, effort, inputs, usage_raw in reversed(rows[:limit]):
         try:
             trace = json.loads(raw or '[]')
         except (ValueError, TypeError):
             trace = []
         final = next((m.get('text', '') for m in reversed(trace) if isinstance(m, dict)
                       and m.get('role') == 'assistant' and m.get('text')), '') if isinstance(trace, list) else ''
-        turns.append(dict(id=ident, started_ts=started, task=task, state=state,
-                          bot=bot, model=model, final=final))
+        try:
+            usage = json.loads(usage_raw or '{}')
+        except (ValueError, TypeError):
+            usage = {}
+        activity = [m for m in trace if isinstance(m, dict) and m.get('role') in
+                    ('thinking', 'action', 'notice', 'error')] if isinstance(trace, list) else []
+        turns.append(public_data(dict(id=ident, started_ts=started, ended_ts=ended,
+                          task=task, state=state, bot=bot, model=model, effort=effort, final=final,
+                          cumulative_in_tokens=inputs, usage=usage,
+                          cumulative_out_tokens=usage.get('outputTokens'),
+                          step_count=usage.get('stepCount'),
+                          messages=activity[-100:])))
     return {'turns': turns, 'has_more': more,
             'cleared_through_id': boundary[0] if boundary else 0,
             'cleared_ts': boundary[1] if boundary else 0,
@@ -124,7 +138,7 @@ def _to_float(v) -> float | None:
 def _capped_trace(messages) -> str:
     """JSON trace capped to MAX_TRACE_BYTES by dropping the OLDEST entries —
     default=str so an exotic object in a message can't kill the record."""
-    msgs = list(messages or [])[-400:]
+    msgs = public_data(list(messages or [])[-400:])
     while msgs:
         blob = json.dumps(msgs, ensure_ascii=False, default=str)
         if len(blob.encode("utf-8")) <= MAX_TRACE_BYTES:
@@ -133,19 +147,32 @@ def _capped_trace(messages) -> str:
     return "[]"
 
 
+def _step_count(messages) -> int:
+    # Match the cockpit: verification/retry notices are action steps too.
+    return sum(m.get('role') == 'action' or (
+        m.get('role') == 'notice' and (m.get('reason') in ('verification', 'retry') or
+        bool(re.match(r'^(?:🔎\s*)?Completion check|^(?:🔁\s*)?Auto-replan',
+                      str(m.get('text') or '').strip()))))
+        for m in messages if isinstance(m, dict))
+
+
 def record(runner, reason: str = "") -> int | None:
     """Persist one finished run off the live runner object. Never raises."""
     try:
         started = _to_float(getattr(runner, "started_ts", None))
         ended = _to_float(getattr(runner, "ended_ts", None)) or time.time()
         msgs = getattr(runner, "messages", None) or []
+        usage = dict(getattr(runner, '_native_usage', {}) or {})
+        if getattr(runner, '_output_usage_seen', False):
+            usage['outputTokens'] = getattr(runner, '_cumulative_out_tokens', 0)
+        usage['stepCount'] = _step_count(msgs)
         row = (
             started, ended,
             str(getattr(runner, "conversation_id", "") or ""),
             str(getattr(runner, "bot", "") or ""),
             str(getattr(runner, "task", "") or ""),
             str(getattr(runner, "state", "") or ""),
-            str(reason or ""),
+            public_text(str(reason or "")),
             str(getattr(runner, "model", "") or ""),
             str(getattr(runner, "effort", "") or ""),
             str(getattr(runner, "_runtime", "") or ""),
@@ -155,6 +182,7 @@ def record(runner, reason: str = "") -> int | None:
             _to_int(getattr(runner, "_peak_in_tokens", None)),
             len(msgs),
             _capped_trace(msgs),
+            json.dumps(usage),
         )
         with _LOCK:
             with _conn() as c:
@@ -162,8 +190,8 @@ def record(runner, reason: str = "") -> int | None:
                     "INSERT INTO runs (started_ts, ended_ts, conversation_id,"
                     " bot, task, state,"
                     " reason, model, effort, runtime, surface, demo,"
-                    " cum_in_tokens, peak_in_tokens, n_messages, trace)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                    " cum_in_tokens, peak_in_tokens, n_messages, trace, usage_json)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
                 return cur.lastrowid
     except Exception as e:  # noqa: BLE001 — by contract: never break a run
         log.warning("history record failed (run unaffected): %s", e)
@@ -184,7 +212,7 @@ def recent(limit: int = 50) -> list[dict]:
             d["duration_s"] = (round(d["ended_ts"] - d["started_ts"], 1)
                                if d.get("started_ts") and d.get("ended_ts")
                                else None)
-            out.append(d)
+            out.append(public_data(d))
         return out
     except Exception as e:  # noqa: BLE001
         log.warning("history read failed: %s", e)
@@ -209,7 +237,7 @@ def get(run_id: int) -> dict | None:
             d["trace"] = json.loads(r[-1] or "[]")
         except Exception:  # noqa: BLE001
             d["trace"] = []
-        return d
+        return public_data(d)
     except Exception as e:  # noqa: BLE001
         log.warning("history read failed: %s", e)
         return None

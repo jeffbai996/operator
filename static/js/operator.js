@@ -5,6 +5,7 @@
 // (Jinja mangles it — see the 1.0.13 post-mortem in the module docs).
 (function () {
   const op = document.getElementById('op');
+  let taskHeadline = '', approvalPending = false;
   const demoReadOnly = document.body.classList.contains('op-demo')
     && document.body.dataset.operatorInteractive !== '1';
   if (demoReadOnly) {
@@ -130,14 +131,18 @@
   // whose inline listeners don't survive innerHTML) collapses/expands its group.
   log.addEventListener('click', e => {
     const head = e.target.closest('.op-task-head');
-    if (head && head.parentElement && !head.parentElement.classList.contains('op-no-steps'))
+    if (head && head.parentElement && !head.parentElement.classList.contains('op-no-steps')) {
       head.parentElement.classList.toggle('collapsed');
+      saveSession();
+    }
   });
 
   // ── session persistence: chat + selections survive a refresh (localStorage) ──
   // 1.1 is an intentional clean thread cutover. New cache keys prevent an
   // archived 1.0 chat from repainting over the fresh server store on first load.
   const LS_KEY = 'operator-session-v2';
+  let _speedPreference = 'default';
+  try { _speedPreference = JSON.parse(localStorage.getItem(LS_KEY) || '{}').service_tier || 'default'; } catch(_){}
   const CONVERSATION_KEY = 'operator-conversation-v2';
   const DEVICE_KEY = 'operator-device-v1';
   // ── one shared server-side session (2026-07-11): localStorage stays the
@@ -171,9 +176,16 @@
     : /macintosh|mac os/.test(_ua) ? 'Mac'
     : 'Browser';
   try { _conversationId = sessionStorage.getItem(CONVERSATION_KEY) || ''; } catch {}
+  // An explicit app handoff targets its own conversation, not a prior tab's chat.
+  const linkedConversation = new URLSearchParams(location.search).get('conversation_id');
+  if (linkedConversation && /^[a-zA-Z0-9_-]{1,100}$/.test(linkedConversation)) {
+    _conversationId = linkedConversation;
+  }
   function _setConversationId(id){
+    if (_conversationId !== String(id || '').trim()) { taskHeadline = ''; approvalPending = false; }
     _conversationId = String(id || '').trim();
-    try { if (_conversationId) sessionStorage.setItem(CONVERSATION_KEY, _conversationId); } catch {}
+    try { if (_conversationId) sessionStorage.setItem(CONVERSATION_KEY, _conversationId);
+      else sessionStorage.removeItem(CONVERSATION_KEY); } catch {}
     // the switched-to conversation may have a parked draft (declared later —
     // boot order puts the composer block far below this helper)
     setTimeout(() => { try { window._restoreDraft && window._restoreDraft(); } catch(_){} }, 0);
@@ -190,7 +202,14 @@
     context: () => _conversationPayload({can_control: _canControl, demo: demoReadOnly}),
     renderMarkdown: element => { element.innerHTML = _mdToHtml(element.textContent); _addCopyButtons(element); },
     send: text => { if (!_canControl || MODE !== 'auto' || _inFlight) return false;
-      logUser(text); dispatchTask(text); return true; }
+      logUser(text); dispatchTask(text); return true; },
+    canSendUser: () => _canControl && MODE === 'auto',
+    sendUser: text => { if (!_canControl || MODE !== 'auto') return false;
+      submitMessage(text); return true; },
+    // Approval resumption is workflow plumbing, not a new user utterance.
+    // Keep it out of the visible chat and the saved-task draft.
+    sendInternal: text => { if (!_canControl || MODE !== 'auto' || _inFlight) return false;
+      dispatchTask(text, {internal: true}); return true; }
   };
   let _sessPushT = null;
   function _sessionPayload() {
@@ -208,6 +227,7 @@
       bot: (document.getElementById('op-action-caret')||{}).value || '',
       model: (document.getElementById('op-model')||{}).value || '',
       effort: (document.getElementById('op-effort')||{}).value || '',
+      service_tier: _speedPreference,
       surface: op.dataset.surface || 'browser',
       preview: latestUser.slice(0, 180),
       agent_since: (typeof _agentSince === 'number' ? _agentSince : 0),
@@ -232,10 +252,14 @@
       localStorage.setItem(LS_KEY, JSON.stringify(Object.assign(
         {_srev: _srev, _crev: _crev, _conversation_id: cid}, d)));
       try {
-        const r = await fetch(SESSION, {method: 'POST', keepalive: true,
+        const body = JSON.stringify(_conversationPayload({conversation_id: cid,
+          expected_rev: _crev, data: d}));
+        const r = await fetch(SESSION, {
+          method: 'POST',
+          keepalive: document.visibilityState === 'hidden' && body.length < 60000,
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(_conversationPayload({conversation_id: cid,
-            expected_rev: _crev, data: d}))});
+          body,
+        });
         const j = await r.json();
         if (j && j.ok) {
           _srev = j.rev; _crev = j.conversation_rev;
@@ -271,12 +295,33 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') _sessionFlush();
   });
+  function normalizeTraceLabel(label) {
+    return label === 'Using Squad Store' ? 'Using host-app' : label;
+  }
+  function normalizeSavedTraceLabels(root) {
+    root.querySelectorAll('.op-act-step .op-act-lab').forEach(lab => {
+      const first = lab.firstChild;
+      if (first && first.nodeType === Node.TEXT_NODE)
+        first.nodeValue = normalizeTraceLabel(first.nodeValue);
+    });
+    root.querySelectorAll('.op-act-step .op-connector-ico[title="Using Squad Store"]')
+      .forEach(ico => { ico.title = 'Using host-app'; });
+    root.querySelectorAll('.op-act-step').forEach(row => {
+      const label = row.querySelector('.op-act-lab')?.firstChild?.textContent || '';
+      const icon = row.querySelector('.op-act-ico2');
+      if (icon && /^Using browser$/i.test(label.trim())) {
+        row.classList.remove('op-connector-step');
+        setBrowserCursorIcon(icon);
+      }
+    });
+  }
   function restoreSession() {
     try { const d = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (d && typeof d._srev === 'number') _srev = d._srev;
       if (d && typeof d._crev === 'number') _crev = d._crev;
       if (!_conversationId && d && d._conversation_id) _setConversationId(d._conversation_id);
       if (d && d.log) { log.innerHTML = d.log;
+        normalizeSavedTraceLabels(log);
         // a LIVE restored handoff card has dead listeners (innerHTML loses them)
         // — drop it; if the agent still needs control, the next poll re-renders
         // a live one. A .done card (user already took control) STAYS: it's an
@@ -329,6 +374,19 @@
   // viewport-follow beacon trigger — assigned by the stage-size IIFE below,
   // called from the rail-drag IIFE after it. Hoisted here (TDZ rule).
   let _stageFollow = null;
+  // Entry-size gate. The pump's first fetch waits for the first stage_size
+  // answer, at most ENTRY_SIZE_WAIT_MS: the server captures a fresh frame at
+  // the new size before it answers, so the opening picture already fits this
+  // stage instead of showing the previous viewer's aspect and then snapping
+  // (the owner 2026-10-06). Declared here, ahead of the follow IIFE (TDZ rule).
+  const ENTRY_SIZE_WAIT_MS = 1500;
+  let _entrySizedDone = false, _entrySizedResolve = null;
+  const _entrySized = new Promise((resolve) => { _entrySizedResolve = resolve; });
+  function _markEntrySized() {
+    if (_entrySizedDone) return;
+    _entrySizedDone = true;
+    _entrySizedResolve();
+  }
 
   function _setThreadControl(state) {
     if (demoReadOnly) { _canControl = true; op.dataset.threadControl='controller'; return; }
@@ -428,8 +486,16 @@
     const st = document.getElementById('op-stage');
     if (!st) return;
     let _t = null, _last = '', _tries = 0, _ownRetries = 0;
+    const lp = document.getElementById('op-lp');
+    // AUTO mode's homepage owns the whole canvas and hides the frame. Its
+    // stage is not what the cockpit shows, so it is never reported: the
+    // remote browser keeps the cockpit's size instead of reflowing on every
+    // homepage/cockpit switch. Mirrors the CSS rule that hides the rail.
+    const homeOwnsCanvas = () => op.dataset.mode === 'auto' &&
+      op.dataset.busy === '0' && !!lp && !lp.hidden;
     const send = () => {
       if (document.hidden) return;
+      if (homeOwnsCanvas()) { _markEntrySized(); return; }
       const r = st.getBoundingClientRect();
       const v = Math.round(r.width) + 'x' + Math.round(r.height);
       if (!r.width || !r.height || v === _last) return;
@@ -451,6 +517,10 @@
         .then((res) => res.json())
         .then((j) => {
           if (!j || j.ok !== true) throw 0;
+          // A real answer releases the first fetch. A refusal does not: on a
+          // cold attach the report beats the attach and comes back "not
+          // running", and releasing then showed the stale size (2026-10-06).
+          _markEntrySized();
           _tries = 0;
           // Persist for the NEXT page load. The server reads this on the
           // document request and pre-loads the viewport target, so the first
@@ -484,7 +554,12 @@
             clearTimeout(_t); _t = setTimeout(send, 1500);
           } else if (j.applied !== false) { _ownRetries = 0; }
         })
-        .catch(() => { _last = ''; if (_tries++ < 8) { clearTimeout(_t); _t = setTimeout(send, 1500); } });
+        .catch(() => {
+          _last = '';
+          // While the first picture is held, retry fast; the hold itself is
+          // capped at ENTRY_SIZE_WAIT_MS, so this cannot delay the stream.
+          if (_tries++ < 8) { clearTimeout(_t); _t = setTimeout(send, _entrySizedDone ? 1500 : 300); }
+        });
     };
     // USER-DRIVEN ONLY (restored 2026-07-22). A ResizeObserver on the stage
     // (4f09e2b) closed a feedback loop: anything that shifted the cockpit's
@@ -494,7 +569,17 @@
     // call via _stageFollow) can't loop — only the user fires them. Applied
     // sizes are deduplicated; rejected/deferred requests remain pending.
     const queue = () => { clearTimeout(_t); _t = setTimeout(send, 600); };
-    window.addEventListener('resize', queue);
+    let lastWindowWidth = window.innerWidth;
+    window.addEventListener('resize', () => {
+      const width = window.innerWidth, widthChanged = width !== lastWindowWidth;
+      lastWindowWidth = width;
+      // Phone browser chrome and keyboards resize height without changing the
+      // intended remote viewport. Only width/orientation changes follow here;
+      // deliberate sheet dragging still follows once at drag end.
+      if (matchMedia('(max-width: 820px)').matches && !widthChanged) return;
+      if (window.visualViewport && window.visualViewport.scale !== 1) return;
+      queue();
+    });
     // RE-ENTRY (2026-07-29). Coming back to a cockpit tab that was in the
     // background fires visibilitychange, NOT resize — so nothing re-beaconed,
     // and the remote viewport kept whatever it had drifted to while we were
@@ -515,6 +600,28 @@
     // iOS restores from the page cache without a visibilitychange
     window.addEventListener('pageshow', (e) => { if (e.persisted) resync(); });
     _stageFollow = queue;
+    // LAYOUT SWITCHES (2026-10-06). The boot splash, the homepage and the
+    // cockpit lay the stage out differently, and moving between them changes
+    // its size without a window resize, so nothing re-reported and the remote
+    // browser kept the previous layout's aspect for the whole session or run.
+    // This watches the discrete state that selects the layout, never a size:
+    // a report cannot change any of these attributes, so it cannot loop the way
+    // the 2026-07-22 ResizeObserver did.
+    let _layoutKey = '';
+    const layoutKey = () => [op.classList.contains('op-booting'),
+      op.dataset.mode || '', op.dataset.busy || '', lp ? lp.hidden : true].join('|');
+    const onLayout = () => {
+      const k = layoutKey();
+      if (k === _layoutKey) return;
+      _layoutKey = k;
+      if (op.classList.contains('op-booting')) return;
+      requestAnimationFrame(() => { clearTimeout(_t); send(); });
+    };
+    _layoutKey = layoutKey();
+    new MutationObserver(onLayout).observe(op,
+      {attributes: true, attributeFilter: ['class', 'data-mode', 'data-busy']});
+    if (lp) new MutationObserver(onLayout).observe(lp,
+      {attributes: true, attributeFilter: ['hidden']});
     // FIRST BEACON: fire the frame the stage HAS a size, not on a timer. The
     // old `setTimeout(send, 1200)` guaranteed that every session's opening
     // second was served at the previous viewer's aspect — long enough to see,
@@ -523,8 +630,10 @@
     // ~1s of frames so a hidden stage can't spin forever.
     let _prime = 0;
     const primeEntry = () => {
+      // The boot splash spans the whole window for two frames; its stage is
+      // not the cockpit's. Report once it has given way.
       const r = st.getBoundingClientRect();
-      if (r.width && r.height) { send(); return; }
+      if (r.width && r.height && !op.classList.contains('op-booting')) { send(); return; }
       if (_prime++ < 60) requestAnimationFrame(primeEntry);
     };
     requestAnimationFrame(primeEntry);
@@ -712,16 +821,13 @@
         const hdr = document.querySelector('header.site');
         const h = (mob && !full) ? (hdr?.offsetHeight || 0) : 0;
         document.getElementById('op').style.setProperty('--op-hdr-h', h + 'px');
-        // Mobile bug (recurring): if setHdr runs before the header has laid out,
-        // offsetHeight is 0, the fixed browser stage docks at top:0 and paints
-        // over the host-app nav → "the header disappeared". If we're mobile,
-        // not fullscreen, the header exists but measured 0, retry until it's real.
-        if (mob && !full && hdr && h === 0) {
-          requestAnimationFrame(setHdr);
-        }
       } catch(_){}
     }
     setHdr();
+    // A homepage or fullscreen header is intentionally hidden. Observe its
+    // real size so revealing it updates the offset without per-frame retries.
+    const header = document.querySelector('header.site');
+    if (header) new ResizeObserver(setHdr).observe(header);
     // measure again after fonts/layout settle — the first synchronous read often
     // lands 0 on a cold mobile paint.
     requestAnimationFrame(() => requestAnimationFrame(setHdr));
@@ -758,33 +864,34 @@
     });
   })();
 
-  // ── theme cycle: default (dark) → flat (OLED black) → light ──
+  // ── theme cycle: dark → OLED black → light ──
   // Two buttons, ONE cycle: #op-flat (the half-circle) in the chat brow and
   // the splash's sun/moon (#op-lp-theme) both step the same three stops —
   // the splash used to be a plain dark↔light flip that skipped OLED black
-  // (the owner 2026-07-28: "splash is missing the third theme"). Two persisted axes:
-  // squad_theme (dark/light, shared with the rest of host-app) and the
-  // existing operator-flat-v1 — restored independently at boot, so historical
-  // combos (e.g. light+flat) still render; clicking normalizes to the 3 stops.
+  // (the owner 2026-07-28: "splash is missing the third theme"). OLED black is the
+  // squad-wide midnight theme, not an operator-only flag, so the cockpit
+  // matches the pages around it and a change here carries to them (the owner
+  // 2026-10-12: "when its OLED outside it should be OLED inside too"). The
+  // flat class follows data-theme, whoever sets it.
   (function(){
-    const FLAT_KEY = 'operator-flat-v1';
     const opEl = document.getElementById('op');
     const flatBtn = document.getElementById('op-flat');
+    const syncFlat = ()=>{
+      if (opEl) opEl.classList.toggle('op-flat',
+        document.documentElement.getAttribute('data-theme') === 'midnight');
+    };
     const setTheme = (t)=>{
       document.documentElement.setAttribute('data-theme', t);
       try { localStorage.setItem('squad_theme', t); } catch {}
+      syncFlat();
     };
-    const setFlat = (on)=>{
-      if (opEl) opEl.classList.toggle('op-flat', on);
-      try { localStorage.setItem(FLAT_KEY, on ? '1' : '0'); } catch {}
-    };
-    try { if (opEl) opEl.classList.toggle('op-flat', localStorage.getItem(FLAT_KEY) === '1'); } catch {}
+    try { localStorage.removeItem('operator-flat-v1'); } catch {}
+    syncFlat();
+    new MutationObserver(syncFlat).observe(document.documentElement,
+      {attributes: true, attributeFilter: ['data-theme']});
     const cycleTheme = ()=>{
-      const light = document.documentElement.getAttribute('data-theme') === 'light';
-      const flat = !!(opEl && opEl.classList.contains('op-flat'));
-      if (light)      { setTheme('dark');  setFlat(false); }   // light → default
-      else if (flat)  { setFlat(false); setTheme('light'); }   // flat → light
-      else            { setFlat(true); }                       // default → flat
+      const t = document.documentElement.getAttribute('data-theme');
+      setTheme(t === 'light' ? 'dark' : t === 'midnight' ? 'light' : 'midnight');
     };
     if (flatBtn) flatBtn.addEventListener('click', cycleTheme);
     // MOBILE: the status ring doubles as the splash's menu button (the owner
@@ -906,9 +1013,9 @@
     type:'Typing', key:'Pressing', scroll:'Scrolling', back:'Going back',
     forward:'Going forward', reload:'Reloading', tab_next:'Switching tab' };
   let settleT = null;
-  // set status-card text and animate the change in (like the chat bubbles) — only
-  // when the value actually changes, so the 1.5s polls don't strobe it.
-  // subline as "gpt · browsing" (bot semibold) — animated like the verb.
+  // The subline is updated by several event streams. Keep it steady even when
+  // the underlying action changes; repeated entry animations looked like a
+  // flicker during long-running turns.
   function setCardSub(bot, verb, emoji){
     const sub = document.getElementById('op-action-sub');
     if (!sub) return;
@@ -926,15 +1033,83 @@
       emojiEl.className = 'sub-emo'; emojiEl.textContent = emoji;
       next.appendChild(emojiEl);
     }
-    // mirror the live action emoji onto the minimized-pill glyph (shown by CSS
-    // only when the card is collapsed) — same swap animation as the sub's emoji
+    // Mirror the live action emoji onto the minimized-pill glyph.
     setMinEmoji(emoji);
     const current = Array.from(sub.childNodes);
     const desired = Array.from(next.childNodes);
     if (current.length === desired.length
         && current.every((node, i) => node.isEqualNode(desired[i]))) return;
     sub.replaceChildren(...desired);
-    sub.classList.remove('op-card-swap'); void sub.offsetWidth; sub.classList.add('op-card-swap');
+  }
+  function compactStatusAction(value) {
+    return String(value || 'Thinking').trim() || 'Thinking';
+  }
+  const tokenMeter = document.getElementById('op-token-meter');
+  function tokenCount(value) {
+    return value >= 1e6 ? (value / 1e6).toFixed(1).replace(/\.0$/, '') + 'm'
+      : value >= 1000 ? (value / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
+        : String(value);
+  }
+  function reportedTokenCount(value) {
+    if (value == null || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.floor(number) : null;
+  }
+  function paintTokenValues(meter, agent, rolling = false) {
+    const input = reportedTokenCount(agent.cumulative_in_tokens);
+    const output = reportedTokenCount(agent.cumulative_out_tokens);
+    // Runners start with zero input even when the provider reports no usage.
+    if ((input == null || input === 0) && output == null) {
+      meter.hidden = true; return false;
+    }
+    const values = [[meter.querySelector('.op-token-in > :last-child'), input],
+                    [meter.querySelector('.op-token-out > :last-child'), output]];
+    for (const [element, count] of values) {
+      const value = count == null ? '—' : tokenCount(count);
+      if (element.dataset.tokenValue === value) continue;
+      element.dataset.tokenValue = value;
+      if (rolling && typeof window.paintRolling === 'function') {
+        element.classList.add('rk-od'); window.paintRolling(element, value);
+      } else { element.textContent = value; element.setAttribute('aria-label', value); }
+    }
+    meter.title = 'Input: ' + (input == null ? 'not reported' : input.toLocaleString() + ' tokens') +
+      ' · Output: ' + (output == null ? 'not reported' : output.toLocaleString() + ' tokens');
+    meter.hidden = false;
+    return true;
+  }
+  function turnTokenMeter(agent) {
+    const meter = tokenMeter.cloneNode(true);
+    meter.removeAttribute('id');
+    meter.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    meter.querySelectorAll('[data-token-value]').forEach(el => {
+      delete el.dataset.tokenValue; el.replaceChildren();
+    });
+    paintTokenValues(meter, agent);
+    return meter;
+  }
+  function paintTokenMeter(agent) {
+    document.querySelectorAll('#op-log #op-token-meter').forEach(el => { if (el !== tokenMeter) el.remove(); });
+    const count = Array.from(document.querySelectorAll('#op-log .op-task[data-busy="1"]')).at(-1)?.querySelector('.op-step-count');
+    if (!count) {
+      tokenMeter.hidden = true;
+      // Final usage can arrive after the trace has already finished. Match the
+      // retained run rather than requiring a live task to still own the meter.
+      if (!['done', 'error', 'interrupted'].includes(agent.state) || !agent.run_id) return;
+      const task = [...log.querySelectorAll('.op-task[data-busy="0"]')].reverse()
+        .find(el => el.dataset.agentRun === agent.run_id);
+      const row = task?.querySelector('.op-step-count');
+      if (!row) return;
+      const finalMeter = turnTokenMeter(agent);
+      if (finalMeter.hidden) return; // Missing telemetry must not erase saved usage.
+      const previous = row.querySelector('.op-token-meter');
+      if (previous?.title === finalMeter.title) return;
+      if (previous) previous.replaceWith(finalMeter);
+      else row.append(finalMeter);
+      saveSession();
+      return;
+    }
+    if (tokenMeter.parentElement !== count) count.append(tokenMeter);
+    paintTokenValues(tokenMeter, agent, true);
   }
   function setMinEmoji(emoji){
     const el = document.getElementById('op-min-emoji');
@@ -942,9 +1117,26 @@
     el.textContent = emoji || '';
     el.classList.remove('op-card-swap'); void el.offsetWidth; el.classList.add('op-card-swap');
   }
+  function setTaskHeadline(text) {
+    taskHeadline = text;
+    setCardText(actTxt, text || idleCardText());
+  }
+  window._opApprovalPending = pending => {
+    approvalPending = !!pending;
+    setCardText(actTxt, taskHeadline || idleCardText());
+  };
   function setCardText(el, text){
+    if (el === actTxt && op.dataset.mode !== 'man') {
+      if (text === 'Starting up') { taskHeadline = 'Starting'; approvalPending = false; }
+      // With no task headline the card follows the feed, as in MAN mode. A
+      // literal 'Ready' here showed over a dead feed beside the spinning
+      // connection mark (the owner 2026-10-06).
+      text = taskHeadline === 'Needs your input' ? taskHeadline
+        : approvalPending ? 'Awaiting approval' : taskHeadline || idleCardText();
+    }
     if (!el || el.textContent === text) { if(el && text!==undefined) el.textContent = text==null?'':text; return; }
     el.textContent = text==null ? '' : text;
+    if (el === actSub) return;
     el.classList.remove('op-card-swap');
     void el.offsetWidth;                 // reflow so the animation re-triggers
     el.classList.add('op-card-swap');
@@ -971,7 +1163,7 @@
     // Exception: the desktop "Not started" idle state keeps its own label.
     if (op.classList.contains('op-signal-stale') ||
         (op.classList.contains('op-signal-lost') &&
-         !op.classList.contains('op-surface-idle'))) return 'Reconnecting';
+         !op.classList.contains('op-surface-idle'))) return _hasFrame ? 'Reconnecting' : 'Unable to connect';
     return 'Connecting';
   }
   function settleAction(ok) {
@@ -993,7 +1185,8 @@
     op.dataset.busy = '0';
     // idle label depends on mode: MAN -> "Manual", AUTO -> "Ready". never flash
     // "Ready" in manual (it's an auto-mode concept).
-    setCardText(actTxt, ok === false ? 'Failed' : 'Ready');
+    if (ok === false && taskHeadline === 'Starting') setTaskHeadline('Failed');
+    else setCardText(actTxt, ok === false ? 'Failed' : idleCardText());
     if (ok === false) {
       // flash the status-card ring red + pulse. Re-trigger the animation by removing
       // then re-adding on the next frame (so back-to-back failures each pulse).
@@ -1012,15 +1205,14 @@
   // behind live — near-live after a reconnect, seconds behind a minute later
   // (2026-07-09). The pump fetches one frame, renders it, and only then asks
   // for the next: it can NEVER queue more than one frame, so latency is
-  // bounded at ~1 frame in flight on any device or link. Fast clients pace at
-  // PUMP_MS (~10fps); slow ones self-throttle to what they can actually drain.
+  // bounded at ~1 frame in flight on any device or link. Capture/transfer/paint
+  // time counts toward the request and byte budgets.
   // Each pull also carries the last rendered frame id. The server long-polls
   // until pixels change and answers 204 on a quiet heartbeat, so a static page
   // costs request headers instead of the same JPEG ten times a second.
   let backoff = 600;
   let _hasFrame = false;
-  const PUMP_MS = 90;
-  const PUMP_ECO_MS = 220;
+  const _frameFeed = window.OperatorFrameFeed;
   const _sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
   // F1: narrow screens use `lo`; explicit metering and observed constrained
   // throughput use `eco`. Chromium/Android can expose connection.type,
@@ -1028,7 +1220,7 @@
   // response-body transfers trip the same tier. Hysteresis keeps a briefly
   // stalled frame from flapping quality on every pull.
   const _mqNarrow = matchMedia('(max-width: 820px)');
-  let _adaptiveEco = false, _slowBodies = 0, _fastBodies = 0;
+  let _adaptiveEco = false, _adaptiveLo = false, _slowBodies = 0, _modBodies = 0, _fastBodies = 0;
   const _feedQualityKey = 'operator-stream-quality-v1';
   const _feedQualitySelect = document.getElementById('op-ham-quality');
   const _feedQualityEffective = document.getElementById('op-ham-quality-effective');
@@ -1048,8 +1240,12 @@
   }
   function _showFeedQuality(tier) {
     op.dataset.feedQuality = _feedQualityPref;
-    if (!_feedQualityEffective) return;
     const level = tier === 'eco' ? 'Low' : tier === 'lo' ? 'Medium' : 'High';
+    const autoOpt = _feedQualitySelect && _feedQualitySelect.querySelector('option[value="auto"]');
+    if (autoOpt) {
+      autoOpt.textContent = _feedQualityPref === 'auto' ? 'Auto · ' + level : 'Auto';
+    }
+    if (!_feedQualityEffective) return;
     _feedQualityEffective.textContent = _feedQualityPref === 'auto'
       ? 'Auto · ' + level : level;
   }
@@ -1059,7 +1255,7 @@
       _feedQualityPref === 'medium' ? 'lo' :
       _feedQualityPref === 'high' ? 'hi' :
       (_meteredConnection(c) || _adaptiveEco) ? 'eco' :
-      (_mqNarrow.matches ? 'lo' : 'hi');
+      ((_mqNarrow.matches || _adaptiveLo) ? 'lo' : 'hi');
     op.dataset.feedTier = tier;
     _showFeedQuality(tier);
     return tier;
@@ -1078,19 +1274,25 @@
     if (placeholder || !bytes || !Number.isFinite(elapsedMs)) return;
     const bps = bytes / (Math.max(elapsedMs, 0.5) / 1000);
     const slow = elapsedMs >= 80 && bps < 300000;
+    const moderate = !slow && elapsedMs >= 45 && bps < 600000;
     const fast = elapsedMs <= 25 || bps >= 750000;
     if (slow) {
       _slowBodies += 1; _fastBodies = 0;
-      if (_slowBodies >= 3) _adaptiveEco = true;
+      if (_slowBodies >= 3) { _adaptiveEco = true; _adaptiveLo = true; }
+    } else if (moderate) {
+      _modBodies += 1; _fastBodies = 0;
+      if (_modBodies >= 3) _adaptiveLo = true;
     } else if (fast) {
-      _fastBodies += 1; _slowBodies = 0;
-      if (_adaptiveEco && _fastBodies >= 12) _adaptiveEco = false;
+      _fastBodies += 1; _slowBodies = 0; _modBodies = 0;
+      if (_adaptiveEco && _fastBodies >= 6) _adaptiveEco = false;
+      if (_adaptiveLo && _fastBodies >= 12) _adaptiveLo = false;
     } else {
       _slowBodies = Math.max(0, _slowBodies - 1);
+      _modBodies = Math.max(0, _modBodies - 1);
       _fastBodies = Math.max(0, _fastBodies - 1);
     }
   }
-  let _pumpOn = false, _prevBlobUrl = null, _pumpFails = 0, _frameId = '';
+  let _pumpOn = false, _prevBlobUrl = null, _pumpFails = 0, _frameId = '', _frameTarget = '';
   // true while the frame on stage is the server's PLACEHOLDER (dark filler the
   // /frame route serves when the streamer has no real capture). Placeholder ≠
   // signal: letting its 'load' events call signalOk() had the pump clearing
@@ -1113,30 +1315,46 @@
       requestAnimationFrame(() => requestAnimationFrame(finish));
     });
   }
+  // A cockpit left open on another screen stays 'visible' but nobody watches
+  // it. The feed runs only while the tab is visible and the window has focus,
+  // during an agent turn, or for a minute after the last input on the page.
+  // Otherwise no frames are pulled, the server stops capturing and
+  // browse-reaper can close the Operator Chrome. Input resumes it.
+  let _lastInputAt = Date.now();
+  for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'focus']) {
+    window.addEventListener(ev, () => { _lastInputAt = Date.now(); }, {passive: true, capture: true});
+  }
+  function _feedWatched() {
+    if (document.visibilityState !== 'visible') return false;
+    if (document.hasFocus() || _inFlight) return true;
+    return Date.now() - _lastInputAt < (window.OP_FEED_UNWATCHED_MS || 60 * 1000);
+  }
   async function _pump() {
     if (_pumpOn) return;   // one pump per page, ever
     _pumpOn = true;
+    if (!_entrySizedDone) await Promise.race([_entrySized, _sleepMs(ENTRY_SIZE_WAIT_MS)]);
     while (true) {
-      if (document.visibilityState !== 'visible') { await _sleepMs(350); continue; }
+      if (!_feedWatched()) { await _sleepMs(350); continue; }
+      const cycleStarted = performance.now();
+      let cycleBytes = 0;
       try {
         const requestedTier = _feedTier();
         let frameUrl = FRAME + "?t=" + Date.now() + "&tier=" + requestedTier +
           "&cid=" + CID + "&wait=900";
         if (_frameId) frameUrl += "&since=" + encodeURIComponent(_frameId);
-        const r = await fetch(frameUrl,
-                              {cache: "no-store"});
-        if (!r.ok) throw new Error("http " + r.status);
+        const transfer = await _frameFeed.read(frameUrl);
+        const r = transfer.response;
         const nextFrameId = r.headers.get('X-Operator-Frame-ID');
-        if (nextFrameId) _frameId = nextFrameId;
         if (r.status === 204) {
           _pumpFails = 0; backoff = 600;
+          await _sleepMs(_frameFeed.delay({quiet: true, elapsed: performance.now() - cycleStarted}));
           continue;                         // quiet long-poll heartbeat; no JPEG to decode
         }
         const isPlaceholder =
           (r.headers.get('X-Operator-Frame') === 'placeholder');
-        const bodyStarted = performance.now();
-        const b = await r.blob();
-        _observeFrameBody(b.size, performance.now() - bodyStarted, isPlaceholder);
+        const b = transfer.blob;
+        cycleBytes = b.size;
+        _observeFrameBody(b.size, transfer.bodyMs, isPlaceholder);
         const u = URL.createObjectURL(b);
         // A short capture detach returns the dark filler with a new surface
         // token. Once real pixels are on stage, transport state must not replace
@@ -1144,6 +1362,8 @@
         if (isPlaceholder && _hasFrame) {
           URL.revokeObjectURL(u);
           _pumpFails = 0; backoff = 600;
+          await _sleepMs(_frameFeed.delay({tier: requestedTier, bytes: b.size,
+            quiet: true, elapsed: performance.now() - cycleStarted}));
           continue;
         }
         // Decode OFF stage. Assigning view.src first asks Chromium to replace
@@ -1154,19 +1374,23 @@
         const preload = new Image();
         preload.decoding = 'async';
         preload.src = u;
-        try { await preload.decode(); }
+        try { await _frameFeed.bounded((async () => { await preload.decode(); })()); }
         catch (e) { URL.revokeObjectURL(u); throw e; }
         _phFrame = isPlaceholder;
         view.src = u;                    // fires 'load' → signalOk (real frames only)
-        try { await view.decode(); }
+        try { await _frameFeed.bounded((async () => { await view.decode(); })()); }
         catch (e) {
           if (_prevBlobUrl) { _phFrame = false; view.src = _prevBlobUrl; }
           URL.revokeObjectURL(u);
           throw e;
         }
+        const decodedAt = performance.now();
         await _afterNextPaint();
+        _frameFeed.presented(transfer, {paintAt: performance.now(), decodedAt, bytes: b.size});
         if (_prevBlobUrl) URL.revokeObjectURL(_prevBlobUrl);
         _prevBlobUrl = u;
+        if (nextFrameId) _frameId = nextFrameId;
+        _frameTarget = r.headers.get('X-Operator-Target-ID') || '';
         _pumpFails = 0; backoff = 600;
         // typing on a phone: a ~10fps JPEG decode cycle on the main thread
         // competes with every keystroke's layout work — the biggest slice of
@@ -1174,12 +1398,13 @@
         // a narrow screen, idle the feed to ~2.5fps; it snaps back on blur.
         const _typing = _mqNarrow.matches &&
           document.activeElement === document.getElementById('op-input');
-        await _sleepMs(_typing ? 400 :
-          (_feedTier() === 'eco' ? PUMP_ECO_MS : PUMP_MS));
+        await _sleepMs(_frameFeed.delay({tier: requestedTier, bytes: b.size,
+          typing: _typing, quiet: isPlaceholder, elapsed: performance.now() - cycleStarted}));
       } catch (_) {
         _pumpFails++;
         if (_pumpFails === 2) signalLost();   // one blip ≠ lost; two in a row is
-        await _sleepMs(Math.min(backoff *= 1.6, 4000));
+        await _sleepMs(Math.max(Math.min(backoff *= 1.6, 4000),
+          _frameFeed.delay({tier: _feedTier(), bytes: cycleBytes, elapsed: performance.now() - cycleStarted})));
       }
     }
   }
@@ -1203,6 +1428,10 @@
     // is no signal to lose while the desktop isn't started and nothing runs.
     if (op.classList.contains('op-surface-idle') && op.dataset.busy !== '1') return;
     _wasLost = true;
+    if (_pumpFails >= 2) {
+      setState('error', 'disconnected');
+      if (!_isGameSurface()) launchpadConnection('error');
+    }
     op.classList.remove('op-surface-idle');
     if (_hasFrame && _lastImgLoad > 0) {
       // We HAVE a last good frame → freeze it (dimmed, small "reconnecting" chip)
@@ -1214,14 +1443,14 @@
     } else {
       // never had a frame this session — nothing to freeze, show the full overlay
       view.style.visibility='hidden';   // hide the broken-? glyph
-      if (overlayText) overlayText.textContent = 'SIGNAL LOST';
+      if (overlayText) overlayText.textContent = 'Unable to connect';
       if (overlaySub) { overlaySub.hidden = true; overlaySub.textContent = ''; }
       op.classList.add('op-signal-lost');
     }
     // the card must agree with the stage — never show "Ready" over a dead feed.
     // Idempotent single label: idleCardText() also resolves to 'Reconnecting'
     // while stale, so the poll loop can't flap the word back to 'Connecting'.
-    if (op.dataset.busy !== '1') { try { setCardText(actTxt, 'Reconnecting'); } catch(_){} } }
+    if (op.dataset.busy !== '1') { try { setCardText(actTxt, _hasFrame ? 'Reconnecting' : 'Unable to connect'); } catch(_){} } }
   // Desktop surface at rest: the virtual desktop hasn't been started yet. A
   // calm "here's how to start it" state, distinct from a lost signal.
   function desktopIdle(){ _wasLost = false;
@@ -1318,13 +1547,20 @@
     const t = (actTxt.textContent || '').trim();
     const isPlaceholder = (t === 'Connecting…' || t === 'Connecting' || t === 'reconnecting…' || t === 'Reconnecting…' || t === '');
     if (s === 'live' && (!op.dataset.busy || op.dataset.busy === '0') && isPlaceholder) {
-      actTxt.textContent = (MODE === 'man') ? 'Ready' : 'Ready';
+      actTxt.textContent = 'Ready';
       op.dataset.agent = op.dataset.agent || '';
     }
   }
 
   const lockEl = document.getElementById('op-lock');
+  let _lastShownUrl = '';
   function showUrl(url) {
+    if (url && url !== _lastShownUrl) {
+      _lastShownUrl = url;
+      // A later successful navigation (including an agent navigation) resolves
+      // an earlier failed attempt; don't carry its red status to the new page.
+      document.getElementById('op-dotstat')?.classList.remove('err');
+    }
     if (lockEl) {
       const https = /^https:\/\//i.test(url||'');
       const http = /^http:\/\//i.test(url||'');
@@ -1444,6 +1680,11 @@
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\(operator-file:([a-f0-9]{32})\)/g,
+        (_, label, id) => '<a data-operator-file="' + id + '" href="' +
+          OP_URLS.workspace + '/files/' + id + '?conversation_id=' +
+          encodeURIComponent(window.OperatorWorkbenchBridge.context().conversation_id || 'legacy') +
+          '">' + label + '</a>')
       .replace(/!\[([^\]]*)\]\(((?:https?:\/\/|\/?operator\/shot\/)[^\s)]+)\)/g,
                '<img src="$2" alt="$1" class="op-md-img" loading="lazy">')
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
@@ -1612,9 +1853,10 @@
       pre.appendChild(btn);
     });
   }
-  function logBotReply(text) {
+  function logBotReply(text, runKey) {
     markScroll();
     const m = document.createElement('div'); m.className='op-msg bot';
+    if (runKey) m.dataset.agentRun = runKey;
     const b = document.createElement('span'); b.className='bubble';
     b.innerHTML = _mdToHtml(text);   // _mdToHtml escapes first → XSS-safe
     _addCopyButtons(b);
@@ -1775,10 +2017,16 @@
     if (!m) return null;
     const provider = m[1].trim();
     const low = provider.toLowerCase();
-    if (!provider || low === 'computer' || low === 'tool' || low === 'mcp tool') return null;
+    if (!provider || low === 'computer' || low === 'browser' || low === 'tool' || low === 'mcp tool') return null;
     const domain = CONNECTOR_FAVICON_DOMAINS[low]
       || (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(provider) ? low : '');
     return {provider, domain};
+  }
+  function setBrowserCursorIcon(icon) {
+    icon.classList.remove('op-connector-ico');
+    icon.classList.add('op-browser-cursor');
+    icon.removeAttribute('title');
+    icon.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 2.5v18l4.8-4.8 3.4 7.1 3.2-1.5-3.3-7.1H19z"/></svg>';
   }
   function setConnectorIcon(icon, connector) {
     icon.classList.add('op-connector-ico');
@@ -1899,7 +2147,7 @@
     // pass) was leaving stale words behind — the whole turn's verbs piled up in
     // the done header ("Typing…Clicking…Reading…Plotted for 5m"). Clearing all
     // of them guarantees exactly one word, animated in via op-msg-in.
-    words.forEach(w => w.remove());
+    v.replaceChildren();
     const incoming = document.createElement('span');
     incoming.className = 'op-verb-word op-verb-in';
     incoming.dataset.word = text;
@@ -1938,12 +2186,13 @@
     _task.querySelector('.op-task-steps').appendChild(e);
     scrollToBottom(); saveSession();
   }
-  function taskNotice(title, reason) {
+  function taskNotice(title, reason, warning = true) {
     if (!_task) startTask();
     const e=document.createElement('div'); e.className='op-task-step op-notice-step';
     const head=document.createElement('div'); head.className='op-notice-head';
-    const mk=document.createElement('span'); mk.className='op-notice-mark'; mk.textContent='!';
-    const tl=document.createElement('span'); tl.textContent = title || 'Operator may be stuck';
+    const mk=warning ? warningIcon() : document.createElement('span'); mk.classList.add('op-notice-mark');
+    if (!warning) { mk.textContent = '·'; head.classList.add('op-notice-info'); }
+    const tl=document.createElement('span'); tl.textContent = title || 'Checking progress';
     head.appendChild(mk); head.appendChild(tl); e.appendChild(head);
     if (reason && String(reason).trim()) {
       const r=document.createElement('div'); r.className='op-notice-reason';
@@ -1955,6 +2204,7 @@
     scrollToBottom(); saveSession();
   }
   function taskActionStep(label, detail) {
+    label = normalizeTraceLabel(label);
     if (!_task) startTask();
     const steps = _task.querySelector('.op-task-steps');
     // COALESCE consecutive identical actions: if the last step is an act-step with
@@ -1986,7 +2236,8 @@
     e.dataset.sig = _sig; e.dataset.n = '1';
     const connector = connectorMeta(label);
     const ico=document.createElement('span'); ico.className='op-act-ico2';
-    if (connector) { e.classList.add('op-connector-step'); setConnectorIcon(ico, connector); }
+    if (/^Using browser$/i.test(String(label || '').trim())) setBrowserCursorIcon(ico);
+    else if (connector) { e.classList.add('op-connector-step'); setConnectorIcon(ico, connector); }
     else ico.textContent=actEmoji(label);
     const lab=document.createElement('span'); lab.className='op-act-lab';
     // labels are plain text, EXCEPT the code-block fallback ("Using `tool`") which
@@ -2063,6 +2314,21 @@
   }
   function finishTask(failed, labelOverride) {
     if (!_task) return;
+    // Freeze this turn's final usage before the live meter moves to the next turn.
+    if (tokenMeter && _task.contains(tokenMeter) && !tokenMeter.hidden) {
+      const snapshot = tokenMeter.cloneNode(true);
+      snapshot.removeAttribute('id');
+      snapshot.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+      // Rolling digits may still be mid-animation when terminal telemetry arrives.
+      snapshot.querySelectorAll('[data-token-value]').forEach(el => {
+        el.textContent = el.dataset.tokenValue;
+        el.setAttribute('aria-label', el.dataset.tokenValue);
+      });
+      tokenMeter.replaceWith(snapshot);
+    }
+    // Retain the completed count/usage row; its visibility follows the trace.
+    const count = _task.querySelector('.op-step-count');
+    if (count) _task.querySelector('.op-task-head').after(count);
     _task.dataset.busy='0';
     const secs=Math.round((Date.now()-_taskStart)/1000);
     let label;
@@ -2110,7 +2376,7 @@
   }
   function logRes(text, ok) {
     const m = document.createElement('div'); m.className='op-msg step ' + (ok?'':'err');
-    if (!ok && text === CROSS_ORIGIN_MUTATION_ERROR) m.appendChild(warningIcon());
+    if (!ok) m.appendChild(warningIcon());
     const b = document.createElement('span'); b.className='body'; b.textContent=text;
     m.appendChild(b); log.appendChild(m); trim();
   }
@@ -2240,7 +2506,7 @@
     const e = document.createElement('div'); e.className = 'op-ev' + (ok===false?' err':'');
     const t = document.createElement('span'); t.className='t'; t.textContent='';
     const b = document.createElement('span'); b.textContent = text;
-    e.appendChild(t); e.appendChild(b); eventsEl.appendChild(e);
+    e.appendChild(t); if (ok === false) e.appendChild(warningIcon()); e.appendChild(b); eventsEl.appendChild(e);
     while (eventsEl.children.length > 80) eventsEl.removeChild(eventsEl.firstChild);
     eventsEl.scrollTop = eventsEl.scrollHeight;
   }
@@ -2578,36 +2844,9 @@
     });
   }
 
-  // Code-block scroll trap fix (the owner 2026-07-21, round 2): scrolling STICKS
-  // whenever the cursor/finger lands on a code block — the earlier delegate
-  // (forward only when the <pre> lacks its own vertical scroll) missed cases,
-  // and on iPad a touch that starts on the pre's selectable text initiates
-  // selection instead of scroll. Robust fix: attach directly to each <pre>
-  // (capture phase, so we run before the pre consumes anything) and unless the
-  // pre TRULY has its own scrollable overflow, forward every vertical wheel/
-  // touch delta straight to the chat log. Runs on existing + future bubbles via
-  // a light MutationObserver.
-  function _preScrollsV(pre){ return pre.scrollHeight > pre.clientHeight + 2; }
-  function _wirePre(pre){
-    if (pre._opScrollWired) return; pre._opScrollWired = true;
-    pre.addEventListener('wheel', (e) => {
-      if (_preScrollsV(pre) || !e.deltaY) return;   // pre owns a real scroll → leave it
-      log.scrollTop += e.deltaY; e.preventDefault();
-    }, { passive: false, capture: true });
-    // touch: pan the log by the finger delta when the gesture starts on a
-    // non-scrolling pre (otherwise iOS grabs it for text selection and sticks)
-    let _ty = 0;
-    pre.addEventListener('touchstart', (e) => { _ty = e.touches[0]?.clientY || 0; },
-                         { passive: true });
-    pre.addEventListener('touchmove', (e) => {
-      if (_preScrollsV(pre)) return;
-      const y = e.touches[0]?.clientY || 0; const dy = _ty - y; _ty = y;
-      if (dy) { log.scrollTop += dy; e.preventDefault(); }
-    }, { passive: false });
-  }
-  function _wireAllPres(){ log.querySelectorAll('pre').forEach(_wirePre); }
-  _wireAllPres();
-  new MutationObserver(_wireAllPres).observe(log, { childList: true, subtree: true });
+  // Code blocks never own vertical scrolling. Let the browser send wheel and
+  // touch gestures to the log naturally; manually adding raw wheel deltas to
+  // scrollTop made scrolling slow over <pre> (and discarded trackpad momentum).
   // screenshot lightbox: tap an inline agent screenshot to view it full-size;
   // tap anywhere (or Esc) to dismiss.
   log.addEventListener('click', (e) => {
@@ -3936,7 +4175,8 @@
       op.dataset.busy = '1'; setCardText(actTxt, 'Starting up'); setCardSub(t.bot || selectedBot(), '');
       try { const d = await (await fetch(RUN_URL.replace('__S__', encodeURIComponent(t.slug)), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(_conversationPayload()) })).json();
+          body: JSON.stringify(_conversationPayload({service_tier: t.bot === 'gpt'
+            ? (document.getElementById('op-speed')?.value || 'default') : ''})) })).json();
         // fresh watchdog anchor per turn — same reason as dispatchTask's reset
         if (d.ok) { _lastAssistant = ''; _runProgressTs = 0; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }
         else { logRes(d.error || 'failed to run task', false); settleAction(false); } }
@@ -3944,8 +4184,9 @@
     };
   }
   // (re)load the model list for a driver — Claude models for claude-a/claude-b, GPT
-  // models for gpt. Defaults: Sonnet for Claude bots, GPT-5.6 Sol (low) for gpt.
+  // models for gpt. Defaults: Sonnet for Claude bots, GPT-6.1 Sol (low) for gpt.
   let _modelLoadGeneration = 0;
+  let _speedTiers = {};
   async function loadModels(driver){
     const generation = ++_modelLoadGeneration;
     try {
@@ -3954,10 +4195,14 @@
       // different one. Network completion order is not selection order: an
       // older response must never repaint over the latest driver.
       if (generation !== _modelLoadGeneration) return;
+      _speedTiers = m.service_tiers || {};
       const sel = document.getElementById('op-model');
       sel.textContent = '';
       (m.models||[]).forEach(x => { const o=document.createElement('option');
-        o.value=x.value; o.textContent=x.label; sel.appendChild(o); });
+        o.value=x.value;
+        o.textContent = /^claude-(?:opus|sonnet)-.*-(?:low|medium|high)$/.test(x.value)
+          ? x.label.replace(/\s*\((?:low|medium|high)\)\s*$/i, '') : x.label;
+        sel.appendChild(o); });
       let savedModel = (typeof _sess!=='undefined' && _sess) ? _sess.model : '';
       if (!savedModel) { try { const _sv = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (_sv) savedModel = _sv.model || ''; } catch {} }
       const want = m.default_model || (m.models || [])[0]?.value;
@@ -3996,7 +4241,7 @@
       "max",
       "ultra"
     ],
-    "gpt-6-sol": [
+    "gpt-6.1-sol": [
       "low",
       "medium",
       "high",
@@ -4004,10 +4249,22 @@
       "max",
       "ultra"
     ],
+    "gemini-4-argon": [
+      "low",
+      "medium",
+      "high"
+    ],
     "gemini-3.8-flash": [
       "low",
       "medium",
       "high"
+    ],
+    "claude-sonnet-5-5": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
     ],
     "claude-sonnet-5": [
       "low",
@@ -4016,7 +4273,6 @@
       "xhigh",
       "max"
     ],
-    "sonnet": [],
     "claude-opus-5-5": [
       "low",
       "medium",
@@ -4024,7 +4280,6 @@
       "xhigh",
       "max"
     ],
-    "opus": [],
     "claude-fable-5-1": [
       "low",
       "medium",
@@ -4032,12 +4287,15 @@
       "xhigh",
       "max"
     ],
-    "fable": [
+    "claude-mythos-5-1": [
       "low",
       "medium",
       "high",
       "xhigh",
       "max"
+    ],
+    "qwen3.8-flash-next": [
+      "standard"
     ],
     "qwen3.8:27b": [
       "standard"
@@ -4057,9 +4315,41 @@
       "max",
       "ultra"
     ],
-    "claude-haiku-4-5": [],
-    "haiku": [],
-    "mythos": [],
+    "claude-haiku-5-5": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "claude-haiku-4-5": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "opus": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "sonnet": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "mythos": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
     "gpt-daybreak-red": [],
     "gpt-5.6-luna": [
       "low",
@@ -4069,6 +4359,14 @@
       "max"
     ],
     "gpt-5.6-sol": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+    ],
+    "gpt-6-sol": [
       "low",
       "medium",
       "high",
@@ -4100,11 +4398,32 @@
       "medium",
       "high"
     ],
+    "claude-sonnet-5-5-medium": [],
+    "claude-sonnet-5-5-high": [],
+    "claude-sonnet-5-5-low": [],
+    "claude-opus-5-5-medium": [],
+    "claude-opus-5-5-high": [],
+    "claude-opus-5-5-low": [],
     "Claude Sonnet 4.6 (Thinking)": [],
     "Claude Opus 4.6 (Thinking)": [],
     "GPT-OSS 120B (Medium)": [],
+    "gemini-4-argon-low": [],
     "gemini-3.8-flash-low": [],
-    "gemini-3.1-pro-preview": []
+    "gemini-3.1-pro-preview": [],
+    "fable": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "haiku": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
   };
   // a width:auto <select> sizes to its WIDEST option, so a short selection (e.g. '3.8 Flash')
   // leaves the caret floating right. fitMini measures the SELECTED option's text and sets the
@@ -4150,7 +4469,26 @@
   }
   const _modelSel = document.getElementById('op-model');
   const _effortSel = document.getElementById('op-effort');
+  const _speedSel = document.getElementById('op-speed');
+  function syncSpeed(){
+    const tiers = _speedTiers[_modelSel.value] || ['default'];
+    const wrap = _speedSel.closest('.op-speed');
+    wrap.hidden = selectedBot() !== 'gpt' || tiers.length < 2;
+    _speedSel.replaceChildren();
+    tiers.forEach(tier => {
+      const option = document.createElement('option'); option.value = tier;
+      option.textContent = {default:'Normal', priority:'Fast', ultrafast:'Ultrafast'}[tier] || tier;
+      _speedSel.appendChild(option);
+    });
+    _speedSel.value = tiers.includes(_speedPreference) ? _speedPreference : 'default';
+    wrap.dataset.tier = _speedSel.value;
+    _speedSel.title = 'Processing speed: ' + _speedSel.selectedOptions[0].textContent;
+  }
+  _speedSel.addEventListener('change', () => {
+    _speedPreference = _speedSel.value; syncSpeed(); saveSession();
+  });
   function syncEffort() {
+    syncSpeed();
     const m = _modelSel.value || 'opus';
     const opts = EFFORT_BY_MODEL[m] || ["low", "medium", "high"];
     const prev = _effortSel.value;
@@ -4158,7 +4496,8 @@
     if (!opts.length) {
       // fixed-tier models: if the model name bakes in a tier e.g. 'Claude Opus 4.6 (Thinking)'
       // or 'GPT-OSS 120B (Medium)', SHOW that word in the effort picker but GRAYED OUT (disabled).
-      const _mm = (m.match(/\(([^)]+)\)\s*$/)||[])[1];
+      const _mm = (m.match(/\(([^)]+)\)\s*$/)||[])[1]
+        || (m.match(/-(low|medium|high)$/)||[])[1];
       if (_mm) {
         _effortSel.hidden = false; _effortSel.disabled = true;
         const o=document.createElement('option'); o.value=_mm.toLowerCase(); o.textContent=_mm.toLowerCase(); _effortSel.appendChild(o); _effortSel.value=o.value;
@@ -4268,7 +4607,7 @@
       // clean manual state: no leftover done-checkmark / agent badge, just the
       // orange ring + "Manual". (a real page-load will set busy=1 → spinner.)
       op.dataset.agent = ''; op.dataset.busy = '0';
-      actTxt.textContent = 'Ready'; setCardSub('', ''); }
+      actTxt.textContent = idleCardText(); setCardSub('', ''); }
     // restore the log position after the banner toggle reflows the rail
     void log.offsetHeight;   // force synchronous reflow so scrollHeight is current
     if (_atBottom) log.scrollTop = log.scrollHeight;
@@ -4371,7 +4710,6 @@
   let _runSawProgress = false;   // has THIS run emitted at least one progress msg yet?
   let _handledState = '';
   let _steerQueued = false;  // a soft steer is queued but not yet consumed by a delivery seam
-  let _heldSteer = null;     // the parked steer bubble awaiting its seam (op-held)
   let _postSteerUntil = 0;
   let _steering = false;     // true from a steer until the NEW run is confirmed 'running' —
   // suppresses ALL terminal-state handling so the killed run's stale done/error can't
@@ -4405,22 +4743,45 @@
       const runKey = d.run_id || String(d.started_ts || '');
       if (_clearedAgentRun && runKey === _clearedAgentRun) return;
       _lastAgentRun = runKey;
+      // Adopt the trace synced by the controlling device before processing
+      // terminal telemetry. A fast launch failure may never poll as running.
+      if (_task && !log.contains(_task)) _task = null;
+      if (!_task && runKey) {
+        const pending = [...log.querySelectorAll('.op-task')].reverse().find(t =>
+          (!t.dataset.agentRun || t.dataset.agentRun === runKey) &&
+          (t.dataset.busy === '1' || /^(Working|Thinking)/.test(t.querySelector('.verb')?.textContent || '')));
+        if (pending) {
+          _task = pending; _task.dataset.agentRun = runKey;
+          _handledState = '';
+          _errShown = !!pending.querySelector('.op-err-step');
+          _taskStart = (d.started_ts || Date.now()/1000) * 1000;
+        }
+      }
+      if (_task && runKey) _task.dataset.agentRun = runKey;
+      paintTokenMeter(d);
       if (window.OperatorWorkbench) setTimeout(() => window.OperatorWorkbench.update(d, pollConversation), 0);
       let maxTs = _agentSince;
       const msgs = (d.messages||[]);
-      // Steer delivery seam (before painting the batch): a queue that drained
-      // while still running means the hook consumed the correction. Close the
-      // pre-steer card as Steered, promote the held bubble into the flow at
-      // this exact point, and let the batch below open a fresh card under it.
-      if (_steerQueued && d.steer_pending === 0) {
+      // Pending styling is persisted and synced, but local queue bookkeeping
+      // is not. Reconcile the DOM even on observers and restored sessions.
+      // Terminal runs cannot retain a live pending correction, including when
+      // failure/stop leaves the server queue count nonzero.
+      const terminal = ['done', 'error', 'interrupted'].includes(d.state);
+      if (d.steer_pending === 0 || terminal) {
+        const deliveredLocally = _steerQueued && !terminal;
         _steerQueued = false;
-        if (_task) { try { finishTask(false, 'Steered'); } catch(_){} }
-        if (_heldSteer) {
-          _heldSteer.classList.remove('op-held');
-          log.appendChild(_heldSteer);
+        if (deliveredLocally && _task) {
+          try { finishTask(false, 'Steered'); } catch(_){}
+        }
+        const held = [...log.querySelectorAll('.op-msg.user.op-held')];
+        held.forEach(message => {
+          message.classList.remove('op-held');
+          if (deliveredLocally) log.appendChild(message);
+        });
+        if (held.length) {
           try { _markLastUser(); } catch(_){}
-          _heldSteer = null;
-          scrollToBottom(true);
+          saveSession();
+          if (deliveredLocally) scrollToBottom(true);
         }
       }
       // The live verb is decided per poll BATCH, actions outranking narration:
@@ -4430,11 +4791,14 @@
       // same poll (the owner 2026-07-22). A narration-only batch still reads
       // Thinking; any action in the batch wins with its own verb.
       let batchVerb = null;
+      const ignoreStoppedMsgs = _interrupting
+        || (d.state === 'interrupted' && (_handledState === '__interrupted__' || _handledState === 'interrupted'));
       msgs.forEach((m, i) => {
         const key = (m.role==='action' ? 'a:'+m.ts+':' : '') + (m.text||'').trim();
         maxTs = Math.max(maxTs, m.ts);
         if (_seenMsg.has(key)) return;
         _seenMsg.add(key);
+        if (ignoreStoppedMsgs) return;
         if (m.role === 'action') {
           taskActionStep(m.text, m.detail);
           batchVerb = actCont(m.text);
@@ -4455,13 +4819,20 @@
           if (!batchVerb) batchVerb = 'Thinking';
         } else if (m.role === 'notice') {
           const nt = (m.text||'').trim();
-          taskNotice(m.kind === 'usage' ? 'Usage warning' : 'Operator may be stuck', nt);
+          const verification = m.reason === 'verification' || /^(?:🔎\s*)?Completion check/.test(nt);
+          const retry = m.reason === 'retry' || /^(?:🔁\s*)?Auto-replan/.test(nt);
+          if (verification) taskActionStep('Checking result', '');
+          else if (retry) taskActionStep('Trying another approach', '');
+          else taskNotice(m.kind === 'usage' ? 'Usage warning' :
+            m.reason === 'loop' ? 'Repeated actions' : 'Checking progress', nt, m.kind === 'usage' || m.reason === 'loop');
         } else if (m.role === 'error') {
           const et = (m.text||'').trim();
           turnError('Turn failed', et || 'The agent ended the turn with an error.');   // one card/turn, specific msg preferred
         }
       });
       if (batchVerb) taskVerb(batchVerb, true);
+      // The first telemetry batch may have created the task after the initial paint.
+      paintTokenMeter(d);
       _agentSince = maxTs;
       if (msgs.length) { _runProgressTs = Date.now(); _runSawProgress = true; }   // any new msg = progress
       // terminal states must be handled ONCE — not re-fired every poll (that
@@ -4496,10 +4867,28 @@
       renderedReply.innerHTML = _mdToHtml(reply || '');
       const _replyKey = _key(renderedReply);
       const lastMessage = d.state === 'done' ? [...log.querySelectorAll('.op-msg')].pop() : null;
-      const _alreadyShown = !!(lastMessage && lastMessage.classList.contains('bot')
-        && _key(lastMessage.querySelector('.bubble')) === _replyKey);
+      // A new user bubble can arrive while the server still exposes the
+      // previous completed run. Reconcile by run identity across the saved
+      // transcript, not only by whichever message currently happens to be last.
+      const shownRun = runKey && [...log.querySelectorAll('.op-msg.bot')]
+        .find(el => el.dataset.agentRun === runKey);
+      const sameLastReply = lastMessage && lastMessage.classList.contains('bot')
+        && _key(lastMessage.querySelector('.bubble')) === _replyKey
+        && (!runKey || !lastMessage.dataset.agentRun || lastMessage.dataset.agentRun === runKey);
+      const _alreadyShown = !!(shownRun || sameLastReply);
+      if (sameLastReply && runKey && !lastMessage.dataset.agentRun) {
+        lastMessage.dataset.agentRun = runKey;
+        saveSession();
+      }
       const missingFinal = d.state === 'done' && !!reply && !_alreadyShown;
-      if (d.state !== 'running' && !_sawRunning && !missingFinal) { _handledState = d.state; return; }
+      if (!_interrupting && !_steering) {
+        setTaskHeadline(d.handoff?.ts ? 'Needs your input'
+          : d.state === 'running' ? 'In progress'
+          : d.state === 'done' ? 'Finished'
+          : d.state === 'error' ? 'Failed'
+          : d.state === 'interrupted' ? 'Stopped' : '');
+      }
+      if (d.state !== 'running' && d.state !== 'error' && d.state !== 'interrupted' && !_sawRunning && !_task && !missingFinal) { _handledState = d.state; return; }
       // #4 HAND-OFF: the agent emitted [[TAKE_CONTROL]] → surface the takeover card
       // (once per request) instead of the normal done/no-summary path.
       if (d.handoff && d.handoff.ts && d.handoff.ts !== _handoffTs) {
@@ -4508,7 +4897,7 @@
         if (_task) { try { finishTask(false, 'Stopped'); } catch(_){} }   // trace: "Stopped after Xs"
         renderHandoff(d.handoff.reason || '');
         op.dataset.busy='0'; op.dataset.agent='stopped'; setInFlight(false);   // stop-sign status icon
-        setCardText(actTxt, 'Stopped'); setCardSub(d.bot||'', 'waiting for human');
+        setTaskHeadline('Needs your input'); setCardSub(d.bot||'', d.handoff.reason || 'Waiting for your input');
         _handledState = d.state;   // swallow the done/error tail of this run
         return;
       }
@@ -4528,17 +4917,14 @@
           && (_steering || Date.now() < _postSteerUntil)) { _handledState = d.state; return; }  // swallow the killed run's tail after a steer
       if (_interrupting && d.state !== 'running') { _handledState = d.state; return; }  // user hit Stop → swallow the killed run's stale done/error (no spurious "Worked for 0s")
       if (d.state !== 'running') _handledState = d.state;
-      if (d.state === 'running') { op.dataset.busy='1'; setCardText(actTxt, 'Working');
+      if (d.state === 'running') { op.dataset.busy='1'; setTaskHeadline('In progress');
         // soft stall (server signal, v1.1): the run's process is alive but the server
         // saw no progress heartbeat past the soft budget — surface it, don't kill it.
         // The HARD stall is handled server-side (auto-stop → state flips to error).
-        if (d.stalled) { setCardSub(d.bot||'', 'quiet ' + Math.round(d.stalled_for||0) + 's — stalled? ■ stops it', '⏱'); }
+        if (d.stalled) { setCardSub('', 'Stalled · ' + Math.round(d.stalled_for||0) + 's'); setMinEmoji('⏱'); }
         else {
-          // 1.0.15 live token meter: the ledger's burn number, while it burns
-          const _cum = d.cumulative_in_tokens;
-          const _tk = (_cum >= 1e6) ? (_cum/1e6).toFixed(1) + 'M tok'
-                    : (_cum >= 1000) ? Math.round(_cum/1000) + 'k tok' : '';
-          setCardSub(d.bot||'', _lastActionVerb.toLowerCase() + (_tk ? ' · ' + _tk : ''), _lastActionEmoji);
+          setCardSub('', compactStatusAction(_lastActionVerb));
+          setMinEmoji(_lastActionEmoji);
         }
         op.dataset.agent='running'; setInFlight(true);
         if (!_runProgressTs) { _runProgressTs = Date.now(); _runSawProgress = false; }
@@ -4555,14 +4941,14 @@
         const _dead = d.alive === false;            // subprocess gone but state stuck "running" → real crash
         const _hung = Date.now() - _runProgressTs > 480000;  // 8min backstop: alive but wedged
         if (_canControl && ((_dead && Date.now() - _runProgressTs > 15000) || _hung)) {
-          op.dataset.busy='0'; setCardText(actTxt, 'Failed');
+          op.dataset.busy='0'; setTaskHeadline('Failed');
           setCardSub(d.bot||'', 'stalled'); op.dataset.agent='errored';
           turnError('Turn failed', 'The agent stopped responding and was ended.'); finishTask(true); setInFlight(false);
           try { fetch(STOP_URL, _conversationPost()); } catch {}
           _runProgressTs = 0;
         }
       }
-      else if (d.state === 'done') { op.dataset.busy='0'; setCardText(actTxt, 'Done');
+      else if (d.state === 'done') { op.dataset.busy='0'; setTaskHeadline('Finished');
         _lastActionEmoji='💭'; _lastActionVerb='Thinking'; _lastActionVisual=false;   // clear stale live verb
         setCardSub(selectedBot()||'', 'idle'); op.dataset.agent='done';   // idle shows the SELECTED bot, not whoever last ran
         // Promote the final reply into a markdown bubble. Prefer the server's
@@ -4590,7 +4976,7 @@
               break;
             } }
           finishTask();
-          logBotReply(reply);
+          logBotReply(reply, runKey);
           _lastAssistant = '';
         } else {
           // genuinely no final answer from the agent — say so rather than going silent
@@ -4604,29 +4990,25 @@
         // after Xs" — no red error card, no extra done-verb. (Unless a steer is mid-
         // flight, in which case submit() already closed it as "Steered".)
         if (!_interrupting && !_steering) {
-          op.dataset.busy='0'; setCardText(actTxt, 'Ready');
+          op.dataset.busy='0'; setCardText(actTxt, idleCardText());
           _lastActionEmoji='💭'; _lastActionVerb='Thinking'; _lastActionVisual=false;
           setCardSub(selectedBot()||'', 'idle'); op.dataset.agent='';
-          if (_task) { try { finishTask(false, 'Interrupted'); } catch(_){} }
+          if (_task) { try { finishTask(true, 'Interrupted'); } catch(_){} }
         }
         _runProgressTs = 0; setInFlight(false); }
       else if (d.state === 'error') {                 // agent died/gave up → don't hang
         if (!_interrupting) {
-          op.dataset.busy='0'; setCardText(actTxt, 'Failed');
+          op.dataset.busy='0'; setTaskHeadline('Failed');
           setCardSub(d.bot||'', 'failed'); op.dataset.agent='errored';
-          turnError('Turn failed', (d && d.detail) ? d.detail : 'The agent ended the turn with an error.'); finishTask(true);
+          turnError('Turn failed', (d && d.detail) ? d.detail : 'The agent ended the turn with an error.'); finishTask(true, 'Failed');
         }
         _runProgressTs = 0; setInFlight(false); }
       else if (d.state === 'idle') { setInFlight(false); }
     } catch {} finally { _agentPolling = false; }
   }
   setInterval(pollAgent, 800);   // snappier trace (esp. gemma/agy, whose steps surface via polling not streaming)
-  // orphan-spinner watchdog: nothing in flight but a task still spinning → finish it.
-  setInterval(() => {
-    if (!_inFlight && _task) { try { finishTask(); } catch(_){} }
-    if (!_inFlight) { const z=log.querySelector('.op-task[data-busy="1"]');
-      if (z) { z.dataset.busy='0'; } }
-  }, 2000);
+  // Restored traces settle from server telemetry; an idle local composer
+  // is not evidence that a run on another device succeeded.
 
   // poll who's actually driving (from the action-tap) → live status + event trail
   let _lastEvTs = Date.now()/1000;
@@ -4638,6 +5020,11 @@
   const ham = document.getElementById('op-ham-menu');
   const hamWrap = document.getElementById('op-ham');
   const hamBtn = document.getElementById('op-ham-btn');
+  // The browser pane is its own stacking context below the chat sheet, so a
+  // menu inside it opened UNDER the sheet on phones and its lower half could
+  // not be reached (the owner 2026-10-06). Lifted to the cockpit root it layers
+  // above the sheet; layout and theme still come from the cockpit.
+  if (ham && op && ham.parentElement !== op) op.appendChild(ham);
   // These are genuine shortcut guides, not a generic box for any glyph that
   // vaguely resembles the action. Match the keyboard in front of the viewer.
   const _hamPlatform = (navigator.userAgentData && navigator.userAgentData.platform)
@@ -4665,7 +5052,8 @@
     ham.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
     // cap to the space actually below the button so a tall menu (high zoom /
     // short viewport) scrolls inside itself instead of running off the bottom
-    ham.style.maxHeight = Math.max(160, (window.innerHeight - top - 10)) + 'px';
+    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    ham.style.maxHeight = Math.max(160, (vh - top - 10)) + 'px';
   }
   function openHam() {
     positionHam();
@@ -4676,7 +5064,7 @@
     if (ham.hidden) openHam(); else closeHam(); });
   // outside click (capture phase so it always fires first) closes it
   document.addEventListener('click', (e) => {
-    if (!ham.hidden && !hamWrap.contains(e.target)) closeHam(); }, true);
+    if (!ham.hidden && !hamWrap.contains(e.target) && !ham.contains(e.target)) closeHam(); }, true);
   window.addEventListener('resize', () => { if (!ham.hidden) positionHam(); }, {passive:true});
   // picking a menu item runs its action then closes
   ham.querySelectorAll('.op-ham-item').forEach(it =>
@@ -4800,6 +5188,12 @@
     function fmtTok(n){ if (!n) return '';
       return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M tok'
            : n >= 1000 ? Math.round(n / 1000) + 'k tok' : n + ' tok'; }
+    // The ledger records the runner's terminal state (done|error|interrupted,
+    // or idle for an unwedged run). Any other value, or none, must not take the
+    // green "done" styling.
+    function histStateClass(state){
+      return state === 'done' || state === 'error' || state === 'interrupted' || state === 'idle'
+        ? state : 'unknown'; }
     async function loadHistory(){
       listEl.textContent = 'loading…';
       try {
@@ -4813,8 +5207,8 @@
           const task = document.createElement('span'); task.className = 'task';
           task.textContent = run.task || '(no task)'; task.title = run.task || '';
           const st = document.createElement('span');
-          st.className = 'st st-' + (run.state || 'done');
-          st.textContent = run.reason || run.state || '';
+          st.className = 'st st-' + histStateClass(run.state);
+          st.textContent = run.reason || run.state || 'unknown';
           top.appendChild(task); top.appendChild(st);
           // ↻ run again (1.0.13): re-dispatch with the ROW's bundle (bot/
           // model/effort/surface), not the current pickers. desktop-real is
@@ -4953,129 +5347,183 @@
     _favPop.classList.remove('show');
     _favPopHide = setTimeout(() => { if (_favPop) _favPop.classList.remove('show'); }, 180);
   }
+  // Keyed render: each tab element is kept across polls and updated in
+  // place, so a title or active change no longer rebuilds the strip and
+  // replays every pop-in; only a tab that is new pops, and one that closed
+  // slides out. The order shown is the server's, which applies the drag
+  // order (the owner 2026-10-19: "drag and drop isn't smooth, transitions leave
+  // some to be desired").
+  const _tabEls = new Map();            // key -> element
+  let _tabAdd = null;
+  function _tabKey(t){ return t.id || ((t.url || '') + '#' + t.i); }
+  function _tabHost(url){ try { return /^https?:\/\//i.test(url || '') ? new URL(url).hostname : ''; } catch { return ''; } }
+  function _buildTab(key){
+    const el = document.createElement('div');
+    el.className = 'op-tab op-tab-new';
+    el.dataset.key = key;
+    el.addEventListener('animationend', () => el.classList.remove('op-tab-new'), { once: true });
+    const fv = document.createElement('img'); fv.className = 'op-tab-fav'; fv.alt = ''; fv.hidden = true;
+    fv.addEventListener('error', () => { fv.hidden = true; fv.dataset.host = ''; });
+    fv.addEventListener('mouseenter', () => { if (fv.dataset.host) showFavPop(fv, fv.dataset.host, el.dataset.title || fv.dataset.host); });
+    fv.addEventListener('mouseleave', hideFavPop);
+    const l = document.createElement('span'); l.className = 'lbl';
+    const x = document.createElement('span'); x.className = 'op-tab-x';
+    x.innerHTML = '<svg viewBox="0 0 14 14" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7"></path></svg>';
+    x.addEventListener('click', async (e) => { e.stopPropagation();
+      el.classList.add('op-tab-closing');   // play the close-out animation first
+      // Was this the last one? Then the strip itself is about to go, and
+      // :empty would cut it dead. Send it out with the same fade the
+      // toggle uses (the owner 2026-08-22).
+      const last = tabsEl.querySelectorAll('.op-tab:not(.op-tab-closing)').length === 0;
+      const i = el.dataset.i;
+      setTimeout(async () => {
+        try { await fetch(OP_URLS.tab_close.replace('/0','/'+i), {method:'POST'}); } catch {}
+        _tabEls.delete(key); el.remove();
+        if (last) hideTabStrip();
+        pollTabs();
+      }, 190);
+    });
+    el.append(fv, l, x);
+    el.addEventListener('pointerdown', e => _tabPointerDown(el, e));
+    return el;
+  }
+  function _updateTab(el, t){
+    el.dataset.i = String(t.i);
+    el.dataset.title = t.title || '';
+    el.classList.toggle('active', !!t.active);
+    const l = el.querySelector('.lbl'); if (l.textContent !== (t.title || 'tab')) l.textContent = t.title || 'tab';
+    // favicon (#5): derived from the tab's url via Google's s2 endpoint —
+    // no backend change; a failed load just hides the img (text-only tab).
+    const fv = el.querySelector('.op-tab-fav'); const host = _tabHost(t.url);
+    if (host && fv.dataset.host !== host) { fv.dataset.host = host; fv.hidden = false;
+      fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=32'; }
+    else if (!host && !fv.hidden) { fv.hidden = true; fv.dataset.host = ''; }
+  }
+  // drag-to-reorder, POINTER-based (the old HTML5 draggable never fired on
+  // touch — iPad is a primary driver). Pointer capture engages AT pointer-
+  // down (not after the slop threshold): un-captured pointermove events
+  // fire on whatever is under the pointer, so a fast drag would escape the
+  // tab and never reach this listener. With capture, tap-vs-drag is decided
+  // here too — the tab SWITCH happens on a no-drag pointerup instead of a
+  // label click (capture retargets the composed click unreliably across
+  // browsers). The dragged tab follows the pointer on a transform and the
+  // others slide aside on theirs; the DOM is reordered once, on drop, and
+  // the order is posted so the next poll agrees with what is on screen.
+  // Chrome's real tab order is untouched (CDP has no call to move a tab).
+  function _tabPointerDown(el, e){
+    if (e.target.closest('.op-tab-x')) return;      // the ✕ is not a handle
+    if (e.button !== undefined && e.button !== 0) return;
+    try { el.setPointerCapture(e.pointerId); } catch {}
+    const startX = e.clientX, startY = e.clientY;
+    let dragging = false, others = [], rects = [], origIdx = 0, span = 0, target = 0;
+    const begin = () => {
+      dragging = true; _dragTab = el; el.classList.add('dragging');
+      others = [...tabsEl.querySelectorAll('.op-tab')].filter(s => s !== el && !s.classList.contains('op-tab-closing'));
+      rects = others.map(s => s.getBoundingClientRect());
+      const mine = el.getBoundingClientRect();
+      origIdx = others.filter((s, k) => rects[k].left < mine.left).length;
+      target = origIdx;
+      const gap = parseFloat(getComputedStyle(tabsEl).columnGap || getComputedStyle(tabsEl).gap) || 0;
+      span = mine.width + gap;
+    };
+    const move = ev => {
+      if (!dragging) {
+        if (Math.abs(ev.clientX - startX) < 6 && Math.abs(ev.clientY - startY) < 6) return;
+        begin();
+      }
+      const dx = ev.clientX - startX;
+      el.style.transform = 'translateX(' + dx + 'px) scale(1.04)';
+      const centre = el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2;
+      target = rects.filter(r => r.left + r.width / 2 < centre).length;
+      others.forEach((s, k) => {
+        let shift = 0;
+        if (target < origIdx && k >= target && k < origIdx) shift = span;        // moving left: these slide right
+        else if (target > origIdx && k >= origIdx && k < target) shift = -span;  // moving right: these slide left
+        s.style.transform = shift ? 'translateX(' + shift + 'px)' : '';
+      });
+    };
+    const settle = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', done);
+      el.removeEventListener('pointercancel', cancel);
+      try { el.releasePointerCapture(e.pointerId); } catch {}
+      if (!dragging) return false;
+      // Commit the order in one frame: reorder the DOM, then drop every
+      // transform, so nothing visibly jumps between the two.
+      const order = others.slice(); order.splice(target, 0, el);
+      el.classList.remove('dragging'); el.classList.add('op-tab-settling');
+      for (const s of order) tabsEl.insertBefore(s, _tabAdd);
+      for (const s of order) s.style.transform = '';
+      setTimeout(() => el.classList.remove('op-tab-settling'), 180);
+      _dragTab = null;
+      return true;
+    };
+    const done = async () => {
+      if (settle()) {
+        const ids = [...tabsEl.querySelectorAll('.op-tab')].map(s => s.dataset.key).filter(k => k && !k.includes('#'));
+        try { await fetch(OP_URLS.tabs_order, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})}); } catch {}
+        tabsEl._sig = ''; pollTabs();
+        return;
+      }
+      // plain tap → switch to this tab and collapse the strip
+      try { await fetch(OP_URLS.tab_switch.replace('/0','/'+el.dataset.i), {method:'POST'}); pollTabs(); } catch {}
+      hideTabStrip();
+    };
+    const cancel = () => { settle(); };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', done);
+    el.addEventListener('pointercancel', cancel);
+  }
   async function pollTabs() {
     try {
       const d = await (await fetch(TABS_URL)).json();
       const tabs = d.tabs || [];
-      // rebuild only if changed (avoid clobbering on every poll)
-      if (_dragTab) return;   // don't rebuild mid-drag
-      const sig = tabs.map(t => t.i + (t.active?'*':'') + t.title).join('|');
+      if (_dragTab) return;   // don't touch the strip mid-drag
+      const sig = tabs.map(t => _tabKey(t) + ':' + t.i + (t.active?'*':'') + t.title).join('|');
       if (tabsEl._sig === sig) return; tabsEl._sig = sig;
-      tabsEl.textContent = '';
-      tabs.forEach(t => {
-        const el = document.createElement('div');
-        el.className = 'op-tab' + (t.active ? ' active' : '');
-        // drag-to-reorder, POINTER-based (the old HTML5 draggable never fired on
-        // touch — iPad is a primary driver). Pointer capture engages AT pointer-
-        // down (not after the slop threshold): un-captured pointermove events
-        // fire on whatever is under the pointer, so a fast drag would escape the
-        // tab and never reach this listener. With capture, tap-vs-drag is decided
-        // here too — the tab SWITCH happens on a no-drag pointerup instead of a
-        // label click (capture retargets the composed click unreliably across
-        // browsers). Reorder is the strip's own (visual) order; Chrome's real
-        // tab order is untouched. The ✕ keeps its own click path (no capture).
-        el.addEventListener('pointerdown', e => {
-          if (e.target.closest('.op-tab-x')) return;      // the ✕ is not a handle
-          if (e.button !== undefined && e.button !== 0) return;
-          try { el.setPointerCapture(e.pointerId); } catch {}
-          const startX = e.clientX, startY = e.clientY;
-          let dragging = false;
-          const move = ev => {
-            if (!dragging) {
-              if (Math.abs(ev.clientX - startX) < 6 && Math.abs(ev.clientY - startY) < 6) return;
-              dragging = true; _dragTab = el; el.classList.add('dragging');
-            }
-            // classic list-reorder: insert before the first sibling whose midpoint
-            // is right of the pointer; past every midpoint → land at the end
-            // (before the + button). Covers exact-center drops and drops beyond
-            // the last tab — the earlier inside-a-rect-only version missed both.
-            let placed = false;
-            for (const sib of el.parentNode.querySelectorAll('.op-tab')) {
-              if (sib === el) continue;
-              const r = sib.getBoundingClientRect();
-              if (ev.clientX < r.left + r.width/2) {
-                if (el.nextSibling !== sib) el.parentNode.insertBefore(el, sib);
-                placed = true; break;
-              }
-            }
-            if (!placed) {
-              const add = el.parentNode.querySelector('.op-tab-add');
-              if (add && el.nextSibling !== add) el.parentNode.insertBefore(el, add);
-            }
-          };
-          const done = async ev => {
-            el.removeEventListener('pointermove', move);
-            el.removeEventListener('pointerup', done);
-            el.removeEventListener('pointercancel', cancel);
-            try { el.releasePointerCapture(e.pointerId); } catch {}
-            if (dragging) { el.classList.remove('dragging'); _dragTab = null; return; }
-            // plain tap → switch to this tab and collapse the strip
-            try { await fetch(OP_URLS.tab_switch.replace('/0','/'+t.i), {method:'POST'}); pollTabs(); } catch {}
-            hideTabStrip();
-          };
-          const cancel = () => {
-            el.removeEventListener('pointermove', move);
-            el.removeEventListener('pointerup', done);
-            el.removeEventListener('pointercancel', cancel);
-            try { el.releasePointerCapture(e.pointerId); } catch {}
-            if (dragging) { el.classList.remove('dragging'); _dragTab = null; }
-          };
-          el.addEventListener('pointermove', move);
-          el.addEventListener('pointerup', done);
-          el.addEventListener('pointercancel', cancel);
+      if (!_tabAdd) {
+        _tabAdd = document.createElement('button'); _tabAdd.className='op-tab-add';
+        _tabAdd.innerHTML='<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"></path></svg>';
+        _tabAdd.title='new tab';
+        _tabAdd.addEventListener('click', async () => {
+          try { await fetch(OP_URLS.tab_new, {method:'POST'}); pollTabs(); } catch {}
         });
-        // favicon (#5): derived from the tab's url via Google's s2 endpoint —
-        // no backend change; a failed load just removes the img (text-only tab).
-        if (/^https?:\/\//i.test(t.url || '')) {
-          try {
-            const host = new URL(t.url).hostname;
-            const fv = document.createElement('img'); fv.className = 'op-tab-fav'; fv.alt = '';
-            fv.src = 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(host) + '&sz=32';
-            fv.addEventListener('error', () => fv.remove());
-            // hover the favicon → big-icon + page-title popover (v0.7.0)
-            fv.addEventListener('mouseenter', () => showFavPop(fv, host, t.title || host));
-            fv.addEventListener('mouseleave', hideFavPop);
-            el.appendChild(fv);
-          } catch {}
-        }
-        const l = document.createElement('span'); l.className='lbl'; l.textContent = t.title || 'tab';
-        const x = document.createElement('span'); x.className='op-tab-x';
-        x.innerHTML = '<svg viewBox="0 0 14 14" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7"></path></svg>';
-        x.addEventListener('click', async (e) => { e.stopPropagation();
-          el.classList.add('op-tab-closing');   // play the close-out animation first
-          // Was this the last one? Then the strip itself is about to go, and
-          // :empty would cut it dead. Send it out with the same fade the
-          // toggle uses (the owner 2026-08-22).
-          const last = el.parentNode.querySelectorAll('.op-tab:not(.op-tab-closing)').length === 0;
-          setTimeout(async () => {
-            try { await fetch(OP_URLS.tab_close.replace('/0','/'+t.i), {method:'POST'}); } catch {}
-            if (last) hideTabStrip();
-            pollTabs();
-          }, 190);
-        });
-        el.appendChild(l); el.appendChild(x);
-        tabsEl.appendChild(el);
-      });
-      const add = document.createElement('button'); add.className='op-tab-add';
-      add.innerHTML='<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"></path></svg>';
-      add.title='new tab';
-      add.addEventListener('click', async () => {
-        try { await fetch(OP_URLS.tab_new, {method:'POST'}); pollTabs(); } catch {}
-      });
-      tabsEl.appendChild(add);
+      }
+      const seen = new Set();
+      for (const t of tabs) {
+        const key = _tabKey(t); seen.add(key);
+        let el = _tabEls.get(key);
+        if (!el) { el = _buildTab(key); _tabEls.set(key, el); }
+        _updateTab(el, t);
+        tabsEl.appendChild(el);           // appendChild moves an existing element into place
+      }
+      for (const [key, el] of [..._tabEls]) {
+        if (seen.has(key) || el.classList.contains('op-tab-closing')) continue;
+        _tabEls.delete(key);
+        el.classList.add('op-tab-closing');
+        el.addEventListener('animationend', () => el.remove(), { once: true });
+        setTimeout(() => el.remove(), 260);
+      }
+      tabsEl.appendChild(_tabAdd);
     } catch {}
   }
   pollTabs(); setInterval(pollTabs, 2500);
 
   // ── agent cursor: map a normalized click onto the displayed (letterboxed) frame ──
   const _agentCursor = document.getElementById('op-agent-cursor');
-  let _lastClickT = 0;
+  let _lastClickT = 0, _lastClickX = -1, _lastClickY = -1;
   function showAgentClick(c){
     if (!_agentCursor || !c) return;
-    if (c.t === _lastClickT) return;   // de-dupe (server uses age, not id) — guard by pos+age
+    if (typeof c.x !== 'number' || typeof c.y !== 'number') return;
+    const now = performance.now();
+    if (c.t && c.t === _lastClickT) return;   // de-dupe (server uses age, not id) — guard by pos+age
+    if (typeof c.age === 'number' && _lastClickT
+        && Math.abs(c.x - _lastClickX) < 0.002 && Math.abs(c.y - _lastClickY) < 0.002
+        && (now - _lastClickT) < 1600) return;
     const r = stage.getBoundingClientRect();
     const nW = view.naturalWidth, nH = view.naturalHeight;
     if (!nW || !nH) return;
+    _lastClickT = c.t || now; _lastClickX = c.x; _lastClickY = c.y;
     // invert object-fit:contain — the frame is centered + scaled inside the stage
     const sc = Math.min(r.width / nW, r.height / nH);
     const dW = nW * sc, dH = nH * sc;
@@ -5090,7 +5538,7 @@
     _agentCursor._press = setTimeout(() => {
       _agentCursor.classList.remove('press'); void _agentCursor.offsetWidth; _agentCursor.classList.add('press');
       setTimeout(()=>_agentCursor.classList.remove('press'), 460);
-    }, 520);   // ≈ the glide duration
+    }, 180);   // ≈ the glide duration
     // Keep the cursor PRESENT for the whole run. The old 5s timer hid it during
     // any stretch without a click — a typing or scrolling passage — so it read
     // as absent exactly when you were watching to see where the bot was
@@ -5131,18 +5579,31 @@
     _steerCursor._fade = setTimeout(() => _steerCursor.classList.remove('show'), 2500);
   }
   let _coldSince = 0;
-  function launchpadConnection(state) {
+  let _connectionBootDeadline = 0;
+  let _connectionBootTimer = null;
+  let _statusPollInFlight = false;
+  function launchpadConnection(state, detail = '') {
     // Presentation only: a failed reachability probe during demand-start is
     // not a failed connection. Do not feed this back into stream recovery.
     op.dataset.connection = state;
+    const starting = state === 'connecting' && detail === 'starting browser…';
+    op.dataset.connectionPhase = starting ? 'starting' : 'attaching';
     const mark = document.getElementById('op-lp-mark');
-    if (mark) mark.setAttribute('aria-label', state === 'connecting' ? 'Connecting…' :
+    if (mark) mark.setAttribute('aria-label', state === 'connecting' ?
+      (starting ? 'Starting browser…' : 'Connecting to browser…') :
       state === 'live' ? 'Connected' : 'Connection error');
   }
   async function poll() {
     // Match the frame pump; visibilitychange already refreshes on return.
-    if (document.hidden) return;
-    try { const d = await (await fetch(STATUS)).json();
+    if (document.hidden || _statusPollInFlight) return;
+    _statusPollInFlight = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      const response = await fetch(STATUS, {cache: 'no-store', signal: controller.signal});
+      if (!response.ok) throw new Error('Status unavailable');
+      const d = await response.json();
+      if (!_connectionBootDeadline) _connectionBootDeadline = Date.now() + 2000;
       // another tab (or a dispatch) may have switched the surface — stay in sync
       if (d.surface && d.surface !== _surfaceActive) {
         _surfaceActive = d.surface; applySurfaceState();
@@ -5156,12 +5617,19 @@
       // yet — leave the mark alone rather than flash a false "down".
       if (d.browser_up === false) op.classList.add('op-browser-down');
       else if (d.browser_up === true) op.classList.remove('op-browser-down');
+      // Reachability cannot prove attachment or delivery to this viewer.
+      const feedError = d.status === 'error' || _pumpFails >= 2;
+      const feedLive = !feedError && d.has_frame === true && _hasFrame;
       if (!_isGameSurface()) {
-        launchpadConnection(d.has_frame ? 'live' : d.status === 'connecting' ? 'connecting' :
-          d.status === 'error' || d.browser_up === false ? 'error' :
-          d.browser_up === true ? 'live' : 'connecting');
+        launchpadConnection(feedError ? 'error' : feedLive ? 'live' : 'connecting', d.detail);
+        // Sample the first asynchronous reachability result promptly. This
+        // bounded boot burst ends after two seconds; normal polling is unchanged.
+        if (d.browser_up !== true && !d.has_frame && Date.now() < _connectionBootDeadline) {
+          clearTimeout(_connectionBootTimer);
+          _connectionBootTimer = setTimeout(poll, 150);
+        }
       } else delete op.dataset.connection;
-      if (d.has_frame) { setState('live', ''); _coldSince = 0; _desktopNoFrame = false;
+      if (feedLive) { setState('live', ''); _coldSince = 0; _desktopNoFrame = false;
         _pollCold = false;   // poll authority: feed is healthy — loads may clear again
         // server healthy → if we were showing SIGNAL LOST, reconnect ONCE to
         // resume real frames, then trust the open MJPEG connection (no per-poll
@@ -5169,7 +5637,7 @@
         if (_wasLost) { _wasLost = false; connectStream(); }
         signalOk();
       }
-      else if (d.status === 'error') { _desktopNoFrame = false;
+      else if (feedError) { _desktopNoFrame = false;
         setState('error', 'disconnected');
         if (!_pollCold) { _pollCold = true; signalLost(); }   // transition-gated: assert once per cold spell
         _coldSince = _coldSince||Date.now(); }
@@ -5183,12 +5651,13 @@
         desktopIdle();
       }
       else {
+        setState('connecting', '');
         _desktopNoFrame = false;
         if (!_coldSince) _coldSince = Date.now();
         const coldMs = Date.now() - _coldSince;
         // brief gaps: the server heartbeats the last frame, so stay as-is (no
         // hide/blink). Only a sustained 6s drop is a real SIGNAL LOST.
-        if (coldMs >= 6000) {
+        if (_hasFrame && coldMs >= 6000) {
           if (!_pollCold) {   // transition-gated: one assert per cold spell, not per poll
             _pollCold = true;
             signalLost();
@@ -5198,10 +5667,12 @@
         }
       }
     } catch { if (!_coldSince) _coldSince = Date.now();
+      setState('connecting', '');
+      if (!_isGameSurface()) launchpadConnection('connecting');
       if (Date.now()-_coldSince >= 6000) {
         setState('error','disconnected');
         if (!_isGameSurface()) launchpadConnection('error');
-      } }
+      } } finally { clearTimeout(timeout); _statusPollInFlight = false; }
   }
   const _sess = restoreSession();
   // restore the mode IMMEDIATELY (not in the 400ms timeout) so an early saveSession
@@ -5229,6 +5700,7 @@
     if (typeof d.agent_since === 'number') _agentSince = d.agent_since;
     if (d.log) {
       log.innerHTML = d.log;
+      normalizeSavedTraceLabels(log);
       // same dead-listener hygiene as restoreSession — but keep .done handoff
       // cards (inert records, persist across reload; the owner 2026-07-23)
       log.querySelectorAll('.op-handoff:not(.done)').forEach(c => c.remove());
@@ -5256,8 +5728,9 @@
       if (typeof syncEffort === 'function') syncEffort(); }
     if (d.effort) { const c = document.getElementById('op-effort');
       if (c && [].some.call(c.options, o => o.value === d.effort)) c.value = d.effort; }
+    if (d.service_tier) { _speedPreference = d.service_tier; syncSpeed(); }
     window._opFitModel();
-    if (d.log) recoverHistory();
+    recoverHistory();
     // cache the adopted copy locally WITH its rev — and no re-push (nothing new)
     try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign(
       {_srev: _srev, _crev: _crev, _conversation_id: _conversationId},
@@ -5284,6 +5757,34 @@
       let end = user.nextElementSibling, anchor = user;
       const section = [];
       while (end && !end.matches('.op-msg.user')) { section.push(end); anchor = end; end = end.nextElementSibling; }
+      // Usage in the retained turn is authoritative; the saved HTML is only a cache.
+      let task = [...section].reverse().find(el => el.matches('.op-task[data-busy="0"]') &&
+        (!el.dataset.historyTurn || el.dataset.historyTurn === String(turn.id)));
+      const meter = turnTokenMeter(turn);
+      if (task || !meter.hidden) {
+        if (!task) {
+          task = document.createElement('div'); task.className = 'op-task op-no-steps collapsed';
+          task.dataset.busy = '0';
+          const head = document.createElement('div'); head.className = 'op-task-head';
+          head.append(_el('ico'), _el('verb', turn.state === 'error' ? 'Failed' :
+            turn.state === 'interrupted' ? 'Interrupted' : 'Worked'));
+          task.append(head); user.after(task); section.unshift(task);
+          if (anchor === user) anchor = task;
+        }
+        task.dataset.historyTurn = turn.id;
+        let count = task.querySelector('.op-step-count');
+        if (!count) { count = document.createElement('div'); count.className = 'op-step-count'; }
+        const steps = reportedTokenCount(turn.step_count);
+        if (steps != null) {
+          let number = count.querySelector('.sc-n');
+          if (!number) { number = _el('sc-n'); count.prepend(number); }
+          number.textContent = steps + (steps === 1 ? ' step' : ' steps');
+        }
+        count.querySelectorAll('.op-token-meter').forEach(el => el.remove());
+        if (!meter.hidden) count.append(meter);
+        count.hidden = !count.children.length;
+        task.querySelector('.op-task-head')?.after(count);
+      }
       if (turn.final) {
         const rendered = document.createElement('span'); rendered.className = 'bubble'; rendered.innerHTML = _mdToHtml(turn.final);
         const key = norm(rendered.textContent);
@@ -5337,15 +5838,24 @@
     } finally { page.busy = false; }
   }
   (async () => { try {
-    const r = await fetch(SESSION + (_conversationId
+    let r = await fetch(SESSION + (_conversationId
       ? '?conversation_id=' + encodeURIComponent(_conversationId) : ''),
       {cache: 'no-store'});
+    // Cached ids may outlive deletion on another device. Explicit handoff
+    // links retain their target; only a stale tab cache follows the active chat.
+    if (r.status === 404 && !linkedConversation) r = await fetch(SESSION, {cache:'no-store'});
     const j = await r.json();
+    const changedChat = !!(_conversationId && j && j.ok && j.conversation_id && j.conversation_id !== _conversationId);
     if (j && j.ok && j.conversation_id) _setConversationId(j.conversation_id);
     if (!j || !j.ok) return;
+    if (linkedConversation && j.browser_job) {
+      await fetch(OP_URLS.session_one.replace('__S__', encodeURIComponent(_conversationId)) + '/browser',
+        _conversationPost({}));
+    }
     if (typeof j.conversation_rev === 'number') _crev = j.conversation_rev;
-    if (j.data) await applySessionData(
-      j.data, j.rev, false, j.conversation_id, j.conversation_rev);
+    if (j.data || changedChat) await applySessionData(
+      j.data, j.rev, changedChat, j.conversation_id, j.conversation_rev);
+    if (changedChat) await _threadHeartbeat(false);
   } catch(_){} })();
   setTimeout(async () => { try {
     // Restore the bot FIRST, then reload the model list for THAT bot — otherwise the
@@ -5361,6 +5871,7 @@
       if (typeof syncEffort==='function') syncEffort(); }
     if (_sess.effort) { const c=document.getElementById('op-effort');
       if (c && [].some.call(c.options,o=>o.value===_sess.effort)) c.value=_sess.effort; }
+    if (_sess.service_tier) { _speedPreference = _sess.service_tier; syncSpeed(); }
     window._opFitModel();
     if (typeof applyMode === 'function') { MODE = (_sess.mode === 'auto' ? 'auto' : (_sess.mode === 'man' ? 'man' : MODE)); applyMode(); }
   } catch {} }, 400);
@@ -5536,8 +6047,8 @@
         || [s.title, s.preview, s.bot, s.model, s.surface, (s.presence || {}).controller_label]
           .join(' ').toLocaleLowerCase().includes(q))
         && (filter && filter.value === 'delegations'
-          ? s.origin === 'mcp'
-          : s.origin !== 'mcp' && (!filter || filter.value === 'all'
+          ? ['mcp', 'app'].includes(s.origin)
+          : !['mcp', 'app'].includes(s.origin) && (!filter || filter.value === 'all'
             || (filter.value === 'running' && (s.alive || s.state === 'running'))
             || (filter.value === 'here' && (s.presence || {}).can_control))))
         .sort((a, b) => {
@@ -5549,12 +6060,15 @@
         });
       listEl.replaceChildren();
       shown.forEach(s => listEl.appendChild(row(s)));
-      if (count) count.textContent = shown.length + ' of ' + rows.length + ' chats';
+      const backgroundGroup = filter && filter.value === 'delegations';
+      const total = rows.filter(s => ['mcp', 'app'].includes(s.origin) === !!backgroundGroup).length;
+      if (count) count.textContent = shown.length + ' of ' + total + (backgroundGroup ? ' jobs' : ' chats');
       empty.hidden = shown.length !== 0;
       const strong = empty.querySelector('strong');
       const copy = empty.querySelector('span');
-      if (strong) strong.textContent = rows.length ? 'No matching chats' : 'No chats yet';
-      if (copy) copy.textContent = rows.length
+      if (strong) strong.textContent = total ? 'No matching conversations'
+        : backgroundGroup ? 'No background work yet' : 'No chats yet';
+      if (copy) copy.textContent = total
         ? 'Try another search or filter, or start a new chat.'
         : 'Start a new chat and it will appear here on every device.';
       cancelDelete();
@@ -5572,6 +6086,10 @@
       if (!silent) setFeedback('Loading chats…');
       const j = await api(LIST + '?client_id=' + encodeURIComponent(_deviceId));
       if (seq !== loadSeq || !pop.open) return;
+      // The interval checks these before the fetch; a delete confirmation or
+      // rename opened while it was in flight must survive the response, since
+      // render() cancels the one and replaces the form of the other.
+      if (silent && (!confirmBox.hidden || listEl.querySelector('.op-chat-rename'))) return;
       if (!j || !j.ok) {
         rows = []; listEl.replaceChildren(); empty.hidden = true;
         setFeedback((j && j.error ? j.error + '. ' : 'Chats unavailable. ')
@@ -5581,7 +6099,11 @@
       }
       feedback.onclick = null; feedback.removeAttribute('tabindex');
       if (!silent) setFeedback('');
-      const nextRows = j.sessions || [];
+      // A fresh active identity is retained for the next write, but its
+      // empty replacement is not a saved conversation in the library.
+      const nextRows = (j.sessions || []).filter(s => !s.empty
+        || !!(s.title || '').trim() || !!(s.preview || '').trim()
+        || s.alive || s.state === 'running');
       const nextActive = _conversationId || j.active || '';
       const nextFingerprint = fingerprint(nextRows, nextActive);
       if (!silent || nextFingerprint !== listFingerprint) {
@@ -5731,8 +6253,10 @@
         || action.kind === 'dblclick_at' || action.kind === 'move'
         || action.kind === 'mousedown_at' || action.kind === 'mouseup_at'
         || action.kind === 'drag')) {
-      if (action.kind === 'drag') steerCursorAt(action.x1, action.y1);
-      else steerCursorAt(action.x, action.y);
+      const cx = action.kind === 'drag' ? action.x1 : action.x;
+      const cy = action.kind === 'drag' ? action.y1 : action.y;
+      if (MODE === 'man') steerCursorAt(cx, cy);
+      else if (action.kind !== 'move') showAgentClick({x: cx, y: cy});
     }
     const _rl = document.getElementById('op-reload');
     const _dot = document.getElementById('op-dotstat');
@@ -5744,14 +6268,23 @@
       if (_hl) _hl.classList.add('on');
     }
     const _navDone = ok => {
-      if (!_isNav) { if (!ok && _dot) _dot.classList.add('err'); return; }
+      // A failed click/type is not a broken HTTPS connection. Keep the lock
+      // tied to navigation state instead of leaving a red lock on a loaded page.
+      if (!_isNav) return;
       if (_rl) _rl.classList.remove('loading');
       if (_hl) _hl.classList.remove('on');
       if (_dot) { _dot.classList.remove('loading'); _dot.classList.toggle('err', !ok); }
     };
     try {
-      const d = await (await fetch(STEER, { method:'POST',
-        headers:{'Content-Type':'application/json'}, body: JSON.stringify(action) })).json();
+      // Coordinates belong to the last painted target, not whichever tab becomes active later.
+      const payload = {...action, target_id: _frameTarget || undefined};
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 32000);
+      let d;
+      try {
+        d = await (await fetch(STEER, { method:'POST', signal: controller.signal,
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })).json();
+      } finally { clearTimeout(timer); }
       if (d.ok) { showUrl(d.url);
         settleAction(true); }
       else { if (!silent) logEvent((d.error||'failed').slice(0,80), false); settleAction(false); }
@@ -5795,9 +6328,10 @@
     }
     // slash palette (#30 v2): remember the last dispatched bundle so "/save"
     // can store it as a re-runnable task (the draft is gone by save time).
-    window._opLastDispatch = { task: txt, bot,
+    if (!o.internal) window._opLastDispatch = { task: txt, bot,
       model: (document.getElementById('op-model')||{}).value || '',
-      effort: (document.getElementById('op-effort')||{}).value || '' };
+      effort: (document.getElementById('op-effort')||{}).value || '',
+      service_tier: bot === 'gpt' ? (o.service_tier || _speedSel.value || 'default') : '' };
     // if the user declined a hand-off and just sent a message, dismiss the lingering
     // "Operator needs human input" card and let the agent carry on (its session
     // resumes, so the new message continues where it left off).
@@ -5805,8 +6339,11 @@
     _handoffTs = 0; _handoffActive = false; _errShown = false; op.dataset.agent='';
     op.dataset.busy='1'; setCardText(actTxt, 'Starting up');
     setCardSub(bot, '');
+    // Reject an in-flight poll of the previous run during this dispatch.
+    _clearedAgentRun = _lastAgentRun;
     try { const d = await (await fetch(DISPATCH, { method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify(_conversationPayload({bot, task:txt, model: o.model || (document.getElementById('op-model')||{}).value||'', effort: o.effort || (document.getElementById('op-effort')||{}).value||'',
+        service_tier: bot === 'gpt' ? (o.service_tier || _speedSel.value || 'default') : '',
         surface: o.surface || _surfaceActive, real_ok: (_surfaceActive==='desktop-real' && _realOk)})) })).json();
       // _runProgressTs is the dead-run watchdog's anchor and MUST start fresh
       // each turn: the 'done' path used to leave it at the previous run's last
@@ -5815,34 +6352,55 @@
       // window and the watchdog killed the newborn turn as a bare "Error"
       // (ledger run #10, 2026-07-11: dispatch → auto-stop 1s later).
       if (d.ok) { _lastAssistant=''; _runProgressTs = 0; startTask(); _agentSince = Date.now()/1000; setInFlight(true); }   // don't clear _handledState here — a post-steer dispatch needs the '__interrupted__' guard to swallow the killed run's stale 'done'
+      else if (d.code === 'conversation_running' && d.run_id && !o.internal) {
+        // A different device may have started/resumed between preflight and
+        // dispatch. Deliver this message to that exact run once.
+        _clearedAgentRun = '';
+        const bubble = [...log.querySelectorAll('.op-msg.user')].pop();
+        if (bubble) bubble.classList.add('op-held');
+        await sendCorrection(txt, bubble, d.run_id);
+        setInFlight(true); setTaskHeadline('In progress');
+      }
       else { logRes(d.error || 'failed to start ' + bot, false); settleAction(false); }
     } catch { logRes('failed to start agent', false); settleAction(false); }
   }
-  async function submit(){
-    const txt = input.value.trim(); if(!txt) return; input.value=''; autoGrow(); if(typeof refreshSendButton==='function') refreshSendButton();
-    if (typeof _clearDraft === 'function') _clearDraft();
+  async function sendCorrection(txt, bubble, runId) {
+    const message_id = crypto.randomUUID();
+    try {
+      const d = await (await fetch(SAY_URL, _conversationPost({text: txt, message_id, run_id: runId}))).json();
+      if (!d.ok) throw new Error(d.error || 'Correction was not accepted');
+      _steerQueued = true;
+    } catch (error) {
+      // Never retry an uncertain acknowledgement with another delivery ID.
+      if (bubble) bubble.classList.add('op-held-failed');
+      logRes(String(error.message || error), false);
+    }
+  }
+  async function submitMessage(message, resources = []){
+    const txt = String(message || '').trim(); if(!txt) return;
+    const task = resources.length ? window._opResources.prompt(txt, resources) : txt;
+    const userBubble = held => {
+      const bubble = logUser(txt, held);
+      if (resources.length) window._opResources.decorate(bubble, resources);
+      return bubble;
+    };
     if (MODE === 'auto') {
-      if (_inFlight) {
-        // Mid-run steer: park the message as a HELD bubble instead of driving
-        // the workbench status strip. The trace keeps growing above it; the
-        // delivery seam in pollAgent promotes it into the flow and breaks the
-        // card so everything after renders below it.
-        const bubble = logUser(txt, true);
-        const message_id = crypto.randomUUID();
-        const run_id = window.OperatorWorkbench ? window.OperatorWorkbench.runId() : '';
+      let runId = window.OperatorWorkbench ? window.OperatorWorkbench.runId() : '';
+      if (!_inFlight) {
         try {
-          const d = await (await fetch(SAY_URL, _conversationPost({text: txt, message_id, run_id}))).json();
-          if (!d.ok) throw new Error(d.error || 'Correction was not accepted');
-          _heldSteer = bubble; _steerQueued = true;
-        } catch (error) {
-          // No automatic redispatch: an acknowledgement may have been lost.
-          bubble.classList.add('op-held-failed');
-          logRes(String(error.message || error), false);
-        }
+          const current = await (await fetch(AGENT_URL + '?conversation_id=' + encodeURIComponent(_conversationId || 'legacy'))).json();
+          if (current.state === 'running' && current.alive !== false) {
+            runId = current.run_id || ''; setInFlight(true);
+          }
+        } catch (_) { /* Dispatch handles a concurrent active-run rejection. */ }
+      }
+      if (_inFlight) {
+        const bubble = userBubble(true);
+        await sendCorrection(task, bubble, runId);
         return;
       }
-      logUser(txt);
-      dispatchTask(txt);
+      userBubble(false);
+      dispatchTask(task);
       return;
     }
     {
@@ -5853,17 +6411,27 @@
       } else if (a) act(a, txt);
     }
   }
+  async function submit(){
+    const txt = input.value.trim(); if(!txt) return;
+    const resources = window._opResources ? window._opResources.take() : [];
+    input.value=''; autoGrow(); if(typeof refreshSendButton==='function') refreshSendButton();
+    if (typeof _clearDraft === 'function') _clearDraft();
+    return submitMessage(txt, resources);
+  }
   // ── send ⇄ stop toggle ──
   const STOP_URL = OP_URLS.agent_stop;
   const SAY_URL = OP_URLS.agent_say;
+  const stopBtn = document.getElementById('op-stop');
   const _sendSVG = send.innerHTML;
   const _stopSVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor">'
     + '<rect x="5" y="5" width="14" height="14" rx="2.5"></rect></svg>';
   let _sendShowStop = null;   // change-guard: this runs per keystroke — don't re-parse the SVG innerHTML when nothing flipped
   function refreshSendButton(){
-    // stop only while in-flight AND the box is empty; typing a follow-up flips it
-    // back to the send arrow.
-    const showStop = _inFlight && !input.value.trim();
+    // stop on #op-send while in-flight AND the box is empty; typing a follow-up flips #op-send
+    // back to the send arrow and reveals #op-stop right beside it so Stop never disappears.
+    const hasDraft = !!input.value.trim();
+    const showStop = _inFlight && !hasDraft;
+    if (stopBtn) stopBtn.hidden = !(_inFlight && hasDraft);
     if (showStop === _sendShowStop) return;
     _sendShowStop = showStop;
     send.classList.toggle('stopping', showStop);
@@ -5871,7 +6439,14 @@
     send.title = showStop ? 'stop' : 'send (Enter)';
   }
   function setInFlight(on){
-    if (on === _inFlight) return;
+    if (on === _inFlight) {
+      if (!on && (op.dataset.busy === '1' || (typeof _task !== 'undefined' && _task))) {
+        op.dataset.busy = '0';
+        if (typeof _task !== 'undefined' && _task) { try { finishTask(); } catch(_){} }
+        refreshSendButton();
+      }
+      return;
+    }
     _inFlight = on;
     if (!on) {                              // turn over → kill the spinner, no orphans
       op.dataset.busy = '0';
@@ -5883,16 +6458,22 @@
     if (!on) drainQueue();   // turn finished → run the next queued message
   }
   let _interrupting = false;
+  let _interruptTimer = null;
   async function stopAgent(){
     _interrupting = true;
-    try { await fetch(STOP_URL, _conversationPost()); } catch {}
+    if (_interruptTimer) { clearTimeout(_interruptTimer); _interruptTimer = null; }
     if (_task) { try { taskError('Interrupted', 'Stopped by user.'); finishTask(true, 'Interrupted'); } catch(_){} }
-    op.dataset.busy='0'; op.dataset.agent='errored'; setCardText(actTxt, 'Interrupted');
-    setCardSub(selectedBot()||'', '');
+    op.dataset.busy='0'; op.dataset.agent='errored'; setTaskHeadline('Stopped');
     setCardSub(selectedBot()||'', '');
     _inFlight=false; refreshSendButton(); setFollowUp();
     _handledState='__interrupted__';   // ignore the backend 'error' that follows
-    setTimeout(()=>{ _interrupting=false; }, 2000);
+    try { await fetch(STOP_URL, _conversationPost()); } catch {}
+    finally {
+      _interruptTimer = setTimeout(()=>{ _interrupting=false; _interruptTimer=null; }, 2500);
+    }
+  }
+  if (stopBtn) {
+    stopBtn.addEventListener('click', () => stopAgent());
   }
   send.addEventListener('click', () => {
     if (_inFlight && !input.value.trim()) stopAgent(); else submit();
@@ -5956,11 +6537,244 @@
     if (v.trim()) localStorage.setItem(_draftKey(), v);
     else localStorage.removeItem(_draftKey()); } catch(_){} }
   function _clearDraft(){ try { localStorage.removeItem(_draftKey()); } catch(_){} }
-  function _restoreDraft(){ try { if (input.value || input.disabled) return;
+  function _restoreDraft(){ try {
+    if (window._opResources) window._opResources.restore();
+    if (input.value || input.disabled) return;
     const v = localStorage.getItem(_draftKey());
     if (v){ input.value = v; autoGrow(); if (typeof refreshSendButton==='function') refreshSendButton(); } } catch(_){} }
   window._restoreDraft = _restoreDraft;
   input.addEventListener('input', () => { autoGrow(); refreshSendButton(); _saveDraft(); });
+  // Selected connectors remain separate from the draft until submission.
+  // A chip chooses context; it never installs tools or opens a site by itself.
+  (function initResourcePicker(){
+    const hero = document.getElementById('op-lp-input');
+    const fields = [input, hero].filter(Boolean);
+    const menu = document.createElement('div');
+    menu.className = 'op-resource-menu';
+    menu.id = 'op-resource-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', 'Websites and tools');
+    menu.hidden = true;
+    document.body.appendChild(menu);
+    let activeField = null, activeRange = null, rows = [], cursor = 0, version = 0;
+    const cache = new Map();
+    const typeName = {website:'Website', plugin:'Plugin', mcp:'MCP'};
+    const trays = [document.getElementById('op-inputbox-resources'),
+      document.getElementById('op-hero-resources')].filter(Boolean);
+    let selected = [];
+    const key = () => 'operator-resources:' + (_conversationId || 'legacy');
+    const id = item => item.kind + ':' + item.insert;
+    function iconFor(item){
+      const icon = document.createElement('span'); icon.className = 'op-resource-icon';
+      icon.textContent = item.kind === 'mcp' ? 'M' : (item.name || '?').slice(0,1).toUpperCase();
+      if (!item.custom && item.domain && /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(item.domain)) {
+        const img = document.createElement('img'); img.alt = ''; img.loading = 'lazy';
+        img.src = 'https://www.google.com/s2/favicons?domain='
+          + encodeURIComponent(item.domain) + '&sz=32';
+        img.addEventListener('error', () => img.remove()); icon.appendChild(img);
+      }
+      return icon;
+    }
+    function chips(target, items, removable){
+      target.replaceChildren();
+      items.forEach(item => {
+        const chip = document.createElement('span'); chip.className = 'op-resource-chip';
+        chip.title = typeName[item.kind] + ': ' + item.name;
+        const label = document.createElement('span'); label.textContent = item.name;
+        chip.append(iconFor(item), label);
+        if (removable) {
+          const remove = document.createElement('button'); remove.type = 'button';
+          remove.textContent = '×'; remove.setAttribute('aria-label', 'Remove ' + item.name);
+          remove.addEventListener('click', () => {
+            selected = selected.filter(other => id(other) !== id(item)); save(); render();
+          });
+          chip.appendChild(remove);
+        }
+        target.appendChild(chip);
+      });
+    }
+    function render(){ trays.forEach(tray => {
+      chips(tray, selected, true); tray.hidden = !selected.length;
+    }); }
+    function save(){ try {
+      if (selected.length) localStorage.setItem(key(), JSON.stringify(selected));
+      else localStorage.removeItem(key());
+    } catch(_){} }
+    window._opResources = {
+      take(){ const items = selected; selected = []; save(); render(); return items; },
+      restore(){
+        try {
+          const value = JSON.parse(localStorage.getItem(key()) || '[]');
+          selected = Array.isArray(value) ? value.filter(item => item &&
+            ['website','mcp','plugin'].includes(item.kind) && typeof item.name === 'string'
+            && typeof item.insert === 'string') : [];
+        } catch(_) { selected = []; }
+        render();
+      },
+      prompt(text, items){ return text + '\n\nSelected connectors:\n' + items.map(item =>
+        '- ' + typeName[item.kind] + ': ' + item.insert).join('\n'); },
+      decorate(bubble, items){
+        if (!bubble) return;
+        const row = document.createElement('div'); row.className = 'op-resource-chips';
+        chips(row, items, false); (bubble.querySelector('.bubble') || bubble).appendChild(row);
+      }
+    };
+    function close(){
+      version++;
+      menu.hidden = true;
+      if (activeField) {
+        activeField.setAttribute('aria-expanded', 'false');
+        activeField.removeAttribute('aria-activedescendant');
+      }
+      activeField = null; activeRange = null; rows = [];
+    }
+    function trigger(field){
+      const before = field.value.slice(0, field.selectionStart);
+      const match = /(^|[\s(])[\/@]([^\s/@]*)$/.exec(before);
+      if (!match) return null;
+      return {start:before.length-match[2].length-1, end:field.selectionStart,
+        query:match[2].toLowerCase()};
+    }
+    function customSite(query){
+      if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?::[0-9]{2,5})?$/i.test(query)) return null;
+      try {
+        const url = new URL('https://' + query);
+        if (!url.hostname.includes('.')) return null;
+        return {kind:'website', name:url.host, domain:url.hostname, custom:true,
+          insert:url.origin};
+      } catch(_) { return null; }
+    }
+    async function catalog(bot){
+      const prior = cache.get(bot);
+      if (prior && Date.now() - prior.at < 60000) return prior.promise;
+      const promise = fetch(OP_URLS.resources + '?bot=' + encodeURIComponent(bot))
+        .then(r => r.ok ? r.json() : {resources:[]})
+        .then(j => Array.isArray(j.resources) ? j.resources : [])
+        .catch(() => []);
+      cache.set(bot, {at:Date.now(), promise});
+      return promise;
+    }
+    function position(){
+      if (!activeField || menu.hidden) return;
+      const theme = getComputedStyle(op);
+      ['--bg','--bg-2','--bg-3','--fg','--fg-2','--muted','--border-2','--accent','--chat-scale']
+        .forEach(token => menu.style.setProperty(token, theme.getPropertyValue(token)));
+      const anchor = activeField.closest('.op-inputbox, .op-lp-composer') || activeField;
+      const rect = anchor.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      const height = viewport ? viewport.height + viewport.offsetTop : window.innerHeight;
+      const width = Math.min(420, Math.max(220, rect.width), window.innerWidth-16);
+      menu.style.width = width + 'px';
+      menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth-width-8)) + 'px';
+      const popupHeight = menu.getBoundingClientRect().height;
+      const below = activeField === hero && rect.bottom + popupHeight + 8 < height;
+      menu.style.top = Math.max(8, Math.min(height-popupHeight-8,
+        below ? rect.bottom+7 : rect.top-popupHeight-7)) + 'px';
+    }
+    function markActive(){
+      [...menu.querySelectorAll('.op-resource-row')].forEach((node, index) => {
+        node.classList.toggle('selected', index === cursor);
+        node.setAttribute('aria-selected', index === cursor ? 'true' : 'false');
+      });
+      if (activeField) activeField.setAttribute('aria-activedescendant', 'op-resource-' + cursor);
+      const row = menu.children[cursor];
+      if (row && !menu.hidden) {
+        if (row.offsetTop < menu.scrollTop) menu.scrollTop = row.offsetTop;
+        else if (row.offsetTop + row.offsetHeight > menu.scrollTop + menu.clientHeight)
+          menu.scrollTop = row.offsetTop + row.offsetHeight - menu.clientHeight;
+      }
+    }
+    function choose(index){
+      const item = rows[index], field = activeField, range = activeRange;
+      if (!item || !field || !range) return;
+      const value = field.value;
+      field.value = value.slice(0, range.start) + value.slice(range.end);
+      const caret = range.start;
+      if (!selected.some(other => id(other) === id(item))) selected.push(item);
+      save(); render();
+      if (MODE !== 'auto') { MODE = 'auto'; applyMode(); }
+      close();
+      field.focus({preventScroll:true});
+      field.setSelectionRange(caret, caret);
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+    }
+    function draw(items, field, range){
+      if (document.activeElement !== field) return;
+      activeField = field; activeRange = range; rows = items; cursor = 0;
+      menu.replaceChildren();
+      if (!items.length) { close(); return; }
+      items.forEach((item, index) => {
+        const row = document.createElement('button');
+        row.type = 'button'; row.className = 'op-resource-row';
+        row.id = 'op-resource-' + index;
+        row.setAttribute('role', 'option');
+        const icon = iconFor(item);
+        const name = document.createElement('span');
+        name.className = 'op-resource-name'; name.textContent = item.name;
+        const kind = document.createElement('span');
+        kind.className = 'op-resource-kind'; kind.textContent = typeName[item.kind] || '';
+        row.append(icon, name, kind);
+        row.addEventListener('mousedown', e => e.preventDefault());
+        row.addEventListener('click', () => choose(index));
+        row.addEventListener('pointerenter', () => { cursor = index; markActive(); });
+        menu.appendChild(row);
+      });
+      menu.hidden = false;
+      field.setAttribute('aria-expanded', 'true');
+      markActive(); position();
+    }
+    async function update(field){
+      const range = trigger(field);
+      if (!range || field.disabled) { if (activeField === field) close(); return; }
+      const requestVersion = version;
+      const bot = selectedBot();
+      const available = await catalog(bot);
+      // Ignore a response for an old caret/query or a different composer.
+      const latest = trigger(field);
+      if (version !== requestVersion || !latest || latest.start !== range.start || latest.query !== range.query
+          || document.activeElement !== field || bot !== selectedBot()) return;
+      const q = range.query;
+      let matches = available.filter(item =>
+        (item.name + ' ' + (item.domain || '') + ' ' + item.kind).toLowerCase().includes(q));
+      const custom = customSite(q);
+      if (custom && !matches.some(item => item.domain === custom.domain)) matches.push(custom);
+      matches = matches.sort((a,b) =>
+        (a.kind === 'website') - (b.kind === 'website') || a.name.localeCompare(b.name));
+      draw(matches, field, latest);
+    }
+    fields.forEach(field => {
+      field.setAttribute('aria-controls', menu.id);
+      field.setAttribute('aria-expanded', 'false');
+      field.setAttribute('aria-autocomplete', 'list');
+      field.addEventListener('input', () => update(field));
+      field.addEventListener('click', () => update(field));
+      field.addEventListener('keydown', e => {
+        if (menu.hidden || activeField !== field || e.isComposing) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault(); e.stopImmediatePropagation();
+          cursor = (cursor + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+          markActive();
+        } else if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault(); e.stopImmediatePropagation(); choose(cursor);
+        } else if (e.key === 'Escape') {
+          e.preventDefault(); e.stopImmediatePropagation(); close();
+        }
+      }, true);
+      field.addEventListener('blur', () => setTimeout(() => {
+        if (activeField === field && !menu.contains(document.activeElement)) close();
+      }, 120));
+    });
+    document.addEventListener('pointerdown', e => {
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== activeField) close();
+    });
+    document.getElementById('op-action-caret')?.addEventListener('change', () => {
+      const field = activeField;
+      close();
+      if (field) update(field);
+    });
+    window.addEventListener('resize', position);
+    window.visualViewport?.addEventListener('resize', position);
+  })();
   // Deferred, not synchronous: at parse time the conversation id (set from
   // sessionStorage / the first poll) and restoreSession's log paint have not
   // all settled, so a bare call read the 'legacy' key and found nothing. A
@@ -6240,6 +7054,20 @@
   // key_up on release) so holding an arrow gives smooth continuous movement in the bot
   // browser (native key-repeat) instead of laggy per-repeat HTTP round-trips.
   const _heldKeys = new Set();
+  // Paste belongs to the focused remote surface, not the local composer. The
+  // native paste event carries the viewer's OS clipboard on desktop and mobile;
+  // prevent the hidden touch textarea from also sending an input event.
+  stage.addEventListener('paste', e => {
+    if (e.target !== stage && e.target !== keyCapture) return;
+    const pasted = e.clipboardData?.getData('text/plain');
+    if (!pasted) return;
+    e.preventDefault();
+    if (new TextEncoder().encode(pasted).length > 65536) {
+      logEvent('Paste is limited to 64 KB of text', false); return;
+    }
+    act({kind:'paste', value:pasted}, null, true);
+    if (e.target === keyCapture) resetKeyCapture();
+  });
   stage.addEventListener('keydown', e => { if((e.target!==stage && e.target!==keyCapture) || e.metaKey||e.ctrlKey||e.altKey) return;
     if(e.key.length===1){ e.preventDefault(); act({kind:'type',value:e.key}, null, true); }
     else if(PASS[e.key]){ e.preventDefault();

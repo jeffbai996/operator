@@ -20,10 +20,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import operator_steer
     steers = operator_steer.take_all()
-    if steers:
+    manual = operator_steer.take_manual(quiet=operator_steer.MANUAL_QUIET_S)
+    if steers or manual:
+        context = operator_steer.format_context(steers) if steers else ""
+        if manual:
+            context = (context + "\n\n" + manual) if context else manual
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PostToolUse",
-            "additionalContext": operator_steer.format_context(steers)}}))
+            "additionalContext": context}}))
         import operator_workspace
         for steer in steers:
             if steer.get('id'):

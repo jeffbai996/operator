@@ -31,7 +31,9 @@ from werkzeug.wsgi import ClosingIterator as _ClosingIterator
 import operator_agent  # the headless-claude agent runner (option 1)
 import operator_diagnostics as _diagnostics
 import operator_prefs  # server-side cockpit settings (the landing page)
+import operator_resources  # credential-free slash-picker suggestions
 from operator_devices import device_label as _peer_device_label
+from operator_observability import quiet_closed_target_futures
 import operator_tasks as operator_tasks_store  # saved-task store (#30)
 
 import os as _os_cfg
@@ -41,9 +43,9 @@ import os as _os_cfg
 # you forgot one (2026-08-05: two hand-bumps in a row did exactly that). One
 # constant now, injected into every template this blueprint renders — including
 # the generated public demo, whose label appends " demo" to whatever it finds.
-# The README's version ladder must carry a row for this version; a test asserts
+# CHANGELOG.md's version ladder must carry a row for this version; a test asserts
 # it, so the changelog cannot silently fall behind the number on screen.
-OP_VERSION = "1.2.1"
+OP_VERSION = "1.2.7"
 # DEMO isolation (the public demo): a second instance runs with OPERATOR_DEMO=1 and
 # its own isolated, NOT-logged-in Chrome on a separate CDP port. These env vars are
 # unset for the owner's live cockpit (-> no behavior change); set only by demo_server.py.
@@ -64,23 +66,40 @@ _VIEW_FOLLOW = _os_cfg.environ.get("OPERATOR_VIEWPORT_FOLLOW", "1") != "0"
 # both the live _Streamer and the agent MCP attach here in demo mode (isolated
 # Chrome), never :9222 (the logged-in browser). The unguessable path gate is the
 # WSGI url-prefix mounted by demo_server.py (APPLICATION_ROOT=/<slug>/<hash>).
-CDP_URL = _os_cfg.environ.get("OPERATOR_DEMO_CDP") or "http://127.0.0.1:9222"
+from operator_browser_target import endpoint as _browser_endpoint
+CDP_URL = _browser_endpoint()
 _CHROME_START_TIMEOUT = 15.0
 if DEMO:
     # the demo may view/drive the SANDBOX surface, but never the owner's container —
     # scope it to its own (sandbox_container.py reads this at load).
     _os_cfg.environ.setdefault("OPERATOR_SANDBOX_CONTAINER", "operator-sandbox-demo")
-FRAME_INTERVAL = 0.066     # ~15fps (the owner's pick)
+FRAME_INTERVAL = 0.04       # ~25fps high tier
 IDLE_FRAME_INTERVAL = 0.35  # ~3fps after the pixels have stayed quiet
-BUSY_FRAME_INTERVAL = 0.08  # capture itself backpressures; don't add another 450ms
+BUSY_FRAME_INTERVAL = 0.05  # capture itself backpressures; don't add another 450ms
+# Pushed frames (Page.startScreencast): Chrome's compositor sends a frame
+# only when the page changes, so a still page costs nothing and a moving one
+# arrives at the compositor's own rate. Polled Page.captureScreenshot forced
+# a raster and readback per frame: 70-360 ms on a quiet page, ~1.4 s each
+# under the stream's own load, and every tap waited behind one (measured
+# 2026-10-19). OPERATOR_SCREENCAST=0 restores the polled path.
+SCREENCAST = _os_cfg.environ.get("OPERATOR_SCREENCAST", "1") != "0"
+SCREENCAST_GATE_S = 1.0          # viewport gate/repair cadence while frames are pushed
+SCREENCAST_FIRST_FRAME_S = 3.0   # a start with no frame by then falls back to polling
+SCREENCAST_RETRY_S = 30.0        # how long a failed start keeps the polled path
 MOTION_HOLD_S = 1.4         # keep full cadence through short UI animations
-JPEG_QUALITY = 60
+JPEG_QUALITY = 65
+ACTION_TIMEOUT_S = 30.0
 IDLE_STOP_AFTER = 90.0
 # A browser-surface run is allowed to start only after the same Playwright/CDP
 # path that paints the cockpit has produced a real frame. HTTP /json can stay
 # healthy while one restored renderer is wedged; connect_over_cdp then waits
 # forever on that target and the agent used to start against no usable browser.
 BROWSER_ATTACH_TIMEOUT = 10.0
+ATTACH_HOOK_TIMEOUT = 2.5      # each optional hook after first pixels
+BROWSER_ATTACH_ATTEMPTS = 3
+# Each teardown step (browser.close, playwright.stop) gets this long before the
+# connection is abandoned; a dead connection otherwise never answers.
+TEARDOWN_STEP_TIMEOUT = 3.0
 BROWSER_READY_TIMEOUT = 12.0
 # F1 adaptive frame tiers — ?tier=lo (narrow viewport) gets lean frames;
 # ?tier=eco (cellular, Save-Data, or measured-slow delivery) cuts again.
@@ -89,10 +108,10 @@ BROWSER_READY_TIMEOUT = 12.0
 # under the agent) and compressed harder; a Retina tablet otherwise pulls the
 # full device-resolution JPEG every frame. Sandbox lo lowers the ffmpeg rate
 # and raises -q:v (2-31, higher = smaller frames; hi keeps the 10fps/q8 default).
-TIER_LO_QUALITY = 35
-TIER_LO_MAX_W = 900
+TIER_LO_QUALITY = 38
+TIER_LO_MAX_W = 960
 TIER_LO_SANDBOX_FPS, TIER_LO_SANDBOX_Q = 6, 12
-TIER_ECO_QUALITY = 24
+TIER_ECO_QUALITY = 22
 TIER_ECO_MAX_W = 640
 TIER_ECO_SANDBOX_FPS, TIER_ECO_SANDBOX_Q = 4, 16
 MIN_VIEWPORT_W, MIN_VIEWPORT_H = 320, 240
@@ -227,7 +246,13 @@ def _clamp_stage(w: float, h: float) -> tuple[int, int]:
     if w < DESKTOP_LAYOUT_MIN_W:
         h = round(h * DESKTOP_LAYOUT_MIN_W / max(1, w))
         w = DESKTOP_LAYOUT_MIN_W
-    w = min(1600, w)
+    # Shrink both sides by one factor so the bounds keep the stage's shape.
+    # Capping the width alone, then trimming the height to the area cap, turned
+    # every large stage into 1600x1186 and pillarboxed its frame (2026-10-06).
+    # The desktop floor still wins over the shape for extreme portrait stages.
+    scale = min(1.0, 1600 / w, 1300 / h, (1_900_000 / (w * h)) ** 0.5)
+    scale = max(scale, DESKTOP_LAYOUT_MIN_W / w)
+    w, h = int(w * scale), int(h * scale)
     h = max(480, min(1300, h))
     if w * h > 1_900_000:
         h = 1_900_000 // w
@@ -481,9 +506,23 @@ def _live_run_targets(busy: bool) -> list[str]:
         return []
     try:
         cid = getattr(operator_agent.runner, "conversation_id", "") or ""
+        if not DEMO:
+            import operator_session
+            if operator_session.is_background(cid):
+                cid = operator_session.active_id()
+                peek = getattr(operator_agent.runner, 'peek', None)
+                if not callable(peek) or getattr(peek(cid), 'state', '') != 'running':
+                    return []
     except Exception:  # noqa: BLE001 — runner unavailable
         return []
     return _registry_targets(cid)
+
+
+def _background_targets() -> set[str]:
+    if DEMO:
+        return set()
+    import operator_browser_jobs
+    return operator_browser_jobs.background_targets()
 
 
 def _registry_targets(cid: str) -> list[str]:
@@ -491,19 +530,10 @@ def _registry_targets(cid: str) -> list[str]:
     id is empty, the registry is unreadable, or the demo has no browse module."""
     if not cid:
         return []
-    here = Path(__file__).resolve()
-    helper = next((h for h in (here.parents[1] / "browse" / "operator_browser_tabs.py",
-                               here.parent / "browse" / "operator_browser_tabs.py")
-                   if h.is_file()), None)
-    if helper is None:
-        return []
     try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("operator_owned_tab_registry", helper)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return list(mod._read_registry().get(cid, []))
-    except Exception:  # noqa: BLE001 — registry is advisory
+        from operator_browser_target import owned_targets
+        return owned_targets(cid)
+    except Exception:  # registry is advisory for the human cockpit
         return []
 
 
@@ -544,17 +574,18 @@ def decide_streamed_tab(*, live: list, current, busy: bool, owned, front,
     return None, ""
 
 
-def should_mirror_onepassword(streamer, fresh, busy: bool) -> bool:
-    """Whether to copy a fresh 1Password popup into a streamable tab.
+def _kill_driver(pw) -> None:
+    """End the node driver behind a Playwright handle whose stop() hung.
 
-    Only while a run is driving. The mirror is a remote-viewing affordance for
-    an unlock the AGENT triggered, and it works by bringing a new tab to the
-    front — which is exactly what makes Chrome close an extension popup. Run
-    unconditionally, it also fired when the OWNER clicked the button at the
-    keyboard, killing the popup within one tab-check tick and making autofill
-    look broken however it was invoked (the owner 2026-09-16).
-    """
-    return bool(fresh) and bool(busy)
+    Reaches through private attributes because the public API has no other
+    way to stop a driver whose connection is dead. Best-effort: a leaked
+    driver is the 2026-07-10 orphan class, a frozen streamer is worse."""
+    try:
+        proc = pw._impl_obj._connection._transport._proc
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @dataclass
@@ -595,16 +626,43 @@ class _Streamer:
     _cdp = None
     _metric_sessions: dict = field(default_factory=dict)
     _zoom_scripts: dict = field(default_factory=dict)     # page -> (zoom, CDP script id)
+    _frame_epoch: str = field(default_factory=lambda: _os_cfg.urandom(8).hex())
+    _frame_target_id: str = ""
+    _frame_tier: str = "hi"
+    _capture_tier: str = "hi"
+    _frame_lock: threading.Lock = field(default_factory=threading.Lock)
+    _frame_snapshot: object = None
+    _capture_started_at: float = 0.0
+    _capture_finished_at: float = 0.0
+    _capture_width: int = 0
+    _capture_height: int = 0
+    _startup_ms: dict = field(default_factory=dict)
+    _startup_started_at: float = 0.0
+    _click_metadata_task: object = None
+    _click_metadata_at: float = 0.0
+    _click_metadata_event: object = None
     _target_ids: dict = field(default_factory=dict)   # page -> CDP target id (stable per page)
     _crashed_pages: set = field(default_factory=set)
     _onepassword_seen: set = field(default_factory=set)
     _io_lock = None      # asyncio.Lock — serialize grab vs actions on the CDP page
     _user_closed = False  # True when Chrome was closed manually → don't auto-relaunch (the owner)
     _key_repeat = None   # dict[key -> asyncio.Task] — held-key auto-repeat loops
-    # F1: frame tier, set by the feed routes (last-viewer-wins on the shared
-    # frame buffer — single-user cockpit; per-viewer buffers are a 1.0.10 idea)
+    _key_repeat_finishing: set = field(default_factory=set)  # cancelled ticks completing their pair
+    _key_repeat_owner: dict = field(default_factory=dict)  # key -> (page, target id)
+    _key_release_events: dict = field(default_factory=dict)  # bounded (key, page) -> queued time
+    # Capture at the highest live tier; /frame derives each viewer's requested image.
     tier: str = "hi"
     _eager_evt = None    # asyncio.Event — an input action wakes the grab loop (F2)
+    # screencast state: the page and session Chrome is pushing frames for
+    _sc_page = None
+    _sc_sess = None
+    _sc_params: object = None
+    _sc_tier: str = "hi"
+    _sc_started_at: float = 0.0
+    _sc_last_frame: float = 0.0
+    _sc_failed_until: float = 0.0
+    _sc_gate_at: float = 0.0
+    _sc_hooked: dict = field(default_factory=dict)   # id(session) -> session with a frame handler
     # relaunch pacing (2026-07-11): with CDP unreachable, every /frame poll used
     # to relaunch the thread — a fresh driver process per second, and any driver
     # not stopped on the failure path leaked (15 orphans in one night). Error
@@ -676,7 +734,7 @@ class _Streamer:
         if kind in ('apply', 'apply-pdf-window', 'apply-sb-comp'):
             _diagnostics.record('viewport_corrections')
 
-    def _publish_frame(self, data: bytes) -> bool:
+    def _publish_frame(self, data: bytes, target_id: str | None = None) -> bool:
         """Publish captured pixels and return whether they actually changed.
 
         `frame_ts` is capture health, so it advances for identical screenshots.
@@ -685,14 +743,27 @@ class _Streamer:
         pull clients skip retransmitting the same 30KB frame ten times a second.
         """
         now = time.monotonic()
-        changed = data != self.frame
-        if not changed:
-            _diagnostics.record('frames_unchanged')
+        target_id = self._target_ids.get(self._page, "") if target_id is None else target_id
+        with self._frame_lock:
+            changed = (data != self.frame or target_id != self._frame_target_id
+                       or self._capture_tier != self._frame_tier)
+            if not changed:
+                _diagnostics.record('frames_unchanged')
+            if changed:
+                self.frame = data
+                self._frame_target_id = target_id
+                self._frame_tier = self._capture_tier
+                self.frame_id += 1
+                self._motion_until = now + MOTION_HOLD_S
+            self.frame_ts = now
+            if self._startup_started_at and 'first_frame' not in self._startup_ms:
+                self._startup_ms['first_frame'] = (now - self._startup_started_at) * 1000
+            from operator_feed import FrameSnapshot
+            self._frame_snapshot = FrameSnapshot(self.frame, self.frame_id, self._frame_epoch,
+                target_id, self._frame_tier, self._capture_width, self._capture_height,
+                self._capture_started_at, self._capture_finished_at, now)
         if changed:
-            self.frame = data
-            self.frame_id += 1
-            self._motion_until = now + MOTION_HOLD_S
-        self.frame_ts = now
+            _frame_notify()
         return changed
 
     def _capture_interval(self, *, now: float, busy: bool) -> float:
@@ -761,6 +832,23 @@ class _Streamer:
                                             name="operator-streamer")
             self._thread.start()
 
+    async def _cockpit_pages(self, ctx) -> list:
+        live = self._live_pages(ctx)
+        hidden = _background_targets()
+        if not hidden:
+            return live
+        visible = []
+        for page in live:
+            target = await self._page_target_id(page)
+            if not target or target in hidden:
+                continue
+            # A popup can appear before its async registry claim finishes.
+            opener = await page.opener() if hasattr(page, 'opener') else None
+            if opener and await self._page_target_id(opener) in hidden:
+                continue
+            visible.append(page)
+        return visible
+
     def require_ready(self, timeout: float = BROWSER_READY_TIMEOUT) -> str | None:
         """Synchronously prove the cockpit browser before dispatch.
 
@@ -793,6 +881,7 @@ class _Streamer:
 
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
+        self._loop.set_exception_handler(quiet_closed_target_futures)
         asyncio.set_event_loop(self._loop)
         # asyncio.Lock/Task bind to the loop they're created on. A reattach spins a
         # fresh loop here, so DROP any primitives cached against the previous loop —
@@ -801,11 +890,15 @@ class _Streamer:
         self._io_lock = None
         self._eager_evt = None  # asyncio.Event bound to the dead loop -> rebuilt lazily on this loop
         self._key_repeat = {}   # drop any Tasks bound to the dead old loop
+        self._key_repeat_finishing.clear()
+        self._key_repeat_owner.clear()
+        self._key_release_events.clear()
         try:
             self._loop.run_until_complete(self._grab_loop())
         except Exception as e:  # noqa: BLE001
             self.status, self.detail = "error", str(e)
         finally:
+            loop = self._loop
             self._running = False
             with self._lock:
                 if self.status == "error":
@@ -815,6 +908,20 @@ class _Streamer:
                         10.0, 2.0 ** self._fail_streak)
                 elif self.status == "live":
                     self.status = "idle"
+            if loop is not None and not loop.is_closed():
+                try:
+                    loop.run_until_complete(asyncio.sleep(0))
+                    pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    loop.close()
 
     @staticmethod
     def _chrome_attach_script() -> str:
@@ -875,12 +982,10 @@ class _Streamer:
             return None
 
     def _onepassword_popup_targets(self) -> set[str]:
-        """CDP ids for 1Password unlock popups Playwright does not expose.
+        """CDP ids for 1Password popups absent from Playwright context.pages.
 
-        Chrome's extension popup is a page target in /json/list, but it is not
-        included in context.pages, so the MJPEG streamer cannot follow it.
-        Detect it here and mirror the unlock URL into an ordinary streamable
-        tab exactly once per popup target.
+        Keep the live popup untouched while it is open. Copying its URL into
+        a normal tab or re-fronting the merchant tab closes it before autofill.
         """
         import json as _json
         import urllib.request
@@ -1026,23 +1131,45 @@ class _Streamer:
         return pages[0]
 
     async def _attach(self) -> None:
-        from playwright.async_api import async_playwright
+        # The bounded host launcher may take longer than the CDP attach budget.
+        # Starting that timer before launch cancels a healthy cold attachment
+        # as soon as its first asynchronous operation yields.
+        self._startup_started_at = time.monotonic()
+        self._startup_ms = {}
         self._ensure_chrome_alive()
+        self._startup_ms['browser_ready'] = (time.monotonic() - self._startup_started_at) * 1000
+        # The budget covers only the path to first pixels. Optional hooks run
+        # after it under their own bounds: on 2026-10-15 the first frame
+        # landed at 6.8 s and the hooks pushed the attach past 10 s, so the
+        # timeout tore down a feed that was already publishing.
+        try:
+            ctx = await asyncio.wait_for(self._attach_browser(), timeout=BROWSER_ATTACH_TIMEOUT)
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(
+                f"browser connection timed out after {BROWSER_ATTACH_TIMEOUT:g}s") from e
+        await self._finish_attach(ctx)
+
+    def _stamp_startup(self, phase: str) -> None:
+        """Record a startup phase in ms since the attach began. The coarse
+        phases left a cold open's 4 s between attach and first tab unexplained
+        (2026-10-06); these finer ones show which step it is."""
+        if self._startup_started_at:
+            self._startup_ms[phase] = (time.monotonic() - self._startup_started_at) * 1000
+
+    async def _attach_browser(self) -> None:
+        from playwright.async_api import async_playwright
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.connect_over_cdp(CDP_URL)
+        self._startup_ms['cdp_attached'] = (time.monotonic() - self._startup_started_at) * 1000
         _diagnostics.record('reconnects')
-        if not DEMO and _os_cfg.environ.get('OPERATOR_FILE_BRIDGE', '1') != '0':
-            import operator_file_bridge
-            operator_file_bridge.ensure_running(reset=True)
         ctx = self._browser.contexts[0] if self._browser.contexts else \
             await self._browser.new_context()
         self._crashed_pages.clear()
-        pages = self._live_pages(ctx)
+        pages = await self._cockpit_pages(ctx)
+        self._stamp_startup('pages_listed')
         for page in pages:
             self._track_page(page)
         if pages:
-            for page in pages:
-                await self._force_desktop_page(page)
             # Headless Chromium may restore the real session AND manufacture a
             # synthetic about:blank launcher target. Target ordering then calls
             # the blank "foreground", so the cockpit streams a perfectly healthy
@@ -1050,10 +1177,10 @@ class _Streamer:
             # the first restored page with content; only use a blank when there
             # is nothing else to show.
             self._page = await self._choose_attach_page(pages)
-            # The sweep left the session cache bound to the LAST page swept —
-            # drop it so nothing reuses a session for a page we didn't select.
             self._cdp = None
             self._cdp_for = None
+            await self._force_desktop_page(self._page)
+            self._stamp_startup('desktop_forced')
             # A freshly launched Chrome already has ONE tab — its own default
             # new-tab page — so `pages` is never actually empty on a cold
             # start, and the no-pages fallback below never fires. That
@@ -1069,10 +1196,6 @@ class _Streamer:
                     await self._cdp_navigate(self._page, _NEWTAB_DATA_URL)
                 except Exception:  # noqa: BLE001 — landing nav is best-effort
                     pass
-            try:
-                await asyncio.wait_for(self._page.bring_to_front(), timeout=2)
-            except Exception:  # noqa: BLE001 — foregrounding is best-effort
-                pass
         else:
             # fallback page: navigate it to the landing URL — a bare new_page()
             # sits on about:blank forever ("new tab doesn't load the home page")
@@ -1084,6 +1207,30 @@ class _Streamer:
                 await self._cdp_navigate(self._page, _NEWTAB_DATA_URL)
             except Exception:  # noqa: BLE001 — landing nav is best-effort
                 pass
+        # Publish useful pixels before optional focus, bridge and click hooks.
+        # Only the selected tab needs geometry setup; other tabs are configured
+        # when selected by the existing follow path.
+        self._update_viewport()
+        self._startup_ms['target_ready'] = (time.monotonic() - self._startup_started_at) * 1000
+        try:
+            async with self._iolock():
+                first = await self._grab(self._page)
+            if first:
+                self._publish_frame(first)
+        except Exception:
+            pass  # The regular capture loop retains its recovery policy.
+        return ctx
+
+    async def _finish_attach(self, ctx) -> None:
+        """Optional attachment hooks. Each one is bounded and best-effort, so
+        a slow or privileged page costs its hook, never the attachment."""
+        try:
+            await asyncio.wait_for(self._page.bring_to_front(), timeout=ATTACH_HOOK_TIMEOUT)
+        except Exception:
+            pass
+        if not DEMO and _os_cfg.environ.get('OPERATOR_FILE_BRIDGE', '1') != '0':
+            import operator_file_bridge
+            operator_file_bridge.ensure_running(reset=True)
         try:
             def _on_page(page):
                 self._track_page(page)
@@ -1092,7 +1239,7 @@ class _Streamer:
         except Exception:
             pass
         try:
-            await ctx.add_init_script("""
+            await asyncio.wait_for(ctx.add_init_script("""
                 (function(){
                   if (window.__opClickHooked) return; window.__opClickHooked = true;
                   function rec(e){ try {
@@ -1102,7 +1249,7 @@ class _Streamer:
                   window.addEventListener('pointerdown', rec, true);
                   window.addEventListener('click', rec, true);
                 })();
-            """)
+            """), timeout=ATTACH_HOOK_TIMEOUT)
         except Exception:
             pass
         # Also install click tracking on the CURRENTLY-open page.
@@ -1123,7 +1270,7 @@ class _Streamer:
                   window.addEventListener('pointerdown', rec, true);
                   window.addEventListener('click', rec, true);
                 })();
-            """), timeout=2.5)
+            """), timeout=ATTACH_HOOK_TIMEOUT)
         except Exception:
             pass
         self._update_viewport()
@@ -1198,13 +1345,131 @@ class _Streamer:
             self._io_lock = asyncio.Lock()
         return self._io_lock
 
+    # ---- pushed frames (Page.startScreencast) -----------------------------
+    def _screencast_params(self) -> dict:
+        tier = self.tier
+        quality = (TIER_ECO_QUALITY if tier == "eco"
+                   else TIER_LO_QUALITY if tier == "lo" else JPEG_QUALITY)
+        max_w = (TIER_ECO_MAX_W if tier == "eco"
+                 else TIER_LO_MAX_W if tier == "lo" else 0)
+        params = {"format": "jpeg", "quality": quality, "everyNthFrame": 2 if tier == "eco" else 1}
+        if max_w:
+            params["maxWidth"] = max_w
+            params["maxHeight"] = max_w * 2
+        return params
+
+    async def _screencast_ensure(self, page, sess) -> bool:
+        """Have Chrome push frames for `page` over `sess`. True while a
+        screencast is live for exactly this page, session and tier; False
+        hands the frame to the polled path."""
+        if not SCREENCAST or time.monotonic() < self._sc_failed_until:
+            return False
+        params = self._screencast_params()
+        if self._sc_page is page and self._sc_sess is sess and self._sc_params == params:
+            if (not self._sc_last_frame
+                    and time.monotonic() - self._sc_started_at > SCREENCAST_FIRST_FRAME_S):
+                # Started and silent: Chrome sends the current frame at once
+                # on a healthy start, so this is a dead screencast.
+                await self._screencast_stop()
+                self._sc_failed_until = time.monotonic() + SCREENCAST_RETRY_S
+                self._vp_log("screencast-silent")
+                return False
+            return True
+        await self._screencast_stop()
+        try:
+            if id(sess) not in self._sc_hooked and not getattr(sess, "_op_sc_hooked", False):
+                sess.on("Page.screencastFrame",
+                        lambda ev, _s=sess, _p=page: self._on_screencast_frame(_s, _p, ev))
+                self._sc_hooked[id(sess)] = sess
+                try:
+                    sess._op_sc_hooked = True
+                except Exception:  # noqa: BLE001
+                    pass
+                while len(self._sc_hooked) > 8:
+                    self._sc_hooked.pop(next(iter(self._sc_hooked)))
+            await asyncio.wait_for(sess.send("Page.startScreencast", params), timeout=2.0)
+        except Exception as exc:  # noqa: BLE001 — the polled path still works
+            self._sc_failed_until = time.monotonic() + SCREENCAST_RETRY_S
+            self._vp_log("screencast-start-failed", type(exc).__name__)
+            return False
+        self._sc_page, self._sc_sess, self._sc_params = page, sess, params
+        self._sc_tier = self.tier
+        self._sc_started_at, self._sc_last_frame = time.monotonic(), 0.0
+        self._vp_log("screencast-start", f"tier {self.tier}")
+        return True
+
+    async def _screencast_stop(self) -> None:
+        sess = self._sc_sess
+        self._sc_page = self._sc_sess = self._sc_params = None
+        if sess is None:
+            return
+        try:
+            await asyncio.wait_for(sess.send("Page.stopScreencast"), timeout=1.0)
+        except Exception:  # noqa: BLE001 — a dead session has nothing to stop
+            pass
+        self._vp_log("screencast-stop")
+
+    def _on_screencast_frame(self, sess, page, ev) -> None:
+        """One pushed frame: acknowledge it, then publish it if it belongs to
+        the page being streamed. Runs on the streamer's event loop."""
+        import base64 as _b64
+        sid = (ev or {}).get("sessionId")
+        if sid is not None:
+            asyncio.ensure_future(self._screencast_ack(sess, sid))
+        if page is not self._page or sess is not self._sc_sess:
+            return
+        try:
+            data = _b64.b64decode((ev or {}).get("data") or "")
+        except Exception:  # noqa: BLE001 — a malformed frame is dropped
+            return
+        if not data:
+            return
+        meta = (ev or {}).get("metadata") or {}
+        now = time.monotonic()
+        self._capture_tier = self._sc_tier
+        self._capture_started_at = self._capture_finished_at = now
+        try:
+            self._capture_width = int(meta.get("deviceWidth") or 0)
+            self._capture_height = int(meta.get("deviceHeight") or 0)
+        except (TypeError, ValueError):
+            pass
+        if self._capture_width > 0 and self._capture_height > 0:
+            self._accept_viewport(self._capture_width, self._capture_height)
+        self._sc_last_frame = now
+        self._publish_frame(data, self._target_ids.get(page, ""))
+        if self.status == "connecting":
+            self.status, self.detail = "live", ""
+        try:
+            self.cur_url = page.url or ""
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _screencast_ack(self, sess, sid) -> None:
+        try:
+            await asyncio.wait_for(
+                sess.send("Page.screencastFrameAck", {"sessionId": sid}), timeout=1.0)
+        except Exception:  # noqa: BLE001 — Chrome resends after an unacked frame
+            pass
+
     async def _grab_loop(self) -> None:
         # try/finally so the driver is stopped on EVERY exit path — including an
         # _attach() that raises (2026-07-11: a failed connect_over_cdp left the
         # freshly-started driver orphaned; combined with per-poll relaunch this
         # leaked one node process per second all night).
         try:
-            await asyncio.wait_for(self._attach(), timeout=BROWSER_ATTACH_TIMEOUT)
+            # Restored renderers can reject the first connection even after
+            # Chrome binds CDP. Retry within this viewer demand, without asking
+            # a click or another frame request to start a new worker thread.
+            for attempt in range(BROWSER_ATTACH_ATTEMPTS):
+                try:
+                    await self._attach()
+                    break
+                except Exception:  # noqa: BLE001 — partial attachments need cleanup
+                    if self._user_closed or attempt + 1 == BROWSER_ATTACH_ATTEMPTS:
+                        raise
+                    self.status, self.detail = "connecting", "retrying browser connection…"
+                    await self._teardown()
+                    await asyncio.sleep(0.5 * (attempt + 1))
             await self._grab_loop_inner()
         finally:
             self.frame = None      # stopping → no stale 'live' with no frames
@@ -1213,17 +1478,71 @@ class _Streamer:
     async def _grab_loop_inner(self) -> None:
         _misses = 0
         while self._running:
-            if time.monotonic() - self.last_view > IDLE_STOP_AFTER:
+            cycle_started = time.monotonic()
+            idle_for = time.monotonic() - self.last_view
+            if idle_for > 3 * IDLE_STOP_AFTER:
                 break
+            if idle_for > IDLE_STOP_AFTER:
+                # Pause capture while retaining the attachment. A returning
+                # viewer wakes this existing loop without another CDP attach.
+                with self._frame_lock:
+                    self.frame = None
+                    self._frame_snapshot = None
+                await self._screencast_stop()
+                await asyncio.sleep(0.25)
+                continue
             try:
                 await self._refresh_active_page()
                 await self._follow_active_tab()
+                if self._page is None:
+                    await asyncio.sleep(FRAME_INTERVAL)
+                    continue
+                lock_started = time.monotonic()
+                pushed = False
+                png = None
                 async with self._iolock():
+                    _diagnostics.record('capture_lock_ms', (time.monotonic() - lock_started) * 1000)
                     _capture_start = time.monotonic()
-                    png = await self._grab(self._page)
-                    _diagnostics.record('capture_ms', (time.monotonic() - _capture_start) * 1000)
-                if png:
-                    self._publish_frame(png)
+                    capture_page = self._page
+                    capture_target = self._target_ids.get(capture_page, "")
+                    if SCREENCAST and time.monotonic() >= self._sc_failed_until:
+                        try:
+                            sess = await self._cdp_session(capture_page)
+                            pushed = await self._screencast_ensure(capture_page, sess)
+                        except Exception:  # noqa: BLE001 — fall back to polling this frame
+                            pushed = False
+                    if pushed:
+                        # Pixels arrive by event. The viewport gate and repair
+                        # pass still runs, at its own cadence, and the lock is
+                        # held only for its metadata reads, so an input action
+                        # no longer waits behind a screenshot.
+                        if time.monotonic() - self._sc_gate_at >= SCREENCAST_GATE_S:
+                            self._sc_gate_at = time.monotonic()
+                            try:
+                                await self._capture_args(capture_page)
+                            except Exception:  # noqa: BLE001 — the gate retries next second
+                                pass
+                    else:
+                        png = await self._grab(capture_page)
+                        _diagnostics.record('capture_ms', (time.monotonic() - _capture_start) * 1000)
+                if pushed:
+                    # A quiet screencast is a still page, not a dead capture:
+                    # frame_ts is capture health, so it advances while Chrome
+                    # holds the screencast (until the first frame is due, then
+                    # only once frames have arrived).
+                    if (self._sc_last_frame
+                            or time.monotonic() - self._sc_started_at < SCREENCAST_FIRST_FRAME_S):
+                        with self._frame_lock:
+                            self.frame_ts = time.monotonic()
+                    self._queue_click_metadata(capture_page)
+                    _misses = 0
+                    if self._fail_streak and self._sc_last_frame:
+                        with self._lock:
+                            self._fail_streak = 0
+                            self._backoff_until = 0.0
+                elif png:
+                    self._publish_frame(png, capture_target)
+                    self._queue_click_metadata(capture_page)
                     if self.status == "connecting":
                         self.status, self.detail = "live", ""
                     try: self.cur_url = self._page.url or ""
@@ -1246,7 +1565,7 @@ class _Streamer:
                         # script is the expected recovery now; this is rare enough
                         # (per the owner) that it doesn't need to self-heal.
                         _misses = 0
-                        self.status, self.detail = "error", "Chrome wedged — relaunch it via the bot-chrome script"
+                        self.status, self.detail = "error", "Chrome is not responding. Restart Chrome."
                         break
                 if not self.vw:
                     # CDP-attached pages have NO Playwright viewport_size (it's None for
@@ -1352,51 +1671,150 @@ class _Streamer:
                 except Exception:  # noqa: BLE001
                     pass
             self._was_busy = busy
-            await self._pace(self._capture_interval(
-                now=time.monotonic(), busy=busy))
+            from operator_feed import producer_delay
+            now = time.monotonic()
+            interval = self._capture_interval(now=now, busy=busy)
+            await self._pace(producer_delay(interval, now - cycle_started,
+                active=now < self._motion_until, busy=busy))
 
-    async def _grab(self, page):
-        """Raw JPEG frame via CDP Page.captureScreenshot — no font-loading wait
-        (page.screenshot() font-waits and hung 30s on heavy pages). Falls back to
-        a short-timeout page.screenshot if CDP isn't available."""
-        import base64 as _b64
+    async def _capture_args(self, page):
+        """The capture session and Page.captureScreenshot arguments for one
+        frame, after the viewport gate and repair pass. None when geometry is
+        unavailable or the viewport is not accepted. The screencast path runs
+        this for the gate alone; the polled path screenshots with the result."""
+        # Identity-checked session (not a bare self._cdp read): the attach
+        # sweep / any page swap can leave the cache bound to a DIFFERENT
+        # page, streaming one tab while input targets another (Codex P1).
+        sess = await self._cdp_session(page)
+        capture_tier = self.tier
+        quality = (TIER_ECO_QUALITY if capture_tier == "eco"
+                   else TIER_LO_QUALITY if capture_tier == "lo"
+                   else JPEG_QUALITY)
+        max_w = (TIER_ECO_MAX_W if capture_tier == "eco"
+                 else TIER_LO_MAX_W if capture_tier == "lo"
+                 else 0)
+        args = {"format": "jpeg",
+                "quality": quality}
+        # FULL-COVERAGE, DEVICE-RES frames (2026-07-12, rev 2). On a Chrome
+        # whose device scale ≠ 1 (Windows display scaling — here 1.25),
+        # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
+        # the FULL device viewport so coverage is complete (no right/bottom
+        # crop — the owner's "right edge cut off").
+        #
+        # OUTPUT AT DEVICE RESOLUTION (scale=1.0), not CSS width. Click
+        # accuracy does NOT depend on frame size — the frontend sends
+        # NORMALIZED (0..1) coords that _viewport_css maps to CSS pixels for
+        # Input.dispatchMouseEvent, so frame dimensions are irrelevant to
+        # where a tap lands. The earlier "normalize to CSS width" clip threw
+        # away ~20% of resolution for nothing (690 vs 863 px on a 1.25x
+        # display) → frames upscaled soft on the phone ("pixelated as shit").
+        # Both capture attempts use the same clip, scale, and quality.
+        # Retrying with a full Playwright screenshot changes the framing
+        # on scaled displays and discards the bandwidth tier's size cap.
         try:
-            # Identity-checked session (not a bare self._cdp read): the attach
-            # sweep / any page swap can leave the cache bound to a DIFFERENT
-            # page, streaming one tab while input targets another (Codex P1).
-            sess = await self._cdp_session(page)
-            quality = (TIER_ECO_QUALITY if self.tier == "eco"
-                       else TIER_LO_QUALITY if self.tier == "lo"
-                       else JPEG_QUALITY)
-            max_w = (TIER_ECO_MAX_W if self.tier == "eco"
-                     else TIER_LO_MAX_W if self.tier == "lo"
-                     else 0)
-            args = {"format": "jpeg",
-                    "quality": quality}
-            # FULL-COVERAGE, DEVICE-RES frames (2026-07-12, rev 2). On a Chrome
-            # whose device scale ≠ 1 (Windows display scaling — here 1.25),
-            # captureScreenshot's clip is interpreted in DEVICE pixels. We clip
-            # the FULL device viewport so coverage is complete (no right/bottom
-            # crop — the owner's "right edge cut off").
-            #
-            # OUTPUT AT DEVICE RESOLUTION (scale=1.0), not CSS width. Click
-            # accuracy does NOT depend on frame size — the frontend sends
-            # NORMALIZED (0..1) coords that _viewport_css maps to CSS pixels for
-            # Input.dispatchMouseEvent, so frame dimensions are irrelevant to
-            # where a tap lands. The earlier "normalize to CSS width" clip threw
-            # away ~20% of resolution for nothing (690 vs 863 px on a 1.25x
-            # display) → frames upscaled soft on the phone ("pixelated as shit").
-            # WORSE: only the CDP path downscaled; the except-branch fallback
-            # (page.screenshot) captures at DEVICE res, so a transient CDP-grab
-            # failure during a nav flipped the served frame 690<->863 every few
-            # frames — the phone's <img> rescaled each swap ("spasming between
-            # small and big at constant frequency"). Same device-res on both
-            # paths = one stable size, no rescale pulse, full sharpness.
-            # lo tier still downscales (bandwidth) but by a FIXED cap, so its
-            # size is stable too.
+            _m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"),
+                                        timeout=1.0)
+            _css = ((_m or {}).get("cssLayoutViewport")
+                    or (_m or {}).get("layoutViewport") or {})
+            _dev = ((_m or {}).get("layoutViewport")
+                    or (_m or {}).get("cssLayoutViewport") or {})
+            _cw = float(_css.get("clientWidth") or 0)
+            _ch = float(_css.get("clientHeight") or 0)
+            _dw = float(_dev.get("clientWidth") or 0)
+            _dh = float(_dev.get("clientHeight") or 0)
+            _gate_ok = (self._accept_viewport(_cw, _ch)
+                        and self._matches_view_metrics(_cw, _ch))
+            self._gate_misses = 0 if _gate_ok else (
+                getattr(self, "_gate_misses", 0) + 1)
+            # Collapsed band gets its own score, not the consecutive
+            # counter — see collapse_score. A healthy read decays it
+            # instead of erasing it, so an alternating reading still
+            # converges on a repair.
+            self._collapse_score = collapse_score(
+                getattr(self, "_collapse_score", 0),
+                gate_ok=_gate_ok, css_w=_cw)
+            # dormancy wake conditions: the gate recovering on its own, or
+            # ANY navigation/tab-change (url flip) — both mean the world
+            # the dud repairs gave up on is gone, so repairs re-arm.
             try:
-                _m = await asyncio.wait_for(sess.send("Page.getLayoutMetrics"),
-                                            timeout=1.0)
+                _u = page.url or ""
+            except Exception:  # noqa: BLE001
+                _u = ""
+            # layoutViewport should settle at the requested effective
+            # width. _applied_view_w may be 15px wider solely to pay for a
+            # scrollbar gutter; using that raw override as the centre of a
+            # 48px deadband is how the live 1250px drift escaped detection.
+            _expected_dw = float(self.view_w or 0)
+            _metrics_owned = not _u.lower().startswith(
+                ("chrome://", "devtools://"))
+            _foreign_metrics = bool(
+                self.view_w
+                and _metrics_owned
+                and not _u.split("?", 1)[0].lower().endswith(".pdf")
+                and device_metrics_drifted(_dw, _expected_dw))
+            self._foreign_metric_misses = (
+                getattr(self, "_foreign_metric_misses", 0) + 1
+                if _foreign_metrics else 0)
+            # A CSS-desktop-sized page can STILL have a foreign device
+            # override. Do not call that recovery and erase _repair_duds:
+            # that made an ineffective repair repeat forever. Chrome's own
+            # privileged pages are excluded above because they ignore the
+            # override entirely; retrying those was the recorder's 30s
+            # New Tab pulse.
+            if ((_gate_ok and not _foreign_metrics)
+                    or _u != getattr(self, "_gate_url", _u)):
+                if getattr(self, "_repair_dormant", False):
+                    self._vp_log("repair-rearm",
+                                 "gate ok" if _gate_ok else "nav")
+                self._repair_dormant = False
+                self._repair_duds = 0
+            self._gate_url = _u
+            # walker instrumentation: consecutive shrinking reads on a
+            # static viewport self-document the next occurrence (the
+            # 2026-07-23 hunt burned an hour without this trail)
+            _pw_ = getattr(self, "_gate_prev_w", 0.0)
+            if not _gate_ok and _cw and _pw_ and _cw < _pw_:
+                self._vp_log("vp-walk", f"{_pw_:.0f}->{_cw:.0f}")
+            self._gate_prev_w = _cw
+            _collapsed_due = (not _gate_ok
+                    and _cw < REPAIR_HARD_FLOOR_W
+                    and self._collapse_score >= COLLAPSE_REPAIR_AT)
+            _foreign_due = (
+                self._foreign_metric_misses >= REPAIR_AFTER_MISSES)
+            if ((_collapsed_due or _foreign_due)
+                    and not getattr(self, "_repair_dormant", False)
+                    and time.monotonic() - getattr(self, "_repair_ts", 0.0)
+                    > getattr(self, "_repair_backoff", 5.0)):
+                # A switched target can inherit a collapsed/stale emulation
+                # viewport. Repair it on a persistent metrics session, then
+                # re-read before clipping this frame. THROTTLED + BACKED OFF
+                # + PERSISTENCE-GATED: if a repair doesn't change the reading
+                # (scrollbar under the floor, a foreign-session override we
+                # can't beat), retrying just clear+apply-reflows the REAL
+                # window — the visible GUI strobe. Worse, on scrollbar-heavy
+                # pages the repair reflow ITSELF perturbs the reading
+                # (films table 2026-07-22: the snap-to-1024 relaxes back to
+                # 964 in 12px steps over ~20s, and mid-walk transients dip
+                # under the floor → next repair → self-sustaining pulse).
+                # So: a failure must persist REPAIR_AFTER_MISSES consecutive
+                # frames (reflow transients never do; real collapsed
+                # emulation always does), a repair that leaves the gate
+                # failing DOUBLES the wait up to 60s, one that lands resets
+                # to the 5s base; attach/tab-switch repairs stay immediate
+                # (one-shot events).
+                self._gate_misses = 0
+                self._collapse_score = 0   # a fired repair re-earns its score
+                self._foreign_metric_misses = 0
+                self._repair_ts = time.monotonic()
+                if _foreign_due:
+                    self._vp_log(
+                        "repair-foreign-viewport",
+                        f"device {_dw:.0f}px, expected {_expected_dw:.0f}px")
+                else:
+                    self._vp_log("repair", f"css {_cw:.0f}x{_ch:.0f} under floor")
+                await self._force_desktop_page(page, force=True)
+                _m = await asyncio.wait_for(
+                    sess.send("Page.getLayoutMetrics"), timeout=1.0)
                 _css = ((_m or {}).get("cssLayoutViewport")
                         or (_m or {}).get("layoutViewport") or {})
                 _dev = ((_m or {}).get("layoutViewport")
@@ -1404,183 +1822,88 @@ class _Streamer:
                 _cw = float(_css.get("clientWidth") or 0)
                 _ch = float(_css.get("clientHeight") or 0)
                 _dw = float(_dev.get("clientWidth") or 0)
-                _dh = float(_dev.get("clientHeight") or 0)
-                _gate_ok = (self._accept_viewport(_cw, _ch)
-                            and self._matches_view_metrics(_cw, _ch))
-                self._gate_misses = 0 if _gate_ok else (
-                    getattr(self, "_gate_misses", 0) + 1)
-                # Collapsed band gets its own score, not the consecutive
-                # counter — see collapse_score. A healthy read decays it
-                # instead of erasing it, so an alternating reading still
-                # converges on a repair.
-                self._collapse_score = collapse_score(
-                    getattr(self, "_collapse_score", 0),
-                    gate_ok=_gate_ok, css_w=_cw)
-                # dormancy wake conditions: the gate recovering on its own, or
-                # ANY navigation/tab-change (url flip) — both mean the world
-                # the dud repairs gave up on is gone, so repairs re-arm.
-                try:
-                    _u = page.url or ""
-                except Exception:  # noqa: BLE001
-                    _u = ""
-                # layoutViewport should settle at the requested effective
-                # width. _applied_view_w may be 15px wider solely to pay for a
-                # scrollbar gutter; using that raw override as the centre of a
-                # 48px deadband is how the live 1250px drift escaped detection.
                 _expected_dw = float(self.view_w or 0)
-                _metrics_owned = not _u.lower().startswith(
-                    ("chrome://", "devtools://"))
-                _foreign_metrics = bool(
-                    self.view_w
-                    and _metrics_owned
-                    and not _u.split("?", 1)[0].lower().endswith(".pdf")
-                    and device_metrics_drifted(_dw, _expected_dw))
-                self._foreign_metric_misses = (
-                    getattr(self, "_foreign_metric_misses", 0) + 1
-                    if _foreign_metrics else 0)
-                # A CSS-desktop-sized page can STILL have a foreign device
-                # override. Do not call that recovery and erase _repair_duds:
-                # that made an ineffective repair repeat forever. Chrome's own
-                # privileged pages are excluded above because they ignore the
-                # override entirely; retrying those was the recorder's 30s
-                # New Tab pulse.
-                if ((_gate_ok and not _foreign_metrics)
-                        or _u != getattr(self, "_gate_url", _u)):
-                    if getattr(self, "_repair_dormant", False):
-                        self._vp_log("repair-rearm",
-                                     "gate ok" if _gate_ok else "nav")
-                    self._repair_dormant = False
+                if (self._accept_viewport(_cw, _ch)
+                        and self._matches_view_metrics(_cw, _ch)
+                        and not device_metrics_drifted(
+                            _dw, _expected_dw)):
+                    self._repair_backoff = 5.0
                     self._repair_duds = 0
-                self._gate_url = _u
-                # walker instrumentation: consecutive shrinking reads on a
-                # static viewport self-document the next occurrence (the
-                # 2026-07-23 hunt burned an hour without this trail)
-                _pw_ = getattr(self, "_gate_prev_w", 0.0)
-                if not _gate_ok and _cw and _pw_ and _cw < _pw_:
-                    self._vp_log("vp-walk", f"{_pw_:.0f}->{_cw:.0f}")
-                self._gate_prev_w = _cw
-                _collapsed_due = (not _gate_ok
-                        and _cw < REPAIR_HARD_FLOOR_W
-                        and self._collapse_score >= COLLAPSE_REPAIR_AT)
-                _foreign_due = (
-                    self._foreign_metric_misses >= REPAIR_AFTER_MISSES)
-                if ((_collapsed_due or _foreign_due)
-                        and not getattr(self, "_repair_dormant", False)
-                        and time.monotonic() - getattr(self, "_repair_ts", 0.0)
-                        > getattr(self, "_repair_backoff", 5.0)):
-                    # A switched target can inherit a collapsed/stale emulation
-                    # viewport. Repair it on a persistent metrics session, then
-                    # re-read before clipping this frame. THROTTLED + BACKED OFF
-                    # + PERSISTENCE-GATED: if a repair doesn't change the reading
-                    # (scrollbar under the floor, a foreign-session override we
-                    # can't beat), retrying just clear+apply-reflows the REAL
-                    # window — the visible GUI strobe. Worse, on scrollbar-heavy
-                    # pages the repair reflow ITSELF perturbs the reading
-                    # (films table 2026-07-22: the snap-to-1024 relaxes back to
-                    # 964 in 12px steps over ~20s, and mid-walk transients dip
-                    # under the floor → next repair → self-sustaining pulse).
-                    # So: a failure must persist REPAIR_AFTER_MISSES consecutive
-                    # frames (reflow transients never do; real collapsed
-                    # emulation always does), a repair that leaves the gate
-                    # failing DOUBLES the wait up to 60s, one that lands resets
-                    # to the 5s base; attach/tab-switch repairs stay immediate
-                    # (one-shot events).
-                    self._gate_misses = 0
-                    self._collapse_score = 0   # a fired repair re-earns its score
-                    self._foreign_metric_misses = 0
-                    self._repair_ts = time.monotonic()
-                    if _foreign_due:
-                        self._vp_log(
-                            "repair-foreign-viewport",
-                            f"device {_dw:.0f}px, expected {_expected_dw:.0f}px")
-                    else:
-                        self._vp_log("repair", f"css {_cw:.0f}x{_ch:.0f} under floor")
-                    await self._force_desktop_page(page, force=True)
-                    _m = await asyncio.wait_for(
-                        sess.send("Page.getLayoutMetrics"), timeout=1.0)
-                    _css = ((_m or {}).get("cssLayoutViewport")
-                            or (_m or {}).get("layoutViewport") or {})
-                    _dev = ((_m or {}).get("layoutViewport")
-                            or (_m or {}).get("cssLayoutViewport") or {})
-                    _cw = float(_css.get("clientWidth") or 0)
-                    _ch = float(_css.get("clientHeight") or 0)
-                    _dw = float(_dev.get("clientWidth") or 0)
-                    _expected_dw = float(self.view_w or 0)
-                    if (self._accept_viewport(_cw, _ch)
-                            and self._matches_view_metrics(_cw, _ch)
-                            and not device_metrics_drifted(
-                                _dw, _expected_dw)):
-                        self._repair_backoff = 5.0
-                        self._repair_duds = 0
-                    else:
-                        self._repair_backoff = min(
-                            getattr(self, "_repair_backoff", 5.0) * 2, 60.0)
-                        # Ineffective repair → the cached metric session is the
-                        # prime suspect: a session bound to a PRE-NAVIGATION
-                        # (bfcache/frozen) target reads the old doc's geometry
-                        # and its overrides never reach the live page — clear+
-                        # apply then just perturbs the real page visibly every
-                        # backoff period: the "zooms in then back out, viewport
-                        # static" pulse (the owner 2026-07-23, live-diagnosed: the
-                        # streamer's session read 708x634 while a fresh session
-                        # on the same target read the true 1012x891). Drop the
-                        # session so the next attempt rebuilds against the
-                        # CURRENT target; after 3 dud repairs go DORMANT until
-                        # a nav/tab-switch/attach resets the gate — a forever
-                        # 60s pulse is itself the bug being chased.
-                        self._repair_duds = getattr(self, "_repair_duds", 0) + 1
-                        stale = self._metric_sessions.pop(page, None)
-                        if stale is not None:
-                            self._vp_log("repair-drop-session",
-                                         f"dud #{self._repair_duds}")
-                            try:
-                                await stale.detach()
-                            except Exception:  # noqa: BLE001
-                                pass
-                            if self._cdp is stale:
-                                self._cdp = None
-                                # Planned repair teardown owns its own retry
-                                # budget; do not classify it as a send failure.
-                                self._cdp_for = None
-                        if self._repair_duds >= 3:
-                            self._vp_log("repair-dormant",
-                                         f"css {_cw:.0f}x{_ch:.0f} persists")
-                            self._repair_dormant = True
-                # REGIME-AWARE CLIP (2026-07-26 rev 2 — the "chin", then the
-                # reset-view crop). Two capture regimes coexist on a
-                # display-scaled Chrome (host WSLg 125%):
-                #  * OUR OVERRIDE ACTIVE — the page lays out at
-                #    cssLayoutViewport (override/1.25) and captureScreenshot
-                #    renders it 1:1 CSS onto an override-sized canvas. The
-                #    device clip pads a white right+bottom band (the letterbox
-                #    chin); the CSS clip is exact (live-proven on chatgpt.com:
-                #    device clip content-to (990,815) on a 1280x1020 canvas,
-                #    CSS clip 1024x816 full-bleed).
-                #  * NATIVE (no override — a PDF tab, or a page "Fix stuck
-                #    zoom" swept and the live-page re-apply missed) — capture
-                #    renders at device scale, so the CSS clip zooms+crops
-                #    (the owner's google.com "urgh browser issues") and the device
-                #    clip is the correct one.
-                # Which regime? Our override is active exactly when the DEVICE
-                # layout viewport equals the view target (that is what
-                # setDeviceMetricsOverride pins); a native page reads the real
-                # window size instead. Height only gates when view_h is
-                # explicit. Click mapping is safe either way — the frontend
-                # sends normalized (0..1) coords mapped to CSS px.
-                # compare against what _apply_view_metrics ACTUALLY applied —
-                # the scrollbar-deficit compensation can overshoot view_w
-                _aw = float(getattr(self, "_applied_view_w", 0) or self.view_w)
-                _emu = ((abs(_dw - self.view_w) <= 2 or abs(_dw - _aw) <= 2)
-                        and (not self.view_h or abs(_dh - self.view_h) <= 2))
-                if _emu:
-                    # PAGE-ZOOM SPLIT (2026-07-26 rev 3 — google.com "cuts
-                    # off"): the bot Chrome profile is display-scaled, so the
-                    # css viewport reads view/scale while the capture canvas
-                    # stays the full device size. Every reading below is CSS
-                    # px and the clip is device px — _emu_clip_box owns that
-                    # conversion, and the arithmetic is unit-tested there
-                    # rather than inline against a live browser.
-                    _bv = [0, 0]
+                else:
+                    self._repair_backoff = min(
+                        getattr(self, "_repair_backoff", 5.0) * 2, 60.0)
+                    # Ineffective repair → the cached metric session is the
+                    # prime suspect: a session bound to a PRE-NAVIGATION
+                    # (bfcache/frozen) target reads the old doc's geometry
+                    # and its overrides never reach the live page — clear+
+                    # apply then just perturbs the real page visibly every
+                    # backoff period: the "zooms in then back out, viewport
+                    # static" pulse (the owner 2026-07-23, live-diagnosed: the
+                    # streamer's session read 708x634 while a fresh session
+                    # on the same target read the true 1012x891). Drop the
+                    # session so the next attempt rebuilds against the
+                    # CURRENT target; after 3 dud repairs go DORMANT until
+                    # a nav/tab-switch/attach resets the gate — a forever
+                    # 60s pulse is itself the bug being chased.
+                    self._repair_duds = getattr(self, "_repair_duds", 0) + 1
+                    stale = self._metric_sessions.pop(page, None)
+                    if stale is not None:
+                        self._vp_log("repair-drop-session",
+                                     f"dud #{self._repair_duds}")
+                        try:
+                            await stale.detach()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if self._cdp is stale:
+                            self._cdp = None
+                            # Planned repair teardown owns its own retry
+                            # budget; do not classify it as a send failure.
+                            self._cdp_for = None
+                    if self._repair_duds >= 3:
+                        self._vp_log("repair-dormant",
+                                     f"css {_cw:.0f}x{_ch:.0f} persists")
+                        self._repair_dormant = True
+            # REGIME-AWARE CLIP (2026-07-26 rev 2 — the "chin", then the
+            # reset-view crop). Two capture regimes coexist on a
+            # display-scaled Chrome (host WSLg 125%):
+            #  * OUR OVERRIDE ACTIVE — the page lays out at
+            #    cssLayoutViewport (override/1.25) and captureScreenshot
+            #    renders it 1:1 CSS onto an override-sized canvas. The
+            #    device clip pads a white right+bottom band (the letterbox
+            #    chin); the CSS clip is exact (live-proven on chatgpt.com:
+            #    device clip content-to (990,815) on a 1280x1020 canvas,
+            #    CSS clip 1024x816 full-bleed).
+            #  * NATIVE (no override — a PDF tab, or a page "Fix stuck
+            #    zoom" swept and the live-page re-apply missed) — capture
+            #    renders at device scale, so the CSS clip zooms+crops
+            #    (the owner's google.com "urgh browser issues") and the device
+            #    clip is the correct one.
+            # Which regime? Our override is active exactly when the DEVICE
+            # layout viewport equals the view target (that is what
+            # setDeviceMetricsOverride pins); a native page reads the real
+            # window size instead. Height only gates when view_h is
+            # explicit. Click mapping is safe either way — the frontend
+            # sends normalized (0..1) coords mapped to CSS px.
+            # compare against what _apply_view_metrics ACTUALLY applied —
+            # the scrollbar-deficit compensation can overshoot view_w
+            _aw = float(getattr(self, "_applied_view_w", 0) or self.view_w)
+            _emu = ((abs(_dw - self.view_w) <= 2 or abs(_dw - _aw) <= 2)
+                    and (not self.view_h or abs(_dh - self.view_h) <= 2))
+            if _emu:
+                # PAGE-ZOOM SPLIT (2026-07-26 rev 3 — google.com "cuts
+                # off"): the bot Chrome profile is display-scaled, so the
+                # css viewport reads view/scale while the capture canvas
+                # stays the full device size. Every reading below is CSS
+                # px and the clip is device px — _emu_clip_box owns that
+                # conversion, and the arithmetic is unit-tested there
+                # rather than inline against a live browser.
+                _bv = [0, 0]
+                _sc_active = (
+                    SCREENCAST
+                    and self._sc_page is page
+                    and time.monotonic() >= self._sc_failed_until
+                )
+                if not _sc_active:
                     try:
                         import json as _json
                         _ext = await asyncio.wait_for(
@@ -1601,59 +1924,127 @@ class _Streamer:
                             _bv = _parsed
                     except Exception:  # noqa: BLE001 — extent read is best-effort
                         pass
-                    _bw, _bh = _emu_clip_box(
-                        css_w=_cw, css_h=_ch, dev_w=_dw, dev_h=_dh,
-                        body_w=float(_bv[0] or 0), body_h=float(_bv[1] or 0),
-                        page_x=float(_css.get("pageX") or 0),
-                        page_y=float(_css.get("pageY") or 0),
-                        view_w=float(self.view_w), view_h=float(self.view_h))
-                    # device-space clip → device-space origin (same convention
-                    # as the native branch below); a css origin here would
-                    # under-scroll the capture by the display scale.
-                    _src = _dev
-                else:
-                    _src, _bw, _bh = _dev, _dw, _dh
-                if self._accept_viewport(_cw, _ch) and _bw and _bh:
-                    _scale = min(1.0, max_w / _bw) if max_w else 1.0
-                    # clip uses document coordinates, so its origin must follow
-                    # the live viewport. At y=0 a scrolled page captures the
-                    # offscreen region above it (a giant blank band on Yahoo).
-                    args["clip"] = {"x": float(_src.get("pageX") or 0),
-                                    "y": float(_src.get("pageY") or 0),
-                                    "width": _bw, "height": _bh, "scale": _scale}
-            except Exception:
-                pass   # metrics unavailable → unclipped frame (full coverage on stock scale)
+                _bw, _bh = _emu_clip_box(
+                    css_w=_cw, css_h=_ch, dev_w=_dw, dev_h=_dh,
+                    body_w=float(_bv[0] or 0), body_h=float(_bv[1] or 0),
+                    page_x=float(_css.get("pageX") or 0),
+                    page_y=float(_css.get("pageY") or 0),
+                    view_w=float(self.view_w), view_h=float(self.view_h))
+                # device-space clip → device-space origin (same convention
+                # as the native branch below); a css origin here would
+                # under-scroll the capture by the display scale.
+                _src = _dev
+            else:
+                _src, _bw, _bh = _dev, _dw, _dh
+            if self._accept_viewport(_cw, _ch) and _bw and _bh:
+                _scale = min(1.0, max_w / _bw) if max_w else 1.0
+                # clip uses document coordinates, so its origin must follow
+                # the live viewport. At y=0 a scrolled page captures the
+                # offscreen region above it (a giant blank band on Yahoo).
+                args["clip"] = {"x": float(_src.get("pageX") or 0),
+                                "y": float(_src.get("pageY") or 0),
+                                "width": _bw, "height": _bh, "scale": _scale}
+        except Exception as exc:
+            # Keep the last good frame while geometry is unavailable. An
+            # unclipped screenshot has a different crop/scale on a scaled
+            # browser and makes the embedded picture jump on recovery.
+            # The metrics transport may have detached during navigation.
+            # Rebuild it on the next capture instead of repeatedly using
+            # the failed session until the entire streamer is torn down.
+            self._cdp = None
+            _diagnostics.record('capture_geometry_failures')
+            self._vp_log('capture-geometry-failed', type(exc).__name__)
+            return None
+        if "clip" not in args:
+            return None
+        return sess, args, capture_tier, _cw, _ch
+
+    async def _grab(self, page):
+        """Capture a JPEG with consistent geometry, including transport retries."""
+        import base64 as _b64
+        capture_started = time.monotonic()
+        args = None
+        capture_tier = self.tier
+        _cw = _ch = 0
+        try:
+            got = await self._capture_args(page)
+            if got is None:
+                return None
+            sess, args, capture_tier, _cw, _ch = got
             _capture_encode_start = time.monotonic()
             res = await asyncio.wait_for(
                 sess.send("Page.captureScreenshot", args),
                 timeout=2.5)
             _diagnostics.record('capture_encode_ms', (time.monotonic() - _capture_encode_start) * 1000)
+            return self._finish_capture(_b64.b64decode(res["data"]), capture_tier,
+                capture_started, int(_cw), int(_ch))
+        except Exception:
+            # Retry only when this frame has known geometry. Playwright's
+            # page.screenshot uses a different viewport crop and ignores our
+            # tier scale, so alternating paths visibly resized the picture.
+            # A temporary capture-only session keeps the exact clip and does
+            # not replace the persistent session that owns page emulation.
+            retry = None
             try:
-                cr = await asyncio.wait_for(sess.send("Runtime.evaluate", {
+                if not args or "clip" not in args:
+                    return None
+                retry = await asyncio.wait_for(
+                    page.context.new_cdp_session(page), timeout=1.0)
+                res = await asyncio.wait_for(
+                    retry.send("Page.captureScreenshot", args), timeout=2.5)
+                return self._finish_capture(_b64.b64decode(res["data"]), capture_tier,
+                    capture_started, int(_cw), int(_ch))
+            except Exception:
+                self._cdp = None  # existing next-frame recovery rebuilds it
+                return None
+            finally:
+                if retry is not None:
+                    try:
+                        await asyncio.wait_for(retry.detach(), timeout=1.0)
+                    except Exception:
+                        pass
+
+    def _finish_capture(self, data: bytes, tier: str, started: float,
+                        width: int, height: int) -> bytes:
+        self._capture_tier = tier
+        self._capture_started_at, self._capture_finished_at = started, time.monotonic()
+        self._capture_width, self._capture_height = width, height
+        return data
+
+    def _queue_click_metadata(self, page) -> None:
+        """Best-effort cursor metadata never delays publication or holds the input lock."""
+        if self._click_metadata_task and not self._click_metadata_task.done():
+            return
+        now = time.monotonic()
+        if now - self._click_metadata_at < .5:
+            return
+        sess = self._metric_sessions.get(page)
+        if sess is None:
+            return
+        self._click_metadata_at = now
+        async def read() -> None:
+            started = time.monotonic()
+            try:
+                result = await asyncio.wait_for(sess.send("Runtime.evaluate", {
                     "expression": "JSON.stringify(window.__opClick||null)",
-                    "returnByValue": True}), timeout=0.6)
-                val = (cr.get("result") or {}).get("value")
-                if val and val != "null":
-                    import json as _json
-                    d = _json.loads(val)
-                    if isinstance(d, dict) and "x" in d:
-                        self.last_click = (float(d["x"]), float(d["y"]), time.monotonic())
+                    "returnByValue": True}), timeout=.1)
+                import json
+                import math
+                marker = json.loads((result.get("result") or {}).get("value") or "null")
+                if not isinstance(marker, dict) or page is not self._page:
+                    return
+                x, y, stamp = (float(marker[key]) for key in ("x", "y", "t"))
+                if not all(math.isfinite(value) for value in (x, y, stamp)):
+                    return
+                event = (page, stamp)
+                if 0 <= x <= 1 and 0 <= y <= 1 and event != self._click_metadata_event:
+                    self._click_metadata_event = event
+                    self.last_click = (x, y, time.monotonic())
             except Exception:
                 pass
-            return _b64.b64decode(res["data"])
-        except Exception:
-            self._cdp = None  # session may be stale (page nav) — rebuild next time
-            try:
-                return await asyncio.wait_for(
-                    page.screenshot(
-                        type="jpeg",
-                        quality=(TIER_ECO_QUALITY if self.tier == "eco"
-                                 else TIER_LO_QUALITY if self.tier == "lo"
-                                 else JPEG_QUALITY),
-                        animations="disabled"),
-                    timeout=2.5)
-            except Exception:
-                return None
+            finally:
+                _diagnostics.record('capture_overlay_ms', (time.monotonic() - started) * 1000)
+        self._click_metadata_task = asyncio.create_task(read())
 
     async def _pace(self, interval: float) -> None:
         """Sleep the capture interval, but wake IMMEDIATELY when an input action
@@ -1674,14 +2065,18 @@ class _Streamer:
         dead streamed page. Everything else is decide_streamed_tab's call."""
         try:
             ctx = self._browser.contexts[0]
-            live = self._live_pages(ctx)
+            live = await self._cockpit_pages(ctx)
             if not live:
+                self._page = self._cdp = None
+                self.frame = None
+                self.cur_url = ""
+                self.status, self.detail = "idle", "No visible browser tab"
                 return
             n = len(live)
             if n != getattr(self, "_live_n", n):
                 self._tab_count_changed = True
             self._live_n = n
-            if self._page is None or self._page.is_closed():
+            if self._page is None or self._page not in live or self._page.is_closed():
                 pg, why = decide_streamed_tab(
                     live=live, current=None, busy=False, owned=None,
                     front=None, movers=[], count_changed=False)
@@ -1722,21 +2117,28 @@ class _Streamer:
                 return
             self._tab_check_ts = now
             ctx = self._browser.contexts[0]
-            live = self._live_pages(ctx)
+            live = await self._cockpit_pages(ctx)
             try:
                 _busy = operator_agent.runner.is_running()
             except Exception:  # noqa: BLE001
                 _busy = False
             # Extension popups are real Chrome targets but absent from
-            # Playwright's context.pages. Follow a fresh 1Password unlock
-            # prompt into a normal tab before the single-page early return.
-            popups = self._onepassword_popup_targets()
+            # Playwright's context.pages. Observe them without changing focus:
+            # foregrounding a second extension tab closes the original popup
+            # and breaks the selection/autofill flow on the merchant page.
+            # Both probes are blocking urllib calls; run them in worker threads
+            # so a slow Chrome cannot stall capture or input on this loop.
+            if len(live) > 1:
+                popups, act = await asyncio.gather(
+                    asyncio.to_thread(self._onepassword_popup_targets),
+                    asyncio.to_thread(self._active_target_id))
+            else:
+                popups = await asyncio.to_thread(self._onepassword_popup_targets)
+                act = None
             fresh_popups = popups - self._onepassword_seen
             self._onepassword_seen = set(popups)
-            if should_mirror_onepassword(self, fresh_popups, _busy):
-                opened = await self._open_onepassword_tab()
-                if opened is not None:
-                    return
+            if fresh_popups:
+                self._vp_log("onepassword-popup", "preserved")
             # AUTO-mode focus enforcement (the owner 2026-07-22): while a run is
             # live, the bot browser must SHOW the streamed (= agent's) tab at
             # all times. bring_to_front of an already-front tab is a cheap
@@ -1772,7 +2174,6 @@ class _Streamer:
                        or (pg not in prev and not _is_blank_url(urls[pg]))]
                       if _busy else [])
             front_pg = None
-            act = self._active_target_id() if len(live) > 1 else None
             if act:
                 for pg in live:
                     if await self._page_target_id(pg) == act:
@@ -1792,7 +2193,10 @@ class _Streamer:
             # click from flipping the real window away from the run
             keep_front = owned_pg if (_busy and owned_pg is not None) else (
                 pg if why == "mover" else None)
-            if keep_front is not None and now - getattr(self, "_front_ts", 0.0) > 2.5:
+            # Even re-fronting the merchant tab closes an extension popup.
+            # Suspend focus enforcement while 1Password is waiting for input.
+            if (keep_front is not None and not popups
+                    and now - getattr(self, "_front_ts", 0.0) > 2.5):
                 self._front_ts = now
                 try:
                     await asyncio.wait_for(keep_front.bring_to_front(), timeout=0.5)
@@ -1806,7 +2210,7 @@ class _Streamer:
         connection itself is gone (caller then does a hard re-attach)."""
         try:
             ctx = self._browser.contexts[0]
-            live = self._live_pages(ctx)
+            live = await self._cockpit_pages(ctx)
             if live:
                 self._page = live[-1]
                 self._cdp = None   # session was bound to the dead page — never dispatch input into it
@@ -1818,12 +2222,37 @@ class _Streamer:
             return False
 
     async def _teardown(self) -> None:
-        for closer in (lambda: self._browser and self._browser.close(),
-                       lambda: self._pw and self._pw.stop()):
+        await self._screencast_stop()
+        repeats = list((self._key_repeat or {}).values())
+        for task in repeats:
+            self._cancel_repeat_task(task)
+        if self._key_repeat_finishing:
+            await asyncio.gather(*list(self._key_repeat_finishing), return_exceptions=True)
+        self._key_repeat_finishing.clear()
+        if self._key_repeat is not None:
+            self._key_repeat.clear()
+        self._key_repeat_owner.clear()
+        self._key_release_events.clear()
+        if self._click_metadata_task:
+            self._click_metadata_task.cancel()
+            try: await self._click_metadata_task
+            except asyncio.CancelledError: pass
+            self._click_metadata_task = None
+        # Bounded: on a connection that died with Chrome, close() and stop()
+        # never return. Unbounded, the streamer thread sat in this teardown for
+        # over an hour while still counting as alive, so no page visit could
+        # start a new one (2026-10-06, Chrome closed 03:17). An abandoned
+        # driver is killed rather than left running.
+        for name, closer in (("browser", lambda: self._browser and self._browser.close()),
+                             ("driver", lambda: self._pw and self._pw.stop())):
             try:
                 r = closer()
                 if asyncio.iscoroutine(r):
-                    await r
+                    await asyncio.wait_for(r, timeout=TEARDOWN_STEP_TIMEOUT)
+            except asyncio.TimeoutError:
+                self._vp_log("teardown-timeout", name)
+                if name == "driver":
+                    _kill_driver(self._pw)
             except Exception:  # noqa: BLE001
                 pass
         self._page = self._browser = self._pw = None
@@ -1831,9 +2260,9 @@ class _Streamer:
         self._metric_sessions.clear()
         self._zoom_scripts.clear()
         self._target_ids.clear()   # ids are per-browser — never reuse across attach
-        # an error status (wedge, attach failure) must SURVIVE teardown — it
-        # carries the user-facing message and keys the relaunch backoff
-        if self.status != "error":
+        # Preserve errors and pending startup retries. Reporting idle between
+        # attempts lets a cached negative CDP probe flash a false red failure.
+        if self.status == "live":
             self.status = "idle"
 
     async def _clear_emulation(self) -> dict:
@@ -1846,7 +2275,7 @@ class _Streamer:
         cleared, failed = 0, 0
         try:
             ctx = self._browser.contexts[0]
-            pages = self._live_pages(ctx)
+            pages = await self._cockpit_pages(ctx)
         except Exception as e:  # noqa: BLE001 — browser gone/never attached
             return {"ok": False, "error": str(e), "cleared": 0, "failed": 0}
         for pg in pages:
@@ -1887,7 +2316,7 @@ class _Streamer:
         restored, cleared, failed = 0, 0, 0
         try:
             ctx = self._browser.contexts[0]
-            pages = self._live_pages(ctx)
+            pages = await self._cockpit_pages(ctx)
         except Exception as e:  # noqa: BLE001 — browser gone/never attached
             return {"ok": False, "error": str(e), "restored": 0,
                     "cleared": 0, "failed": 0}
@@ -1935,7 +2364,7 @@ class _Streamer:
         if not wanted or self._browser is None:
             return None
         try:
-            live = self._live_pages(self._browser.contexts[0])
+            live = await self._cockpit_pages(self._browser.contexts[0])
         except Exception:  # noqa: BLE001
             return None
         for pg in live:
@@ -1965,12 +2394,13 @@ class _Streamer:
         try:
             ctx = self._browser.contexts[0]
             tabs = []
-            for i, pg in enumerate(self._live_pages(ctx)):
+            for i, pg in enumerate(await self._cockpit_pages(ctx)):
                 try:
                     title = await asyncio.wait_for(pg.title(), timeout=2)
                 except Exception:
                     title = ""
-                tabs.append({"i": i, "title": (title or pg.url or "tab")[:48],
+                tabs.append({"i": i, "id": self._target_ids.get(pg, ""),
+                             "title": (title or pg.url or "tab")[:48],
                              "url": pg.url, "active": pg is self._page})
             return tabs
         except Exception:
@@ -1996,7 +2426,7 @@ class _Streamer:
     async def _switch_tab_locked(self, idx: int) -> dict:
         try:
             ctx = self._browser.contexts[0]
-            pages = self._live_pages(ctx)
+            pages = await self._cockpit_pages(ctx)
             if 0 <= idx < len(pages):
                 self._page = pages[idx]
                 self._cdp = None
@@ -2030,7 +2460,7 @@ class _Streamer:
     async def _close_tab_locked(self, idx: int) -> dict:
         try:
             ctx = self._browser.contexts[0]
-            pages = self._live_pages(ctx)
+            pages = await self._cockpit_pages(ctx)
             if 0 <= idx < len(pages):
                 closing = pages[idx]
                 # never close the LAST tab — that kills the browser / leaves the
@@ -2052,7 +2482,7 @@ class _Streamer:
                 # the 8.19s hang measured 2026-08-07.
                 if not await self._cdp_close_tab(closing):
                     await closing.close()
-                live = self._live_pages(ctx)
+                live = await self._cockpit_pages(ctx)
                 if not live:
                     # safety net: never leave zero tabs (that closes the browser) —
                     # open a fresh one so the demo/cockpit always has a live page.
@@ -2139,11 +2569,43 @@ class _Streamer:
         if loop is None or not loop.is_running():
             self._force_reattach()
             return {"ok": False, "error": "browser link lost — reconnecting"}
-        fut = asyncio.run_coroutine_threadsafe(self._do_action(action), loop)
+        action = dict(action)
+        action["_target_page"] = self._page
+        action["_queued_at"] = time.monotonic()
+        state = action["_dispatch_state"] = {"started": False}
+        budget = min(ACTION_TIMEOUT_S, {"move": 2.0, "scroll": 4.0,
+            "key": 6.0, "key_down": 6.0, "key_up": 6.0,
+            "click_at": 12.0, "dblclick_at": 12.0, "rclick_at": 12.0,
+            "stage_size": 12.0}.get(action.get("kind"), ACTION_TIMEOUT_S))
+        deadline = time.monotonic() + budget
+        entered = False
+        async def bounded_action() -> dict:
+            nonlocal entered
+            entered = True
+            try:
+                return await asyncio.wait_for(self._do_action(action),
+                    timeout=max(0, deadline - time.monotonic()))
+            except TimeoutError:
+                _diagnostics.record('action_deadlines')
+                return {"ok": False, "error": "action deadline exceeded",
+                        "outcome": "outcome_unknown" if state["started"] else "cancelled_before_dispatch"}
+        coro = bounded_action()
         try:
-            result = fut.result(timeout=30)
+            fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception:  # noqa: BLE001
+            coro.close()
+            self._force_reattach()
+            return {"ok": False, "error": "browser link lost — reconnecting"}
+        try:
+            result = fut.result(timeout=budget + .25)
         except Exception as e:  # noqa: BLE001
-            if self._DRIVER_DEAD_RE.search(str(e) or type(e).__name__):
+            fut.cancel()  # includes timeout while waiting for the shared capture lock
+            if not entered and getattr(coro, "cr_frame", None) is not None and not getattr(coro, "cr_running", False):
+                coro.close()
+            if isinstance(e, TimeoutError):
+                return {"ok": False, "error": "action deadline exceeded",
+                        "outcome": "outcome_unknown" if state["started"] else "cancelled_before_dispatch"}
+            if isinstance(e, asyncio.CancelledError) or self._DRIVER_DEAD_RE.search(str(e) or type(e).__name__):
                 self._force_reattach()
                 return {"ok": False, "error": "browser link lost — reconnecting"}
             return {"ok": False, "error": str(e)}
@@ -2178,7 +2640,12 @@ class _Streamer:
             # rebuilding; tab switches keep their already-healthy map entries.
             rebuilding = sess is None and bound is p
             if rebuilding:
-                self._metric_sessions.pop(p, None)
+                stale = self._metric_sessions.pop(p, None)
+                if stale is not None:
+                    try:
+                        await asyncio.wait_for(stale.detach(), timeout=1.0)
+                    except Exception:
+                        pass
             sess = await self._metric_session(p)
             if rebuilding:
                 # Emulation belongs to the old session; the new transport
@@ -2378,6 +2845,10 @@ class _Streamer:
                 # first contact for this view target only — once the deficit is
                 # cached, navs skip the measure entirely (no second apply)
                 if int(self.view_w) in getattr(self, "_sb_comp", {}):
+                    # Cached compensation: the one send above was the apply.
+                    # Returning without this line made applied beacons look
+                    # unapplied in the recorder (2026-10-06).
+                    self._vp_log("apply", f"{int(self.view_w)}x{int(self.view_h or 0)}")
                     return
                 # let the override's reflow land — measured immediately, the
                 # css viewport still reads the pre-scrollbar width and the
@@ -2721,7 +3192,7 @@ class _Streamer:
             self._cdp = None
         # 2) page eval (works on normal sites)
         try:
-            d = await p.evaluate("({w: window.innerWidth, h: window.innerHeight})")
+            d = await asyncio.wait_for(p.evaluate("({w: window.innerWidth, h: window.innerHeight})"), timeout=1)
             if self._usable_click_basis(d.get("w"), d.get("h")):
                 return d
         except Exception:
@@ -2731,15 +3202,59 @@ class _Streamer:
             return {"w": self.vw, "h": self.vh}
         return {"w": 1280, "h": 800}
 
+    def _cancel_repeat_task(self, task) -> None:
+        if task in self._key_repeat_finishing:
+            return
+        self._key_repeat_finishing.add(task)
+        task.add_done_callback(self._key_repeat_finishing.discard)
+        task.cancel()
+
+    def _stop_key_repeat(self, key: str, page, target: str | None) -> None:
+        """Release only this target's repeat; called exclusively on the streamer loop."""
+        task = (self._key_repeat or {}).get(key)
+        owner = self._key_repeat_owner.get(key)
+        if task is None or owner is None:
+            return
+        same_owner = owner[0] is page and (not target or owner[1] == target)
+        explicit_owner = bool(target) and owner[1] == target
+        if same_owner or explicit_owner:
+            self._key_repeat.pop(key, None)
+            self._key_repeat_owner.pop(key, None)
+            self._cancel_repeat_task(task)
+
     async def _do_action(self, action: dict) -> dict:
         if self._page is None:
             return {"ok": False, "error": "no page attached"}
         kind = action.get("kind")
         val = action.get("value", "")
-        p = self._page
+        p = action.get("_target_page", self._page)
+        queued_at = action.get("_queued_at", time.monotonic())
+        target = action.get("target_id")
+        if kind == "key_up":
+            # Every repeat tick is already a paired press (down + up). Release
+            # is local cancellation, so it must not queue behind capture or expire.
+            key = val or "Enter"
+            self._stop_key_repeat(key, p, target)
+            if p is not self._page or (target and self._target_ids.get(p) != target):
+                return {"ok": False, "error": "browser target changed. Use the current frame.",
+                        "outcome": "target_changed"}
+            event = (key, p)
+            self._key_release_events[event] = max(queued_at, self._key_release_events.get(event, 0))
+            while len(self._key_release_events) > 64:
+                self._key_release_events.pop(next(iter(self._key_release_events)))
+            return {"ok": True, "url": self._safe_url(p)}
         _lk = self._iolock()
         await _lk.acquire()
         try:
+            target = action.get("target_id")
+            if p is not self._page or (target and self._target_ids.get(p) != target):
+                return {"ok": False, "error": "browser target changed. Use the current frame.",
+                        "outcome": "target_changed"}
+            _diagnostics.record('action_queue_ms', max(0, time.monotonic() - action.get("_queued_at", time.monotonic())) * 1000)
+            state = action.get("_dispatch_state")
+            if state is not None:
+                # Conservative boundary: after this point a CDP command may have been sent.
+                state["started"] = True
             if kind == "goto":
                 url = val if "://" in val else f"https://{val}"
                 await p.goto(url, wait_until="domcontentloaded", timeout=20000)
@@ -2810,6 +3325,12 @@ class _Streamer:
                               {"type": "mouseMoved", "x": x, "y": y}), timeout=4)
             elif kind == "type":
                 await p.keyboard.type(val, delay=35)
+            elif kind == "paste":
+                # Insert the viewer's clipboard text in one CDP command. Do not
+                # replace the host clipboard or turn a long paste into 35ms/key.
+                sess = await self._cdp_session(p)
+                await asyncio.wait_for(
+                    sess.send("Input.insertText", {"text": val}), timeout=10)
             elif kind == "key":
                 await p.keyboard.press(val or "Enter")
             elif kind == "key_down":
@@ -2819,19 +3340,21 @@ class _Streamer:
                 # then a background task re-presses every ~45ms until key_up. Each press is
                 # a real down+up so the page scrolls/navigates each tick.
                 key = val or "Enter"
+                # A key released while this press waited for the lock was a tap:
+                # it still presses once below, and only the repeat is skipped.
+                # Dropping it lost every quick Enter, Backspace and arrow press
+                # whenever a capture held the lock longer than the tap.
                 if self._key_repeat is None:
                     self._key_repeat = {}
                 old = self._key_repeat.pop(key, None)
+                self._key_repeat_owner.pop(key, None)
                 if old:
-                    old.cancel()
+                    self._cancel_repeat_task(old)
                 await p.keyboard.press(key)                 # immediate first tick
-                self._key_repeat[key] = asyncio.ensure_future(self._repeat_key(key))
-            elif kind == "key_up":            # stop the held-key repeat
-                key = val or "Enter"
-                if self._key_repeat:
-                    t = self._key_repeat.pop(key, None)
-                    if t:
-                        t.cancel()
+                # A release can run while keyboard.press awaits its CDP reply.
+                if self._key_release_events.get((key, p), 0) < queued_at:
+                    self._key_repeat_owner[key] = (p, self._target_ids.get(p, ""))
+                    self._key_repeat[key] = asyncio.ensure_future(self._repeat_key(key, p))
             elif kind == "scroll":
                 # numeric dy/dx → precise user wheel/touch scroll; else keyword amounts.
                 # Raw CDP mouseWheel (see _cdp_scroll) — p.mouse.wheel() no-ops
@@ -2991,6 +3514,9 @@ class _Streamer:
             _u = self._safe_url(p); self.cur_url = _u or self.cur_url
             return {"ok": True, "url": _u}
         except Exception as e:  # noqa: BLE001
+            if isinstance(e, TimeoutError):
+                return {"ok": False, "error": "browser action timed out",
+                        "outcome": "outcome_unknown"}
             return {"ok": False, "error": str(e)}
         finally:
             try: _lk.release()
@@ -3003,21 +3529,43 @@ class _Streamer:
                 self._motion_until, time.monotonic() + MOTION_HOLD_S)
             self._eager_evt.set()
 
-    async def _repeat_key(self, key: str) -> None:
+    async def _repeat_key(self, key: str, page: object | None = None) -> None:
         """Simulate OS key auto-repeat for a held key: re-press every ~45ms until
         cancelled (key_up). Each press is a real down+up so the page keeps scrolling/
         navigating. Acquires the io-lock per tick so it doesn't race the grab loop.
         Self-terminates if the page goes away. Cancellation is the normal exit."""
+        p = page if page is not None else self._page
         try:
             await asyncio.sleep(0.28)   # honor the OS repeat-delay before the first repeat
             lk = self._iolock()
             while True:
-                p = self._page
-                if p is None:
+                if p is None or p is not self._page:
                     break
                 await lk.acquire()
                 try:
-                    await p.keyboard.press(key)
+                    if p is not self._page:
+                        break
+                    press = asyncio.create_task(p.keyboard.press(key))
+                    try:
+                        await asyncio.wait_for(asyncio.shield(press), timeout=1)
+                    except asyncio.CancelledError:
+                        # Stop scheduling immediately, but let the already-started
+                        # down/up pair finish on its original target before unlocking.
+                        try:
+                            await asyncio.wait_for(press, timeout=1)
+                        except Exception:
+                            # If the pair could not finish, release the native key
+                            # only on the same still-selected target, with a bound.
+                            if p is self._page:
+                                try:
+                                    await asyncio.wait_for(p.keyboard.up(key), timeout=1)
+                                except Exception:
+                                    pass
+                        raise
+                    except Exception:
+                        press.cancel()
+                        await asyncio.gather(press, return_exceptions=True)
+                        raise
                 except Exception:
                     break
                 finally:
@@ -3029,8 +3577,9 @@ class _Streamer:
         except Exception:  # noqa: BLE001
             pass
         finally:
-            if self._key_repeat:
+            if self._key_repeat and self._key_repeat.get(key) is asyncio.current_task():
                 self._key_repeat.pop(key, None)
+                self._key_repeat_owner.pop(key, None)
 
 
 _streamer = _Streamer()
@@ -3047,7 +3596,8 @@ _streamer = _Streamer()
 # doing that inline would stall every status poll for 3s each. A background
 # refresh keeps the endpoint free and the answer at most _CDP_TTL seconds stale,
 # which is far better than the status quo of never knowing at all.
-_CDP_TTL = 10.0
+_CDP_TTL = 1.0
+_CDP_DOWN_TTL = 0.25
 _cdp_probe: dict = {"up": None, "ts": 0.0, "running": False}
 _cdp_probe_lock = threading.Lock()
 
@@ -3056,7 +3606,8 @@ def _cdp_up_cached() -> "bool | None":
     """Last known Chrome reachability. Never blocks; None until the first probe."""
     now = time.monotonic()
     with _cdp_probe_lock:
-        fresh = (now - _cdp_probe["ts"]) < _CDP_TTL
+        ttl = _CDP_TTL if _cdp_probe["up"] else _CDP_DOWN_TTL
+        fresh = (now - _cdp_probe["ts"]) < ttl
         if fresh or _cdp_probe["running"]:
             return _cdp_probe["up"]
         _cdp_probe["running"] = True
@@ -3146,6 +3697,7 @@ class _DesktopFeed:
     def __init__(self) -> None:
         self.frame: bytes | None = None
         self.frame_id: int = 0
+        self._frame_epoch = _os_cfg.urandom(8).hex()
         self.frame_ts: float = 0.0
         self.mime: str = "image/jpeg"
         self.last_view: float = 0.0
@@ -3168,6 +3720,8 @@ class _DesktopFeed:
             self.mime = mime
             self.frame_id += 1
         self.frame_ts = now
+        if changed:
+            _frame_notify()
         return changed
 
     def _pace(self, interval: float) -> None:
@@ -3375,8 +3929,8 @@ def _cockpit_redirect():  # legacy path → operator
 # "spasming between small and big at constant frequency" the capture path
 # already documents for the 2026-07-12 CDP-fallback version of this bug.
 #
-# Serve the HIGHEST tier any live viewer wants. A lo client can downscale what
-# it receives; a hi client cannot invent the resolution back. Liveness reuses
+# Capture the HIGHEST tier any live viewer wants. /frame derives lo/eco bytes
+# per viewer without altering the shared capture geometry. Liveness reuses
 # the viewport owner's window — a closed tab stops polling within one frame.
 TIER_IDLE_S = VP_OWNER_IDLE_S
 _TIER_SEEN: dict = {}
@@ -3405,18 +3959,48 @@ def _apply_feed_tier() -> None:
     _desktop_feed.tier = resolved
 
 
+# Frame wake: publishers bump a generation under this condition so held
+# /operator/frame requests return the moment pixels land
+# instead of on their next 20ms poll tick. The poll interval stays as the
+# fallback, so a surface or tier switch (which publishes nothing) is still seen.
+_frame_cond = threading.Condition()
+_frame_gen = 0
+
+
+def _frame_notify() -> None:
+    global _frame_gen
+    with _frame_cond:
+        _frame_gen += 1
+        _frame_cond.notify_all()
+
+
+def _frame_wait(seen_gen: int, timeout: float) -> None:
+    """Block until a frame is published after `seen_gen`, or `timeout` passes."""
+    if timeout <= 0:
+        return
+    with _frame_cond:
+        _frame_cond.wait_for(lambda: _frame_gen != seen_gen, timeout)
+
+
 def _frame_source():
-    """Return (surface, source, mime) without waking an idle browser."""
+    """Resume capture for a connected viewer without launching an absent browser."""
     surface = _active_surface["name"]
     if surface == "browser":
+        # After a worker restart existing cockpits keep pulling frames without
+        # another document load. Reattach to an already-running Chrome only.
+        if _streamer.status == "idle" and _cdp_up_cached() is True:
+            _streamer.ensure_running()
         return surface, _streamer, "image/jpeg"
     _desktop_feed.ensure_running(surface)
     return surface, _desktop_feed, _desktop_feed.mime
 
 
-def _frame_token(surface: str, src) -> str:
-    """Per-surface identity prevents equal counters colliding on a switch."""
-    return f"{surface}:{getattr(src, 'frame_id', 0)}"
+def _frame_token(surface: str, src, tier: str = "hi") -> str:
+    """A quality change must refresh even when the capture's pixels stay quiet."""
+    suffix = f":{tier}" if surface == "browser" and tier in {"lo", "eco"} else ""
+    epoch = getattr(src, "_frame_epoch", "")
+    prefix = f"{surface}:{epoch}" if epoch else surface
+    return f"{prefix}:{getattr(src, 'frame_id', 0)}{suffix}"
 
 
 @bp.route("/operator/stream")
@@ -3480,6 +4064,10 @@ def operator_stream():
     return resp
 
 
+from operator_feed import FrameEncoder
+_frame_encoder = FrameEncoder()
+
+
 @bp.route("/operator/frame")
 def operator_frame():
     """Single newest frame — the pull half of the feed. The MJPEG push stream
@@ -3489,9 +4077,11 @@ def operator_frame():
     (2026-07-09). The cockpit now self-clocks instead: fetch a frame, render
     it, only then fetch the next — latency is bounded at ~1 frame in flight
     by construction, on any device or link. Fast clients still get ~10fps."""
+    request_started = time.monotonic()
     _apply_feed_tier()
     cid = request.args.get("cid") or ""
     since = request.args.get("since") or ""
+    requested_tier = request.args.get("tier") or "hi"
     try:
         wait_ms = max(0, min(1200, int(request.args.get("wait") or 0)))
     except (TypeError, ValueError):
@@ -3500,26 +4090,47 @@ def operator_frame():
     surface, src, mime = _frame_source()
     src.last_view = time.monotonic()
     _streamer.vp_note_pull(cid)
-    token = _frame_token(surface, src)
+    seen_gen = _frame_gen
+    token = _frame_token(surface, src, requested_tier)
 
     # Long-poll only when the caller already owns the current pixels. The
-    # producer keeps capturing independently; this request wakes within one
-    # 20ms check when a new frame lands, or returns an empty heartbeat. One
+    # producer keeps capturing independently; this request wakes the moment a
+    # new frame lands (20ms fallback check), or returns an empty heartbeat. One
     # outstanding request preserves the existing backpressure guarantee.
     deadline = time.monotonic() + wait_ms / 1000.0
     while since and token == since and time.monotonic() < deadline:
-        time.sleep(0.02)
+        _frame_wait(seen_gen, min(0.02, deadline - time.monotonic()))
+        seen_gen = _frame_gen
         next_surface = _active_surface["name"]
         if next_surface != surface:
             surface, src, mime = _frame_source()
         src.last_view = time.monotonic()
-        token = _frame_token(surface, src)
+        token = _frame_token(surface, src, requested_tier)
 
-    f = src.frame
+    # Snapshot identity, pixels and target together; encoding runs after releasing the lock.
+    frame_lock = getattr(src, "_frame_lock", None)
+    if frame_lock is not None:
+        with frame_lock:
+            snapshot = src._frame_snapshot
+            f, token = src.frame, _frame_token(surface, src, requested_tier)
+            target_id = src._frame_target_id
+            source_tier = src._frame_tier
+            if snapshot is not None and snapshot.data is f:
+                target_id, source_tier = snapshot.target_id, snapshot.source_tier
+            else:
+                snapshot = None
+    else:
+        f, token, target_id = src.frame, _frame_token(surface, src, requested_tier), ""
+        source_tier = "hi"
+        snapshot = None
     mime = "image/jpeg" if surface == "browser" else src.mime
     if since and token == since:
         resp = Response(status=204)
     else:
+        if f and surface == "browser":
+            encoding_started = time.monotonic()
+            f = _frame_encoder.for_viewer(f, requested_tier, source_tier=source_tier)
+            _diagnostics.record('frame_encode_ms', (time.monotonic() - encoding_started) * 1000)
         resp = Response(f or _PLACEHOLDER_JPEG,
                         mimetype=mime if f else "image/jpeg")
         if f:
@@ -3528,12 +4139,31 @@ def operator_frame():
     resp.headers["Cache-Control"] = "no-store"
     resp.headers["X-Operator-Frame"] = "live" if f else "placeholder"
     resp.headers["X-Operator-Frame-ID"] = token
+    if surface == "browser":
+        resp.headers["X-Operator-Target-ID"] = target_id
+        if snapshot is not None:
+            resp.headers["X-Operator-Capture-Started"] = f"{snapshot.capture_started:.6f}"
+            resp.headers["X-Operator-Capture-Finished"] = f"{snapshot.capture_finished:.6f}"
+            resp.headers["X-Operator-Published-At"] = f"{snapshot.published_at:.6f}"
+    resp.headers["X-Operator-Request-At"] = f"{request_started:.6f}"
+    resp.headers["X-Operator-Response-At"] = f"{time.monotonic():.6f}"
     return resp
 
 
 @bp.route("/operator/tabs")
 def operator_tabs():
-    return jsonify(tabs=_streamer.list_tabs())
+    return jsonify(tabs=operator_prefs.order_tabs(_streamer.list_tabs(), operator_prefs.tab_order()))
+
+
+@bp.route("/operator/tabs/order", methods=["POST"])
+def operator_tabs_order():
+    """The strip's drag order, by target id. Chrome has no call to move a
+    tab, so the order is the cockpit's and is applied when tabs are listed."""
+    try:
+        stored = operator_prefs.set_tab_order((request.get_json(silent=True) or {}).get("ids"))
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    return jsonify(ok=True, ids=stored)
 
 
 @bp.route("/operator/tab/<int:idx>", methods=["POST"])
@@ -3661,6 +4291,7 @@ def operator_debug_viewport():
     import datetime as _dt
     now_m = time.monotonic()
     return jsonify(
+        startup_ms=dict(_streamer._startup_ms),
         view=[_streamer.view_w, _streamer.view_h],
         owner=_streamer._vp_owner,
         pullers={c: round(now_m - t, 1) for c, t in _streamer._vp_seen.items()},
@@ -3714,6 +4345,9 @@ def operator_session():
     import operator_session as _sess_store
     if request.method == "GET":
         cid = (request.args.get("conversation_id") or "").strip()
+        # A removed migration-era chat must not override the current draft.
+        if cid == "legacy" and not _sess_store.exists(cid):
+            cid = _sess_store.active_id() or cid
         try:
             got = _sess_store.load(conversation_id=cid or None)
         except KeyError:
@@ -3727,7 +4361,7 @@ def operator_session():
             return "", 204
         return jsonify(ok=True, rev=got["rev"], data=got["data"],
                        conversation_rev=got["conversation_rev"],
-                       conversation_id=cid)
+                       conversation_id=cid, browser_job=_sess_store.is_machine(cid))
     body = request.get_json(silent=True) or {}
     data = body.get("data")
     if not isinstance(data, dict):
@@ -3805,8 +4439,12 @@ def operator_session_one(sid: str):
             if status.get("alive"):
                 return jsonify(ok=False, error="stop this conversation before deleting it"), 409
             operator_workspace.delete_conversation(sid)
+            # The worker's runner, saved transcript and steer queue go with it.
+            operator_agent.runner.retire(sid)
             out = _sess_store.delete(sid, fresh=request.args.get('fresh') == '1')
             _browser_tab_command("release", sid, close=True)
+            import operator_browser_jobs
+            operator_browser_jobs.clear_capture(sid)
             return jsonify(ok=True, **out)
         body = request.get_json(silent=True) or {}
         action = body.get("action") or "activate"
@@ -3841,6 +4479,10 @@ def _browser_tab_command(action: str, sid: str, *, close: bool = False) -> bool:
     if DEMO or helper is None:
         return False
     cmd = [sys.executable, str(helper), action, sid, CDP_URL]
+    if action == 'activate':
+        import operator_session
+        if operator_session.is_background(sid):
+            cmd.append('--background')
     if close:
         cmd.append("--close")
     try:
@@ -3858,7 +4500,28 @@ def operator_session_browser(sid: str):
     """Bring the selected conversation's owned Chrome tab to the cockpit feed."""
     if DEMO:
         return jsonify(ok=False, error="demo sessions are per-visitor"), 403
-    return jsonify(ok=True, activated=_browser_tab_command("activate", sid))
+    import operator_session as sessions
+    import operator_browser_jobs as jobs
+    try:
+        if not sessions.exists(sid):
+            return jsonify(ok=False, error='no such conversation'), 404
+        if (request.get_json(silent=True) or {}).get('action') == 'background':
+            if not sessions.is_machine(sid):
+                return jsonify(ok=False, error='This is a cockpit conversation.'), 409
+            if not jobs.park(sid, CDP_URL):
+                return jsonify(ok=False, error='This browser window also contains manual tabs.'), 409
+            sessions.set_browser_exposed(sid, False)
+            return jsonify(ok=True, active=sessions.active_id())
+        if sessions.is_machine(sid):
+            jobs.reopen(sid, CDP_URL, _streamer._ensure_chrome_alive)
+        activated = _browser_tab_command('activate', sid)
+        sessions.set_browser_exposed(sid, True)
+        sessions.activate(sid)
+        return jsonify(ok=True, activated=activated)
+    except (KeyError, ValueError):
+        return jsonify(ok=False, error='no such conversation'), 404
+    except Exception:
+        return jsonify(ok=False, error='browser could not change workspace'), 503
 
 
 @bp.route("/operator/sessions/<sid>/presence", methods=["POST"])
@@ -3978,6 +4641,8 @@ def _desktop_steer(action: dict) -> dict:
                       "scroll_amount": max(1, min(10, round(abs(dx) / 80)))})
         elif kind == "type":
             _run({"action": "type", "text": str(action.get("value", ""))})
+        elif kind == "paste":
+            _run({"action": "paste_text", "text": action["value"]})
         elif kind in ("key", "key_down", "key_up"):
             k = kind
             if surface == "desktop-real" and kind != "key":
@@ -3995,6 +4660,47 @@ def _desktop_steer(action: dict) -> dict:
         return {"ok": True}
     except Exception as e:  # noqa: BLE001 — surface the reason to the cockpit
         return {"ok": False, "error": str(e)}
+
+
+def _conversation_for_target(target_id: str) -> str:
+    """The conversation that owns a browser target, from the shared-Chrome tab
+    registry (browse/operator_browser_tabs.py); '' when unknown."""
+    if not target_id:
+        return ""
+    import json
+    registry = Path(_os_cfg.environ.get(
+        "OPERATOR_BROWSER_TABS_PATH",
+        _os_cfg.path.expanduser("~/.cache/computer-use/operator-browser-tabs.json")))
+    try:
+        with open(registry, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    for cid, targets in data.items():
+        if isinstance(targets, str):
+            targets = [targets]
+        if isinstance(targets, list) and target_id in targets:
+            return str(cid)
+    return ""
+
+
+def _note_manual_gesture(action: dict) -> None:
+    """Tell the model what the user did on the stage (operator_steer
+    .note_manual). The gesture's tab names its conversation; a gesture on a
+    tab nobody owns goes to the active chat. Never fails the gesture."""
+    if DEMO:
+        return
+    try:
+        import operator_session
+        import operator_steer as steer_store   # the route below owns the bare name
+        cid = (_conversation_for_target(str(action.get("target_id") or ""))
+               or operator_session.active_id())
+        if cid:
+            steer_store.note_manual(action, cid, url=_streamer.cur_url)
+    except Exception:  # noqa: BLE001 — a note must never break a gesture
+        pass
 
 
 @bp.route("/operator/steer", methods=["POST"])
@@ -4026,17 +4732,28 @@ def operator_steer():
               # cid identifies the cockpit tab for viewport ownership
               # (kind=="stage_size") — same whitelist-drop class as dx/dy above.
               "cid": data.get("cid"),
+              "target_id": data.get("target_id"),
               # force makes an entry/re-entry beacon repair actual Chrome
               # metrics even when the streamer's desired WxH already matches.
               "force": data.get("force") is True}
     if not action["kind"]:
         return jsonify(ok=False, error="missing action kind"), 400
+    if action["kind"] == "paste":
+        text = action["value"]
+        try:
+            byte_count = len(text.encode("utf-8")) if isinstance(text, str) else 0
+        except UnicodeEncodeError:
+            byte_count = 0
+        if not byte_count or byte_count > 65536:
+            return jsonify(ok=False, error="paste requires 1-65536 UTF-8 bytes of text"), 400
     # desktop surfaces: same gestures, injected via the surface backend instead
     # of CDP — manual steer works everywhere the feed does.
     if _active_surface["name"] != "browser":
         result = _desktop_steer(action)
     else:
         result = _streamer.run_action(action)
+    if result.get("ok", True):
+        _note_manual_gesture(action)
     _diagnostics.record('input_ms', (time.monotonic() - input_started) * 1000)
     return jsonify(result)
 
@@ -4105,6 +4822,17 @@ def operator_drivers():
     if DEMO:
         return jsonify(drivers=[{"key": "bot", "label": "bot"}])
     return jsonify(drivers=[{"key": d["key"], "label": d["label"]} for d in DRIVERS])
+
+
+@bp.route("/operator/resources")
+def operator_resources_list():
+    """Suggestions matching the selected runtime, never connection secrets."""
+    bot = "gemma" if DEMO else str(request.args.get("bot") or "").strip()
+    if bot not in operator_agent.AGENT_BOTS:
+        return jsonify(resources=[])
+    return jsonify(resources=operator_resources.catalog(
+        bot, demo=DEMO,
+        config_dir=operator_agent.AGENT_BOTS[bot]["config_dir"]))
 
 
 @bp.route("/operator/surfaces")
@@ -4348,25 +5076,47 @@ def dispatch_for_machine(data: dict) -> tuple[dict, int]:
     identity), no surface flip (machine delegations are browser-surface only,
     desktop stays a cockpit decision), no demo branch (the internal
     capability does not exist on the demo instance). The feed-readiness gate
-    stays: an agent starting behind a dead CDP attach burns a run clicking a
-    void, headless caller or not.
+    stays for browser delegations. Server-owned personal-app sessions also
+    support text/files and acquire a browser only when their task needs it.
     """
     task = str(data.get("task") or "").strip()
     if not task:
         return {"ok": False, "error": "empty task"}, 400
     cid = str(data.get("conversation_id") or "").strip() or None
-    browser_error = _streamer.require_ready()
-    if browser_error:
-        return {"ok": False, "error": browser_error}, 503
+    import operator_session as _sess_store
+    background = _sess_store.is_background(cid)
+    if not background and not _sess_store.is_personal_app(cid):
+        browser_error = _streamer.require_ready()
+        if browser_error:
+            return {"ok": False, "error": browser_error}, 503
+    bot = str(data.get("bot") or "")
+    model, effort = str(data.get("model") or ""), str(data.get("effort") or "")
+    if _sess_store.is_personal_app(cid):
+        from operator_app_policy import dispatch_policy, identity_context
+        try:
+            policy = dispatch_policy(bot, model, str(data.get('workflow_kind') or 'general'))
+            model, effort = policy['model'], policy['effort']
+            task = identity_context(data.get('assistant_name', '')) + task
+        except ValueError as exc:
+            return {'ok': False, 'error': str(exc)}, 400
+    options = {}
+    service_tier = str(data.get('service_tier') or '').strip()
+    if service_tier:
+        import operator_speed
+        if error := operator_speed.error(bot, model or default_slug('gpt-codex'), service_tier):
+            return {'ok': False, 'error': error}, 400
+        options['service_tier'] = service_tier
+    if background and not _sess_store.is_personal_app(cid):
+        import operator_browser_jobs
+        options['prepare_browser'] = lambda owner: operator_browser_jobs.prepare(
+            owner, CDP_URL, _streamer._ensure_chrome_alive)
     r = operator_agent.runner.start(
-        str(data.get("bot") or ""), task,
-        model=str(data.get("model") or ""),
-        effort=str(data.get("effort") or ""),
-        surface="browser", conversation_id=cid)
+        bot, task, model=model, effort=effort,
+        surface="browser", conversation_id=cid, **options)
     if r.get("ok"):
         import operator_session as _sess_store
         _sess_store.title_if_unset(task, conversation_id=cid)
-    return r, (200 if r.get("ok") else 409)
+    return r, (200 if r.get('ok') else 503 if r.get('browser_unavailable') else 409)
 
 
 def prune_delegated_conversations() -> list[str]:
@@ -4387,7 +5137,10 @@ def prune_delegated_conversations() -> list[str]:
             operator_workspace.delete_conversation(sid)
         except Exception:  # noqa: BLE001 — a conflict keeps the chat
             continue
+        operator_agent.runner.retire(sid)
         _browser_tab_command("release", sid, close=True)
+        import operator_browser_jobs
+        operator_browser_jobs.clear_capture(sid)
         try:
             _sess_store.delete(sid)
         except KeyError:
@@ -4401,24 +5154,15 @@ def look_for_machine(data: dict) -> tuple[dict, int]:
     capability (operator-mcp operate_look). The tab is the registry's target
     for the conversation, captured directly; the cockpit's streamed page is
     not consulted, so a caller never sees another conversation's work."""
-    import base64 as _b64
     cid = str(data.get("conversation_id") or "").strip()
     if not cid:
         return {"ok": False, "error": "conversation_id required"}, 400
-    targets = _registry_targets(cid)
-    if not targets:
-        return {"ok": False, "error": "no browser tab for this conversation",
-                "conversation_id": cid}, 404
-    browser_error = _streamer.require_ready()
-    if browser_error:
-        return {"ok": False, "error": browser_error, "conversation_id": cid}, 503
-    shot = _streamer.grab_target(targets)
+    import operator_browser_jobs
+    shot = operator_browser_jobs.look(cid, CDP_URL)
     if not shot:
         return {"ok": False, "error": "the conversation's tab is not open",
                 "conversation_id": cid}, 404
-    return {"ok": True, "conversation_id": cid,
-            "jpeg_b64": _b64.b64encode(shot["jpeg"]).decode("ascii"),
-            "url": shot.get("url") or "", "title": shot.get("title") or ""}, 200
+    return {'ok': True, 'conversation_id': cid, **shot}, 200
 
 
 @bp.route("/operator/dispatch", methods=["POST"])
@@ -4432,6 +5176,11 @@ def operator_dispatch():
         return jsonify(ok=False, error="empty task"), 400
     model = (data.get("model") or "").strip()
     effort = (data.get("effort") or "").strip()
+    service_tier = str(data.get('service_tier') or '').strip()
+    if not DEMO:
+        import operator_speed
+        if error := operator_speed.error(bot, model or default_slug('gpt-codex'), service_tier):
+            return jsonify(ok=False, error=error), 400
     conversation_id = _conversation_for(data)
     control_error = _thread_control_guard(data, conversation_id)
     if control_error:
@@ -4472,7 +5221,7 @@ def operator_dispatch():
             return jsonify(ok=False, error=browser_error), 503
     if DEMO:
         # public demo: gemma/agy runtime, model locked to the 2-entry demo list
-        # (off-list → Flash 3.8 Low default). The tier lives in the model string
+        # (off-list → Argon Low default). The tier lives in the model string
         # ("(Thinking)"/"(Low)"), so client-sent effort is discarded — the lock
         # owns effort. demo=True strips squad context/identity/tools.
         bot = "gemma"
@@ -4481,7 +5230,7 @@ def operator_dispatch():
         if surface == "desktop-sandbox":
             # Flash has no computer-use tools (the owner 2026-07-09) — a sandbox run
             # would just shell around. Desktop runs force Sonnet.
-            model = "Claude Sonnet 4.6 (Thinking)"
+            model = OPERATOR_MODELS_DEMO[1]["value"]
         effort = ""
         r = operator_agent.runner.start(bot, task, model=model, effort=effort,
                                         demo=True, surface=surface,
@@ -4489,7 +5238,8 @@ def operator_dispatch():
     else:
         r = operator_agent.runner.start(bot, task, model=model, effort=effort,
                                         surface=surface, real_ok=real_ok,
-                                        conversation_id=conversation_id)
+                                        conversation_id=conversation_id,
+                                        **({'service_tier': service_tier} if service_tier else {}))
         if r.get("ok"):
             # An untitled conversation takes the name of the first task run in
             # it, so the switcher reads as a list of errands rather than a
@@ -4606,6 +5356,11 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None,
     bot = (overrides.get("bot") or t.get("bot") or "").strip()
     model = (overrides.get("model") or t.get("model") or "").strip()
     effort = (overrides.get("effort") or t.get("effort") or "").strip()
+    service_tier = str(overrides.get('service_tier') or '').strip()
+    if not DEMO and service_tier:
+        import operator_speed
+        if error := operator_speed.error(bot, model or default_slug('gpt-codex'), service_tier):
+            return {'ok': False, 'error': error}, 400
     prompt = (t.get("prompt") or "").strip()
     if not prompt:
         return {"ok": False, "error": "task has empty prompt"}, 400
@@ -4627,13 +5382,15 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None,
     if browser_error:
         return {"ok": False, "error": browser_error}, 503
 
-    # Optional: navigate to the task's start_url before handing off to the agent.
+    # Optional start_url: opened on the run's own page once admission has
+    # reserved its slot. Navigating the streamer's current page first let a
+    # refused run move another run's page (audit F04).
     start_url = (t.get("start_url") or "").strip()
+    options = {}
     if start_url:
-        try:
-            _streamer.run_action({"kind": "goto", "value": start_url})
-        except Exception:
-            pass
+        import operator_browser_jobs
+        options["prepare_browser"] = lambda owner: operator_browser_jobs.open_start_page(
+            owner, CDP_URL, start_url, _streamer._ensure_chrome_alive)
 
     # v1 preferred-sites = prompt hint (not a hard sandbox).
     preamble = operator_tasks_store.sites_preamble(t.get("sites", []))
@@ -4650,15 +5407,16 @@ def _dispatch_saved_task(slug: str, overrides: dict | None = None,
             model = OPERATOR_MODELS_DEMO[0]["value"]
         r = operator_agent.runner.start(bot, task_prompt, model=model,
                                         effort="", demo=True,
-                                        conversation_id=conversation_id)
+                                        conversation_id=conversation_id, **options)
     else:
         r = operator_agent.runner.start(
             bot, task_prompt, model=model, effort=effort,
-            conversation_id=conversation_id, authorization=t.get('authorization', {'mode': 'confirm'}))
+            conversation_id=conversation_id, authorization=t.get('authorization', {'mode': 'confirm'}),
+            **options, **({'service_tier': service_tier} if service_tier else {}))
     if r.get("ok"):
         operator_tasks_store.mark_run(slug)
         return r, 200
-    return r, 409
+    return r, (503 if r.get("browser_unavailable") else 409)
 
 
 @bp.route("/operator/tasks/<slug>", methods=["DELETE"])
@@ -4840,11 +5598,12 @@ OPERATOR_MODELS = model_picker('operator-claude')
 # Bumped to 5.1 on 2026-09-01; the old 5 id is gone rather than kept alongside,
 # because a picker offering a superseded model is how bots quietly stay stale.
 OPERATOR_MODELS_CLAUDE_A = model_picker('operator-claude-a')
-# codex/gpt models (default gpt-6-sol low per the owner). Astra is the top
-# subscription tier; Sol and Luna moved to GPT-6 on 2026-09-22 and Terra has
-# no GPT-6 successor, so it stays on 5.6. Each model has its own effort ladder
-# in EFFORT_BY_MODEL. The 5.6 Sol and Luna slugs are gone from the picker on
-# purpose: a picker offering a superseded model is how bots quietly stay stale.
+# codex/gpt models (default gpt-6.1-sol low per the owner). Astra is the top
+# subscription tier; Sol and Luna moved to GPT-6 on 2026-09-22, Sol again to
+# 6.1 on 2026-09-29, and Terra has no GPT-6 successor, so it stays on 5.6. Each
+# model has its own effort ladder in EFFORT_BY_MODEL. Superseded Sol and Luna
+# slugs are gone from the picker on purpose: a picker offering a superseded
+# model is how bots quietly stay stale.
 OPERATOR_MODELS_GPT = model_picker('operator-gpt')
 # gemma drives via agy (Antigravity) — exposes the full agy model lineup on the owner's
 # flat Google sub. Gemini families use the effort picker for tier; the Claude/GPT-OSS
@@ -4858,7 +5617,7 @@ OPERATOR_MODELS_GEMMA = model_picker('operator-gem')
 
 
 # public demo: LOCKED 2-model choice on the gemma/agy runtime (the owner 2026-07-09):
-# Flash 3.8 Low default (first = picker default + server fallback), Sonnet 4.6
+# Argon Low default (first = picker default + server fallback), Sonnet 4.6
 # as the heavier alt. Tier is baked into each value — the effort control is
 # hidden in the demo UI, the lock owns effort (dispatch sends effort="", so the
 # baked-tier form is what agy gets).
@@ -4871,7 +5630,10 @@ def operator_models():
         return jsonify(models=OPERATOR_MODELS_DEMO)
     driver = request.args.get("driver", "")
     if driver == "gpt":
-        return jsonify(models=OPERATOR_MODELS_GPT, default_model=default_slug("gpt-codex"))
+        import operator_speed
+        return jsonify(models=OPERATOR_MODELS_GPT, default_model=default_slug("gpt-codex"),
+                       service_tiers={item['value']: operator_speed.tiers_for(item['value'])
+                                      for item in OPERATOR_MODELS_GPT})
     if driver == "gemma":
         return jsonify(models=OPERATOR_MODELS_GEMMA, default_model=default_slug("runtime"))
     if driver == "claude-a":
@@ -4886,8 +5648,13 @@ _workspace_routes.register(bp, demo=DEMO, conversation=_conversation_for,
 # ── background housekeeping (#2 scheduled tasks + #3 completion pings) ────────
 # Started at import (the server imports this module once); the thread is a
 # daemon and a no-op when OPERATOR_SCHEDULER=0. Never in the demo — a public
-# instance must not fire stored prompts on a clock.
-if not DEMO:
+# instance must not fire stored prompts on a clock. Replicas and worker proxies
+# must not recover runs or launch duplicate housekeeping. A proxy restart would
+# otherwise revoke the still-running worker's workspace credentials.
+_owns_background = (not _os_cfg.environ.get('OPERATOR_WORKER_SOCKET')
+                    or _os_cfg.environ.get('OPERATOR_WORKER') == '1')
+if (not DEMO and _owns_background
+        and _os_cfg.environ.get('SQUAD_STORE_READ_ONLY', '').strip() != '1'):
     try:
         if _os_cfg.environ.get('OPERATOR_TESTING') != '1':
             import operator_workspace

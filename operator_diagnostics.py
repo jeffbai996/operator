@@ -17,7 +17,8 @@ _wake = threading.Event()
 _METRICS = frozenset(('capture_ms', 'encode_ms', 'frame_bytes', 'frames_sent',
     'frames_unchanged', 'reconnects', 'viewport_corrections', 'tool_ms',
     'first_action_ms', 'run_ms', 'steering_ms', 'interruptions', 'failures',
-    'input_tokens', 'output_tokens', 'input_ms', 'capture_encode_ms', 'file_transfer_failures'))
+    'input_tokens', 'output_tokens', 'input_ms', 'capture_encode_ms',
+    'capture_geometry_failures', 'file_transfer_failures', 'action_queue_ms', 'action_deadlines', 'capture_lock_ms', 'capture_overlay_ms', 'frame_encode_ms'))
 
 
 def record(name, value=1, *, run_id='', model=''):

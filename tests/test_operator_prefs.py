@@ -83,3 +83,22 @@ def test_write_is_atomic(tmp_path, monkeypatch):
     on_disk = json.loads(open(P._PATH, encoding="utf-8").read())
     assert on_disk["homepage"] == "https://example.com"
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_tab_order_round_trips_and_dedupes():
+    assert P.tab_order() == []
+    assert P.set_tab_order(["T2", "T1", "T2"]) == ["T2", "T1"]
+    P._cache_clear()
+    assert P.tab_order() == ["T2", "T1"]
+
+
+def test_tab_order_refuses_junk():
+    for bad in ("T1", [1, 2], [""], ["x" * 200]):
+        with pytest.raises(ValueError):
+            P.set_tab_order(bad)
+
+
+def test_order_tabs_puts_named_ids_first_then_chromes_order():
+    tabs = [{"i": 0, "id": "A"}, {"i": 1, "id": "B"}, {"i": 2, "id": "C"}, {"i": 3, "id": ""}]
+    assert [t["i"] for t in P.order_tabs(tabs, ["C", "A", "gone"])] == [2, 0, 1, 3]
+    assert P.order_tabs(tabs, []) == tabs

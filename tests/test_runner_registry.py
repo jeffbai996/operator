@@ -44,8 +44,7 @@ class _FakeRunner:
 
 
 def _registry(**kwargs):
-    return OA.RunnerRegistry(runner_factory=_FakeRunner, global_limit=2,
-                             per_bot_limit=1, **kwargs)
+    return OA.RunnerRegistry(runner_factory=_FakeRunner, global_limit=2, **kwargs)
 
 
 def test_two_conversations_run_in_isolated_runners() -> None:
@@ -74,13 +73,11 @@ def test_third_dispatch_names_requested_bot_and_slot_owners() -> None:
     assert "conversation 'conv-b'" in denied["error"]
 
 
-def test_one_bot_cannot_contend_for_its_working_directory() -> None:
+def test_one_bot_runs_in_two_conversations_at_once() -> None:
     runners = _registry()
-    runners.start("claude-a", "one", conversation_id="conv-a")
-    denied = runners.start("claude-a", "two", conversation_id="conv-b")
-    assert denied["ok"] is False
-    assert "requested bot 'claude-a'" in denied["error"]
-    assert "conversation 'conv-a' holds the claude-a slot" in denied["error"]
+    assert runners.start("gpt", "one", conversation_id="conv-a")["ok"]
+    assert runners.start("gpt", "two", conversation_id="conv-b")["ok"]
+    assert [job["bot"] for job in runners.admission_snapshot()["jobs"]] == ["gpt", "gpt"]
 
 
 def test_stop_and_telemetry_are_per_conversation() -> None:
@@ -196,8 +193,7 @@ def test_pre_spawn_reservation_cannot_be_reaped_by_a_racing_dispatch() -> None:
         cls = _StartingRunner if conversation_id == "conv-a" else _FakeRunner
         return cls(conversation_id, **kwargs)
 
-    runners = OA.RunnerRegistry(runner_factory=factory, global_limit=1,
-                                per_bot_limit=1)
+    runners = OA.RunnerRegistry(runner_factory=factory, global_limit=1)
     first = threading.Thread(target=lambda: runners.start(
         "claude-a", "one", conversation_id="conv-a"))
     first.start()
@@ -287,7 +283,7 @@ def test_two_real_runner_process_groups_stop_independently(
         OA.operator_history, "record",
         lambda runner, reason="": recorded.append(
             (runner.conversation_id, reason)))
-    runners = OA.RunnerRegistry(global_limit=2, per_bot_limit=1)
+    runners = OA.RunnerRegistry(global_limit=2)
     assert runners.start("claude-a", "one", conversation_id="conv-a")["ok"]
     assert runners.start("gpt", "two", conversation_id="conv-b")["ok"]
     a, b = runners.get("conv-a"), runners.get("conv-b")
@@ -317,8 +313,98 @@ def test_peek_never_manufactures_a_runner() -> None:
     def factory(**kw):
         made.append(kw)
         return _FakeRunner(**kw)
-    runners = OA.RunnerRegistry(runner_factory=factory, global_limit=2, per_bot_limit=1)
+    runners = OA.RunnerRegistry(runner_factory=factory, global_limit=2)
     assert runners.peek("ghost") is None
     assert made == []
     runners.get("real")
     assert runners.peek("real") is not None and len(made) == 1
+
+
+def test_an_effort_the_model_does_not_offer_is_refused_before_admission() -> None:
+    runners = _registry()
+    prepared = []
+    out = runners.start("claude-a", "task", model="claude-sonnet-5-5", effort="ultra",
+                        conversation_id="conv-a", prepare_browser=lambda cid: prepared.append(cid))
+    assert not out["ok"] and "ultra" in out["error"]
+    assert prepared == [] and runners.peek("conv-a") is None
+    assert runners.start("claude-a", "task", model="claude-sonnet-5-5", effort="high",
+                         conversation_id="conv-a")["ok"]
+
+
+
+# ── audit F08: a deleted conversation is retired, not kept in memory ─────────
+
+def _stores(tmp_path, monkeypatch):
+    state, stop, steer = (tmp_path / "operator-state.json", tmp_path / "operator-stop.json",
+                          tmp_path / "operator-steer.ndjson")
+    monkeypatch.setenv("OPERATOR_STATE_PATH", str(state))
+    monkeypatch.setenv("OPERATOR_STOP_PATH", str(stop))
+    monkeypatch.setenv("OPERATOR_STEER_PATH", str(steer))
+    files = {}
+    for cid in ("conv-a", "conv-b"):
+        for base in (state, stop):
+            f = Path(OA._conversation_path(str(base), cid, ".json"))
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("{}")
+            files.setdefault(cid, []).append(f)
+    return state, files
+
+
+def test_retiring_a_conversation_removes_its_runner_and_only_its_files(tmp_path, monkeypatch) -> None:
+    state, files = _stores(tmp_path, monkeypatch)
+    # The legacy shared file belongs to the one chat its marker names.
+    state.write_text("{}")
+    Path(str(state) + ".conversations/legacy-owner").write_text("old-chat")
+    runners = _registry()
+    runners.get("conv-a")
+    runners.get("conv-b")
+    import operator_steer
+    operator_steer.push("steer me", conversation_id="conv-a")
+    assert runners.retire("conv-a")["ok"]
+    assert runners.peek("conv-a") is None and runners.peek("conv-b") is not None
+    assert not any(f.exists() for f in files["conv-a"])
+    assert all(f.exists() for f in files["conv-b"]) and state.exists()
+    assert operator_steer.pending("conv-a") == []
+
+
+def test_a_running_conversation_is_not_retired(tmp_path, monkeypatch) -> None:
+    _, files = _stores(tmp_path, monkeypatch)
+    runners = _registry()
+    assert runners.start("claude-a", "task", conversation_id="conv-a")["ok"]
+    out = runners.retire("conv-a")
+    assert not out["ok"] and "stop" in out["error"]
+    assert runners.peek("conv-a") is not None and all(f.exists() for f in files["conv-a"])
+
+
+def test_the_legacy_conversation_keeps_its_shared_files(tmp_path, monkeypatch) -> None:
+    state, _ = _stores(tmp_path, monkeypatch)
+    state.write_text("{}")
+    Path(str(state) + ".conversations/legacy-owner").write_text("old-chat")
+    runners = _registry()
+    runners.get("old-chat")
+    assert runners.retire("old-chat")["ok"]
+    assert runners.peek("old-chat") is None and state.exists()
+
+
+def test_observing_an_unknown_conversation_allocates_no_runner(tmp_path, monkeypatch) -> None:
+    _stores(tmp_path, monkeypatch)
+    runners = _registry()
+    snap = runners.snapshot(conversation_id="deploy-worker-health")
+    assert snap["conversation_id"] == "deploy-worker-health"
+    assert runners.peek("deploy-worker-health") is None
+
+
+def test_a_conversation_with_saved_state_still_hydrates_on_observation(tmp_path, monkeypatch) -> None:
+    _stores(tmp_path, monkeypatch)
+    runners = _registry()
+    runners.snapshot(conversation_id="conv-b")
+    assert runners.peek("conv-b") is not None
+
+
+def test_a_late_observation_cannot_resurrect_a_retired_conversation(tmp_path, monkeypatch) -> None:
+    _stores(tmp_path, monkeypatch)
+    runners = _registry()
+    runners.get("conv-a")
+    assert runners.retire("conv-a")["ok"]
+    runners.snapshot(conversation_id="conv-a")
+    assert runners.peek("conv-a") is None

@@ -76,6 +76,14 @@ def test_resume_does_not_create_another_thread(pair):
     assert wire.sent[2]['params']['threadId'] == 'thread-1'
 
 
+@pytest.mark.parametrize('resume_id', ['', 'thread-1'])
+def test_speed_is_explicit_on_new_and_resumed_turns(pair, resume_id):
+    wire, transport = pair
+    begin(transport, service_tier='ultrafast', resume_id=resume_id)
+    assert wire.sent[2]['params']['serviceTier'] == 'ultrafast'
+    assert wire.sent[3]['params']['serviceTier'] == 'ultrafast'
+
+
 def test_dispatch_timeout_is_not_replayed(pair):
     wire, transport = pair
     del wire.replies['turn/start']
@@ -93,6 +101,19 @@ def test_foreign_turn_events_cannot_complete_this_run(pair):
     wire.emit({'method': 'turn/plan/updated', 'params': {'threadId': 'foreign', 'plan': []}})
     wire.emit({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
     assert len(list(transport.notifications())) == 1
+
+
+def test_resume_usage_and_nested_foreign_turns_are_not_current_activity(pair):
+    wire, transport = pair
+    begin(transport)
+    wire.emit({'method': 'thread/tokenUsage/updated', 'params': {'tokenUsage': {'last': {'inputTokens': 999}}}})
+    wire.emit({'method': 'turn/completed', 'params': {'turn': {'id': 'previous', 'status': 'completed'}}})
+    wire.emit({'method': 'turn/started', 'params': {'turn': {'id': 'turn-1'}}})
+    wire.emit({'method': 'thread/tokenUsage/updated', 'params': {'tokenUsage': {'last': {'inputTokens': 10}}}})
+    wire.emit({'method': 'turn/completed', 'params': {'turn': {'id': 'turn-1', 'status': 'completed'}}})
+    events = list(transport.notifications())
+    assert [e['method'] for e in events] == ['turn/started', 'thread/tokenUsage/updated', 'turn/completed']
+    assert events[1]['params']['tokenUsage']['last']['inputTokens'] == 10
 
 
 def test_unknown_server_requests_are_never_autoapproved(pair):

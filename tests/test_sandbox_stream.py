@@ -5,6 +5,7 @@ Run from modules/operator:  PYTHONPATH=. pytest tests/test_sandbox_stream.py -q
 import importlib.util
 import os
 import pathlib
+import re
 import subprocess
 
 import pytest
@@ -327,3 +328,15 @@ def test_list_files_hides_leaf_and_exchange_directory_symlinks(
 
     assert [item["name"] for item in listed["Downloads"]] == ["report.txt"]
     assert listed["Desktop"] == []
+
+
+def test_game_bridge_probe_does_not_match_its_own_shell(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sb, "_run", lambda args, **kw:
+        calls.append(args) or subprocess.CompletedProcess(args, 0))
+    sb._ensure_host_bridge()
+    probe = next(args[-1] for args in calls if any("pgrep" in arg for arg in args))
+    pattern = probe.split("'")[1]
+    assert re.search(pattern, "python3 /opt/sandbox_host_bridge.py 8091 8091 127.0.0.1 172.17.0.1")
+    assert not re.search(pattern, "sh -c " + probe)
+    assert not any(args[:2] == ["exec", "-d"] for args in calls)

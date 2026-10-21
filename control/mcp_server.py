@@ -44,7 +44,7 @@ import perceive as perceive_mod
 from macro import (MacroController, frame_change_frac,  # noqa: F401 (validate re-exported)
                    validate_macro)
 from surfaces import (SurfaceError, SurfaceStopped, _load_cu_module,
-                      get_surface)
+                      get_surface, CDP_URL)
 
 PROTOCOL_FALLBACK = "2024-11-05"
 _MAX_TARGETS = 40
@@ -68,7 +68,7 @@ _PERCEIVE_TOOL = {
         "map (see vision/maps) and/or inline finder specs. Options: grid=true "
         "saves a coordinate-grid capture; region=[x,y,w,h] saves a full-res "
         "crop; annotate=true saves the capture with targets marked; "
-        "return_image=true also returns that image inline."),
+        "return_image=true returns the fresh frame or requested crop/overlay inline."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -93,7 +93,9 @@ _GAME_MACRO_TOOL = {
         "Execute a multi-step macro at machine speed with LOCAL perception "
         "between steps — no model round-trips mid-macro. Emit the whole plan "
         "(clicks by target label or xy, waits on conditions, repeats until a "
-        "condition) and read the structured result; it bails back to you on "
+        "condition) and read the structured result; keep sequences short near "
+        "uncertain game states. return_image=true captures a fresh final screenshot. "
+        "It bails back to you on "
         "unmet verify, unknown target, watcher hit, budget, or yield. Ops: "
         "click_target{label,index?,verify?} click_xy{x,y} drag_xy{x1,y1,x2,y2} "
         "type{text,clear?} key{key} scroll{x,y,direction?} wait_ms{ms} "
@@ -122,6 +124,7 @@ _GAME_MACRO_TOOL = {
                       "description": "guard conds checked between ops: [{label, cond}]"},
             "step_budget": {"type": "integer"},
             "wall_clock_s": {"type": "number"},
+            "return_image": {"type": "boolean"},
         },
         "required": ["ops"],
     },
@@ -162,16 +165,24 @@ _EMU_INPUT_TOOL = {
     "name": "emu_input",
     "description": (
         "Press game controller buttons on the EmulatorJS game running in the "
-        "sandbox browser (Pokémon Emerald etc.). Use THIS, not the computer "
-        "key/click tools, to play an emulator game — the emulator ignores raw "
-        "desktop keys; this drives its input API directly. buttons: a, b, "
+        "Operator sandbox browser (Pokémon Red, Emerald etc.). Sandbox only. Use this instead of keyboard "
+        "or click tools to play an emulator game. This drives the controller "
+        "input API directly. buttons: a, b, "
         "start, select, up, down, left, right, l, r. Pass one `button` or a "
-        "`buttons` sequence. hold_ms is the press duration (default 90); for a "
-        "held direction (walking) use a larger hold_ms. Perceive the screen "
-        "between inputs to see the result — there is no click coordinate."),
+        "`buttons` sequence. hold_ms is the press duration (default 120); for a "
+        "held direction (walking) use a larger hold_ms (16 to 2000 ms). gap_ms defaults "
+        "to 700 (0 to 2000 ms). Each sequence must finish within 10 seconds. Inspect the screen "
+        "between inputs to see the result. Each call returns a screenshot. "
+        "action=status inspects without pressing. At most 8 buttons per call. "
+        "action=save_state or load_state uses checkpoint slot 0 to 3 (default 0). "
+        "Checkpoints are kept in this game tab only; reload/close clears them. "
+        "They never write to the game server. For BaiCloud Games open the game "
+        "with ?nosave=1 to disable shared autosave/resume; do not use cloud saves."),
     "inputSchema": {
         "type": "object",
         "properties": {
+            "action": {"enum": ["press", "status", "save_state", "load_state"]},
+            "slot": {"type": "integer", "minimum": 0, "maximum": 3},
             "button": {"type": "string"},
             "buttons": {"type": "array", "items": {"type": "string"}},
             "hold_ms": {"type": "integer"},
@@ -284,6 +295,8 @@ class OperatorMCP:
             img = np.asarray(overlay.draw_grid(frame))
         elif args.get("annotate"):
             img = np.asarray(overlay.annotate_targets(frame, ws.get("targets", [])))
+        if img is None and args.get("return_image"):
+            img = frame
         if img is not None:
             os.makedirs(OUT_DIR, exist_ok=True)
             path = os.path.join(OUT_DIR, f"perceive-{int(time.time()*1000)}.jpg")
@@ -315,9 +328,13 @@ class OperatorMCP:
                       "Macro done" if result["done"] else "Macro yielded",
                       result.get("stopped_reason") or
                       f"{result['steps_executed']} steps")
-        return {"content": [{"type": "text",
-                             "text": json.dumps(result, ensure_ascii=False)}],
-                "isError": False}
+        content = [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]
+        if args.get("return_image"):
+            # Capture after the macro, including a yield/failure, so the model
+            # observes the current surface rather than the pre-action frame.
+            content.append({"type": "image", "data": _b64_jpeg(surface.frame()),
+                            "mimeType": "image/jpeg"})
+        return {"content": content, "isError": False}
 
     # v1.1 §3.1 — step-level verify: after a consequential action, compare a
     # before/after frame LOCALLY (no model call) and put the verdict in the
@@ -530,13 +547,16 @@ class OperatorMCP:
         return {"content": content, "isError": False}
 
     def _get_emu(self):
-        """Lazy EmuInput bound to sandbox Chromium through a host-only tunnel."""
+        """Attach only to the isolated sandbox browser."""
+        if self.surface_name != "desktop-sandbox":
+            raise SurfaceError("emulator controls require the Sandbox surface")
         if self._emu is None:
             sb = _load_cu_module("sandbox_container.py")
             sb.ensure()
             tunnel = sb.open_cdp_tunnel()
             try:
-                emu = emu_input_mod.EmuInput(tunnel.url)
+                emu = emu_input_mod.EmuInput(
+                    tunnel.url, check_stop=self._get_surface()._check_stop)
             except Exception:
                 tunnel.close()
                 raise
@@ -549,26 +569,34 @@ class OperatorMCP:
         if self._emu_tunnel is not None:
             self._emu_tunnel.close()
             self._emu_tunnel = None
+        if self._emu is not None:
+            self._emu.close()
         self._emu = None
 
     def _tool_emu_input(self, args: dict) -> dict:
         if self.surface_name != "desktop-sandbox":
-            raise SurfaceError("emu_input is for the desktop-sandbox game "
-                               "harness — no emulator on this surface")
-        emu = self._get_emu()
-        buttons = args.get("buttons")
-        hold = int(args.get("hold_ms", 90))
-        if buttons:
-            res = emu.press_seq([str(b) for b in buttons], hold_ms=hold,
-                                gap_ms=int(args.get("gap_ms", 120)))
-            events.record(self.bot, "emu_input", "Pressing",
-                          " ".join(res.get("pressed", [])))
+            raise SurfaceError("emu_input requires the Sandbox surface")
+        action = args.get("action", "press")
+        if action not in ("press", "status", "save_state", "load_state"):
+            raise ValueError("unknown emulator action")
+        if action in ("save_state", "load_state"):
+            res, shot = self._get_emu().checkpoint(action, args.get("slot", 0))
         else:
-            btn = str(args.get("button", ""))
-            res = emu.press(btn, hold_ms=hold)
-            events.record(self.bot, "emu_input", "Pressing", btn)
-        return {"content": [{"type": "text", "text": json.dumps(res)}],
-                "isError": False}
+            buttons = args.get("buttons")
+            if action == "status":
+                buttons = []
+            elif buttons is None:
+                buttons = [args.get("button", "")]
+            res, shot = self._get_emu().input(
+                buttons, hold_ms=args.get("hold_ms", 120), gap_ms=args.get("gap_ms", 700))
+        labels = {"status": "Inspecting", "press": "Pressing",
+                  "save_state": "Saving checkpoint", "load_state": "Loading checkpoint"}
+        events.record(self.bot, "emu_input", labels[action],
+                      str(res.get("slot")) if "slot" in res else " ".join(res.get("pressed", [])))
+        import base64
+        return {"content": [{"type": "text", "text": json.dumps(res)},
+                            {"type": "image", "data": base64.b64encode(shot).decode(),
+                             "mimeType": "image/png"}], "isError": False}
 
     # -- protocol ---------------------------------------------------------------
     def _tools(self) -> list:

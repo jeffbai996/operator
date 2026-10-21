@@ -39,13 +39,18 @@ function lockViewport(page) {
   return page;
 }
 
-function createOwnedContext(real, initialPage, onAdopt = null) {
+function createOwnedContext(real, initialPage, onAdopt = null, options = {}) {
   const owned = new Set();
   const ownedEvents = new EventEmitter();
 
   const adopt = (page, emit = false) => {
     if (!page || owned.has(page)) return page;
     lockViewport(page);
+    if (options.background && typeof page.bringToFront === 'function') {
+      // Tool tab selection must not raise an infrastructure window. Human
+      // Inspect uses a separate CDP activation path and retains full control.
+      Object.defineProperty(page, 'bringToFront', {value: async () => {}, configurable: true});
+    }
     owned.add(page);
     if (typeof page.once === 'function') page.once('close', () => owned.delete(page));
     if (typeof onAdopt === 'function') {
@@ -71,7 +76,8 @@ function createOwnedContext(real, initialPage, onAdopt = null) {
   const proxy = new Proxy(real, {
     get(target, prop) {
       if (prop === 'pages') return () => [...owned].filter(p => !p.isClosed?.());
-      if (prop === 'newPage') return async (...args) => adopt(await target.newPage(...args), true);
+      if (prop === 'newPage') return async (...args) => adopt(
+        await (options.newPage ? options.newPage(...args) : target.newPage(...args)), true);
       if (prop === 'close') return async () => {}; // never close the shared profile
       if (prop === 'on' || prop === 'addListener') return (event, listener) => {
         if (event === 'page') {
@@ -141,10 +147,24 @@ function claimTarget(context, page, conversationId, endpoint) {
   }).catch(() => {});
 }
 
+function newBackgroundPage(context, conversationId, endpoint) {
+  const helper = process.env.OPERATOR_BROWSER_TABS_HELPER ||
+    path.join(__dirname, 'operator_browser_tabs.py');
+  const python = process.env.OPERATOR_BROWSER_TABS_PYTHON || 'python3';
+  return new Promise((resolve, reject) => {
+    execFile(python, [helper, 'new', conversationId, endpoint, '--background'],
+      {timeout: 15000, windowsHide: true}, (error, stdout) => {
+        if (error) return reject(new Error('Could not open a background browser page'));
+        resolve(stdout.trim());
+      });
+  }).then(id => findTarget(context, id));
+}
+
 async function main() {
-  const endpoint = process.env.OPERATOR_CDP_ENDPOINT || '';
-  const wanted = process.env.OPERATOR_BROWSER_TARGET_ID || '';
-  if (!endpoint || !wanted) throw new Error('Operator tab endpoint/target is missing');
+  let endpoint = process.env.OPERATOR_CDP_ENDPOINT || '';
+  let wanted = process.env.OPERATOR_BROWSER_TARGET_ID || '';
+  const lazy = process.env.OPERATOR_BACKGROUND_LAZY === '1';
+  if (!endpoint || (!wanted && !lazy)) throw new Error('Operator tab endpoint/target is missing');
 
   const root = moduleRoot();
   const { chromium } = require(path.join(root, 'playwright'));
@@ -153,15 +173,59 @@ async function main() {
 
   // Workspace downloads belong to the persistent bridge, not Playwright's
   // short-lived artifacts directory. Keep legacy/demo connections unchanged.
-  const browser = await chromium.connectOverCDP(endpoint, {
-    timeout: 30000, ...(process.env.OPERATOR_RUN_ID ? { noDefaults: true } : {})
-  });
-  const real = browser.contexts()[0];
-  if (!real) throw new Error('Operator Chrome has no browser context');
-  const initialPage = await findTarget(real, wanted);
   const conversationId = process.env.OPERATOR_CONVERSATION_ID || '';
-  const context = createOwnedContext(real, initialPage,
-    page => claimTarget(real, page, conversationId, endpoint));
+  const background = process.env.OPERATOR_BACKGROUND_BROWSER === '1';
+  let context;
+  const getContext = async () => {
+    if (context) return context;
+    if (lazy) {
+      endpoint = await new Promise((resolve, reject) => {
+        const child = execFile('bash', [path.join(__dirname, 'cdp-endpoint.sh'), '--ensure'],
+          {timeout: 60000, windowsHide: true,
+            env: {...process.env, BROWSE_CHROME_PORT: '9222'}}, (error, stdout) => {
+            const url = stdout.trim().split('\n').pop();
+            if (error || !/^http:\/\//.test(url)) return reject(new Error('Background browser could not start'));
+            resolve(url);
+          });
+        child.stdin.end();
+      });
+    }
+    const browser = await chromium.connectOverCDP(endpoint, {
+      timeout: 30000, ...(process.env.OPERATOR_RUN_ID ? { noDefaults: true } : {})
+    });
+    try {
+      const real = browser.contexts()[0];
+      if (!real) throw new Error('Operator Chrome has no browser context');
+      if (lazy) {
+        const helper = process.env.OPERATOR_BROWSER_TABS_HELPER || path.join(__dirname, 'operator_browser_tabs.py');
+        wanted = await new Promise((resolve, reject) => {
+          execFile(process.env.OPERATOR_BROWSER_TABS_PYTHON || 'python3',
+            [helper, 'reserve', conversationId, endpoint, '--background'],
+            {timeout: 15000, windowsHide: true}, (error, stdout) => {
+              if (error) return reject(new Error('Could not reserve a background browser page'));
+              resolve(stdout.trim());
+            });
+        });
+      }
+      const initialPage = await findTarget(real, wanted);
+      const windowSession = background ? await browser.newBrowserCDPSession() : null;
+      context = createOwnedContext(real, initialPage,
+        async page => {
+          await claimTarget(real, page, conversationId, endpoint);
+          if (windowSession && page !== initialPage) {
+            const id = await targetId(real, page);
+            const {windowId} = await windowSession.send('Browser.getWindowForTarget', {targetId: id});
+            await windowSession.send('Browser.setWindowBounds', {windowId, bounds: {windowState: 'minimized'}});
+          }
+        }, {background, ...(background ? {
+          newPage: () => newBackgroundPage(real, conversationId, endpoint)} : {})});
+      return context;
+    } catch (error) {
+      await browser.close().catch(() => {}); // disconnect CDP, leave the profile running
+      throw error;
+    }
+  };
+  if (!lazy) await getContext();
   const outputDir = process.env.COMPUTER_USE_OUTPUT_DIR ||
     path.join(process.env.HOME || '', '.cache/computer-use');
   const connection = await createConnection({
@@ -169,7 +233,7 @@ async function main() {
     capabilities: ['vision', 'pdf'],
     outputDir,
     outputMaxSize: 209715200
-  }, async () => context);
+  }, getContext);
   await connection.connect(new StdioServerTransport());
 }
 

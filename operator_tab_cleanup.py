@@ -54,7 +54,8 @@ def sweep(view, reaper, client) -> dict:
         reaper.reset()
         return {"paused": "viewer", "closed": 0}
     candidates = {cid: generation for cid, generation in runner.tab_cleanup_candidates().items()
-                  if not operator_session.presence(cid).get("lease_expires_in", 0)}
+                  if not operator_session.is_machine(cid)
+                  and not operator_session.presence(cid).get("lease_expires_in", 0)}
 
     def guard(cid, generation, action) -> bool:
         def checked() -> bool:
@@ -81,9 +82,12 @@ def _loop(view, reaper, client) -> None:
             except Exception:  # noqa: BLE001 — never let the prune stop the sweep
                 LOG.warning("Operator delegation prune failed, nothing removed")
         try:
+            import operator_browser_jobs
+            background = operator_browser_jobs.sweep(view)
             result = sweep(view, reaper, client)
             _status.update(last_sweep=time.time(), last=result,
-                           closed_total=_status["closed_total"] + result.get("closed", 0))
+                           background=background, background_grace_seconds=60,
+                           closed_total=_status["closed_total"] + result.get("closed", 0) + background['closed'])
             if result.get("closed"):
                 LOG.info("Operator owned-tab cleanup: closed %d finished tab", result["closed"])
         except Exception:

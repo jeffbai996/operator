@@ -24,8 +24,8 @@ def test_identical_actions_trip_the_guard(runner):
     assert runner._repeat_nudge_pending is True
     warns = [m for m in runner.messages if m["role"] == "notice"]
     assert len(warns) == 1 and warns[0]["text"] == (
-        "Operator is repeating an action without making progress. "
-        "If it continues, stop the run and try again.")
+        "The same action has been repeated several times. "
+        "Check the run if this is unexpected.")
 
 
 def test_guard_warns_only_once_per_run(runner):
@@ -95,7 +95,7 @@ def test_clicks_landing_on_the_same_dead_spot_trip_the_window(runner):
     runner._note_action("browser_click", {"x": 108, "y": 206})
     runner._note_action("browser_click", {"x": 118, "y": 212})
     assert runner._repeat_nudge_pending is True
-    assert runner.messages[0]["text"].startswith("Operator is repeating")
+    assert runner.messages[0]["text"].startswith("The same action has been repeated")
 
 
 def test_a_few_clicks_far_apart_are_not_a_loop(runner):
@@ -268,7 +268,7 @@ def test_read_act_loop_on_the_desktop_surface_is_caught(monkeypatch, tmp_path):
                                       "ops": [{"kind": "type", "text": "x" * (i + 1)}]})
     assert _notices(a), "a read/act loop must trip the guard"
     notice = _notices(a)[0]["text"]
-    assert notice.startswith("Operator is repeating")
+    assert notice.startswith("The same action has been repeated")
     assert "game_macro" not in notice and "recovery" not in notice.lower()
 
 

@@ -116,7 +116,7 @@
   /* flat + DARK → near-pure black surfaces for true high contrast. data-theme lives
      on an ancestor (body/html); default (no theme set) is dark, so flat goes black by
      default and light theme overrides it back below. */
-  .op.op-flat {
+  .op.op-flat, :root[data-theme="midnight"] .op {
     --bg: #000; --bg-2: #060708; --bg-3: #0c0e11; --bg-4: #14171c;
     --border: rgba(255,255,255,.10); --border-2: rgba(255,255,255,.14); }
   .op.op-flat .op-rail, .op.op-flat .op-browser, .op.op-flat .op-tabs { background: #000 !important; backdrop-filter: none !important; }
@@ -191,7 +191,7 @@
   /* fullscreen page canvas follows the theme — it stayed hardcoded dark and
      framed the light cockpit in black (the owner 2026-07-26) */
   :root[data-theme="light"] body.op-full { background: #eef1f5; }
-  body.op-full:has(.op-flat) { background: #000; }
+  body.op-full:has(.op-flat), :root[data-theme="midnight"] body.op-full { background: #000; }
   body.op-full .op { position: fixed; inset: 0; width: auto; height: auto;
     min-width: 0; min-height: 0; margin: 0; box-sizing: border-box;
     border-radius: 0; --op-gap: 8px; gap: var(--op-gap); padding: 8px; background: var(--bg); z-index: 50;   /* slim frame, nudged 6→8 (the owner 2026-07-19 "slightly slightly wider") */
@@ -372,6 +372,9 @@
     -webkit-appearance: none; appearance: none;
     border: 1px solid var(--border-2); border-radius: 7px; font: 600 0.82rem/1.4 'Plus Jakarta Sans',sans-serif;
     width: 2.1em; padding: 0.3rem 0.5rem; cursor: pointer; }   /* no dropdown arrow — the whole chip is the picker */
+  /* The shared select rule forces an important background arrow and gutter.
+     This control already has a logo face, so it needs neither. */
+  .op select.op-action-caret { background-image: none !important; padding-right: 0.5rem !important; }
   select.op-action-caret option { color: var(--fg); background: var(--bg-2); }   /* names visible in popup */
   select.op-action-caret:focus { outline: none; border-color: var(--accent); }
   /* highlight the bot picker on hover so it reads as the interactive driver button */
@@ -385,21 +388,20 @@
   .op-chats-live { position: absolute; right: 5px; top: 4px; width: 5px; height: 5px;
     border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg); }
   .op-chats-live[hidden] { display: none; }
-  .op-thread-observer { --observer-accent: #78baff;
-    margin: 0 0.72rem 0.52rem; padding: 0.5rem 0.52rem;
+  .op-thread-observer { --observer-accent: #a5adbb;
+    margin: 0 0 0.25rem; padding: 0.5rem 0.52rem; flex: 0 0 auto;
     display: flex; align-items: center; gap: 0.52rem;
-    color: var(--fg); background: color-mix(in srgb, var(--observer-accent) 16%, var(--bg-2));
-    border: 1px solid color-mix(in srgb, var(--observer-accent) 60%, var(--border-2));
+    color: var(--fg); background: var(--bg-2);
+    border: 1px solid var(--border-2);
     border-left-width: 3px; border-radius: 9px;
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent),
-      0 8px 22px -19px color-mix(in srgb, var(--observer-accent) 75%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 3%, transparent);
     font: 600 0.64rem/1.3 'Plus Jakarta Sans', sans-serif; }
   .op-thread-observer[hidden] { display: none; }
   .op-thread-observer-icon { flex: 0 0 auto; width: 1.75rem; height: 1.75rem;
     display: grid; place-items: center; color: var(--observer-accent);
     border-radius: 7px; background: color-mix(in srgb, var(--observer-accent) 15%, transparent); }
   .op-thread-observer-copy { min-width: 0; display: flex; flex: 1 1 auto;
-    flex-direction: column; gap: 0.02rem; color: var(--muted); }
+    flex-direction: column; gap: 0.02rem; color: var(--muted); overflow-wrap: anywhere; }
   .op-thread-observer-copy strong { color: var(--fg); font-size: 0.66rem;
     letter-spacing: -0.01em; }
   .op-thread-observer button { flex: 0 0 auto; min-height: 1.8rem;
@@ -651,7 +653,8 @@
   .op-set-field input[type=url]:focus { outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
   .op-set-field input[type=url].is-bad { border-color: #f47067; }
-  .op-set-field button { flex: 0 0 auto; background: var(--bg-4); color: var(--fg-2);
+  .op-set-field button { flex: 0 0 auto; display: inline-flex; align-items: center;
+    background: var(--bg-4); color: var(--fg-2);
     border: 1px solid var(--border-2); border-radius: 6px; cursor: pointer;
     padding: 0 0.45rem; font: 600 0.6rem/1 'Plus Jakarta Sans', sans-serif;
     transition: background .12s ease, color .12s ease; }
@@ -670,9 +673,18 @@
   .op-switch::after { content: ""; position: absolute; top: 1px; left: 1px;
     width: 13px; height: 13px; border-radius: 50%; background: var(--muted);
     transition: transform .16s ease, background .16s ease; }
-  .op-switch:checked { background: color-mix(in srgb, var(--accent) 42%, transparent);
-    border-color: var(--accent); }
-  .op-switch:checked::after { transform: translateX(13px); background: var(--accent); }
+  /* The accent is a light gray, so a tinted track with a gray thumb read the
+     same on and off. On is a filled track with a dark thumb instead. */
+  .op-switch:checked { background: var(--accent); border-color: var(--accent); }
+  .op-switch:checked::after { transform: translateX(13px); background: var(--bg-2); }
+  /* A row whose control is more than one element (a button beside a switch). */
+  .op-set-ctl { display: inline-flex; align-items: center; gap: 0.45rem; flex: 0 0 auto; }
+  .op-set-btn { background: var(--bg-4); color: var(--fg-2); border: 1px solid var(--border-2);
+    border-radius: 6px; cursor: pointer; padding: 0.2rem 0.45rem;
+    font: 600 0.6rem/1 'Plus Jakarta Sans', sans-serif;
+    transition: background .12s ease, color .12s ease; }
+  .op-set-btn:hover { background: var(--bg-3); color: var(--fg); }
+  .op-set-btn[hidden] { display: none; }
   .op-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .op-pt { font: 700 0.6rem/1 'JetBrains Mono', monospace; color: var(--live);
     flex: 0 0 auto; min-width: 2.4em; text-align: right; }
@@ -696,7 +708,7 @@
   .op-full-btn:hover { background: var(--bg-4); color: var(--accent); border-color: rgba(184,192,204,.45); }
 
   /* live action status — the "Clicking… / Typing…" Operator indicator */
-  .op-action { width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 0.55rem;
+  .op-action { flex: 0 0 auto; width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 0.55rem;
     transition: border-color .2s ease, background .2s ease, padding .25s cubic-bezier(.2,1,.3,1), height .25s cubic-bezier(.2,1,.3,1), width .25s cubic-bezier(.2,1,.3,1);
     background: var(--bg); border: 1px solid var(--border-2); border-radius: 11px;
     padding: 0.7rem 0.85rem; min-height: 46px; }
@@ -719,6 +731,7 @@
      (the owner 2026-07-21). The body carries no info when minimized (the emoji does),
      so removing it from layout is correct. */
   .op[data-status-min="1"] .op-action > div { display: none; }
+  .op[data-status-min="1"] .op-action .op-token-meter { display: none !important; }
   /* minimized-card action emoji (the owner 2026-07-21): when the status pill is
      collapsed, show the CURRENT action's emoji (🖱️ Clicking, 🌐 Browsing …) to
      the right of the spinning ring — the at-a-glance "what's it doing" that the
@@ -741,11 +754,8 @@
   .op[data-status-min="1"][data-busy="1"] .op-min-emoji {
     max-width: 1.6em; opacity: 1; margin-left: 0; }
   .op-min-emoji.op-card-swap { animation: op-sub-cycle .34s cubic-bezier(.22,1,.36,1); }
-  /* minimized: float the pill top-left so the rest of its row is transparent and the
-     message log reclaims the full width underneath it. */
-  .op[data-status-min="1"] .op-action { position: absolute; top: 36px; left: 0.7rem; z-index: 8; width: auto; }   /* small gap below the header */   /* float just below the header row */
-  .op[data-status-min="1"] .op-log { padding-top: 40px; }
-  .op[data-status-min="1"] .op-man-note { margin-top: 36px; }   /* +4px buffer so the man-note isn't stuck under the pill — matches the v0.6.5 gap */   /* clear the floating minimized pill */
+  /* Keep the compact status in the rail's flow so notices and the chat
+     follow its actual height, including after the chat is cleared. */
   .op[data-status-min="1"] .op-pick-wrap { display: none !important; }
   .op-status-min { transform: rotate(180deg); }                       /* expanded: caret up */
   .op[data-status-min="1"] .op-status-min { transform: rotate(0deg); margin-left: 0; }   /* minimized: caret down */
@@ -834,19 +844,30 @@
   .op[data-agent="stopped"] .op-action-ico::before { border-color: #f5a04a !important; animation: none; }
   .op[data-agent="stopped"] .op-action-ico::after { content: none !important; }
   /* Ready and the gpt·<action> subline sit on ONE row (gpt to the right of Ready) */
-  .op-action-body { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
+  .op-action-body { display: flex; flex: 1 1 auto; align-items: baseline; gap: 0.5rem; min-width: 0; }   /* Ready + sub share a text baseline (center mis-aligns diff font sizes) */
   .op-action-body .op-action-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans', sans-serif; color: var(--fg); }   /* status card label (Ready/Working/…) → back to Jakarta; rest of the chrome stays DM Sans (the owner 2026-07-21) */
+  .op-token-meter[hidden] { display: none !important; }
+  .op-token-meter { display: inline-flex; align-items: baseline; gap: .48rem; flex: 0 0 auto;
+    padding: .22rem .45rem; border: 1px solid var(--border-2); border-radius: 7px;
+    background: var(--bg-2); color: var(--fg-2);
+    font: 575 .64rem/1.1 'DM Sans', sans-serif;
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .op-token-meter > span { display: inline-flex; align-items: baseline; gap: .18rem; }
+  .op-token-in > :first-child { color: #a9bde2; }
+  .op-token-out > :first-child { color: #8ebfa1; }
+  .op-action:has(.op-token-meter:not([hidden])) .op-pick-wrap { margin-left: 0; }
+  .op[data-mode="man"] .op-action .op-token-meter { display: none; }
+    .op-action-txt { transition: color .25s ease; font: 700 0.80rem/1.2 'Plus Jakarta Sans', sans-serif; color: var(--fg);
+      /* Keep the status on one line; secondary tool text yields space first.
+         At very narrow widths, ellipsize rather than growing the card. */
+      flex: 0 0 auto; min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* status card label (Ready/Working/…) → back to Jakarta; rest of the chrome stays DM Sans (the owner 2026-07-21) */
+  .op-action-body .op-action-sub { flex: 0 1 auto; min-width: 0; }
   .op-action-sub { transition: color .25s ease; }
   /* tool-call / status text changes animate in like the chat bubbles do */
   .op-action-txt.op-card-swap { animation: op-card-in .4s cubic-bezier(.22,1,.36,1); }
-  .op-action-sub.op-card-swap { animation: op-sub-cycle .34s cubic-bezier(.22,1,.36,1); }
   .op-action-sub .sub-bot { font-weight: 700; color: var(--fg); }
   .op-action-sub .sub-emo { font-size: 1.05em; vertical-align: -1px; }
   @keyframes op-sub-in { from{opacity:0;transform:translateY(2px)} to{opacity:1;transform:none} }
-  /* clearer action-cycle transition: brief blur + rise so browsing→reading reads as a change */
-  @keyframes op-sub-cycle { 0%{opacity:0;transform:translateY(3px);filter:blur(1px)}
-    50%{opacity:1} 100%{opacity:1;transform:none;filter:blur(0)} }
   @keyframes op-card-in {
     0%{opacity:0;transform:translateY(4px);filter:blur(1.5px)}
     40%{opacity:1}
@@ -871,6 +892,44 @@
   .op:has(.op-log:not(:empty)) #op-demo-note { display: none; }   /* clear the demo card once the conversation starts */
   .op-inputbox.disabled { opacity: 0.45; background: var(--bg-2); pointer-events: none; }
   .op-inputbox.disabled .op-input { cursor: not-allowed; }
+
+  /* Shared splash/cockpit slash picker lives on body so neither the clipped
+     chat rail nor the mobile composer can crop it. One quiet list, not cards. */
+  .op-resource-menu { position: fixed; z-index: 10000; box-sizing: border-box;
+    max-height: min(330px, 46dvh); overflow-y: auto; overscroll-behavior: contain;
+    padding: 5px; border: 1px solid var(--border-2, #30343c); border-radius: 12px;
+    background: var(--bg-2, #0b0d11); color: var(--fg, #e6edf3); box-shadow: 0 18px 48px #0009;
+    font: 550 calc(.76rem * var(--chat-scale, 1.05))/1.35 'DM Sans', sans-serif; }
+  .op-resource-menu[hidden] { display: none; }
+  .op-resource-row { display: flex; align-items: center; gap: 11px; width: 100%;
+    min-height: 36px; padding: 6px 9px; border: 0; border-radius: 8px;
+    background: transparent; color: inherit; text-align: left; font: inherit;
+    cursor: pointer; }
+  .op-resource-row:hover, .op-resource-row.selected { background: var(--bg-3, #12141a); }
+  .op-resource-icon { position: relative; flex: 0 0 24px; width: 24px; height: 24px;
+    display: grid; place-items: center; border-radius: 6px; background: var(--bg-3, #12141a);
+    color: var(--fg-2, #cfd5e0); font: 700 12px/1 'Plus Jakarta Sans', sans-serif;
+    overflow: hidden; }
+  .op-resource-icon img { position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; background: var(--bg-3, #12141a); }
+  .op-resource-name { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .op-resource-kind { flex: 0 0 auto; color: var(--muted, #9fa7b4); font-size: .85em; }
+  .op-resource-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+  .op-resource-chips[hidden] { display: none; }
+  .op-inputbox > .op-resource-chips { padding: .2rem .2rem 0; }
+  #op-hero-resources { margin: 0 0 .4rem; justify-content: center; }
+  .op-resource-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+    padding: 4px 7px; border: 1px solid var(--border-2); border-radius: 7px;
+    background: var(--bg-3); color: var(--fg-2);
+    font: 550 .66rem/1.3 'DM Sans', sans-serif; }
+  .op-resource-chip > span:not(.op-resource-icon) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .op-resource-chip .op-resource-icon { flex-basis: 16px; width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
+  .op-resource-chip button { border: 0; padding: 0 2px; background: transparent; color: var(--muted);
+    font: inherit; cursor: pointer; }
+  .op-resource-chip button:hover { color: var(--fg); }
+  .op-msg .op-resource-chips { margin-top: .45rem; }
+  @media (pointer: coarse) { .op-resource-row { min-height: 42px; } }
   .op-action-sub { font: 500 0.66rem/1.3 'DM Sans', 'Plus Jakarta Sans', sans-serif; letter-spacing: -.002em; color: var(--muted);
     margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* FIXED size (not −/+ controlled); +1px baseline-align with "Working" */
 
@@ -939,9 +998,8 @@
     max-height: 0; margin: 0; padding-top: 0; padding-bottom: 0; } }
   /* user command → right-aligned gray bubble (Operator style), no label */
   .op-msg.user { display: flex; flex-direction: column; align-items: flex-end; margin: 0.5rem 0 0.3rem; }
-  /* a steer parked at the bottom until the run's delivery seam consumes it */
+  /* Pending corrections keep their place in the scrollable transcript. */
   .op-msg.user.op-held .bubble { opacity: 0.55; }
-  .op-msg.user.op-held { position: sticky; bottom: 0.25rem; z-index: 3; }
   .op-msg.user.op-held-failed .bubble { opacity: 1; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad, #ff453a) 60%, transparent); }
 
   .op-msg.bot { display: flex; flex-direction: column; align-items: flex-start; }
@@ -1017,12 +1075,13 @@
     box-shadow: 0 20px 60px rgba(0,0,0,.6); }
   @keyframes op-lb-in { from { opacity: 0 } to { opacity: 1 } }
   /* wrap, never sideways-scroll — the chat column is too narrow to pan (the owner 2026-07-09) */
-  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.45rem 0 0.35rem; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; position: relative; }   /* breathing room — 0.1rem stuck the block onto the text above (the owner 2026-07-12) */
+  .op-msg.bot .bubble pre { padding: 0.18rem 0.55rem; margin: 0.45rem 0 0.35rem; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; overflow-y: visible; touch-action: pan-y pinch-zoom; line-height: 1.3; position: relative; }   /* vertical gestures belong to the transcript; no synthetic scrollTop forwarding */
   .op-msg.bot .bubble pre code { background: none; border: none; padding: 0; }   /* no double box */
   /* TABULAR code (ASCII tables) — wrapping shreds the alignment, so these
      scroll sideways instead. Ordinary code keeps the wrap rule above. */
   .op-msg.bot .bubble pre.op-pre-table { white-space: pre; word-break: normal;
-    overflow-wrap: normal; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    overflow-wrap: normal; overflow-x: auto; overflow-y: hidden;
+    touch-action: pan-x pan-y pinch-zoom; -webkit-overflow-scrolling: touch; }
   /* markdown pipe tables → real tables, flat-design, sideways scroll if wide */
   .op-md-tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch;
     margin: 0.45rem 0 0.35rem; border: 1px solid var(--op-code-bd); border-radius: 8px; }
@@ -1213,7 +1272,7 @@
   @media (prefers-reduced-motion: reduce) {
     .op-tabs:not([hidden]), .op-tabs.op-tabs-closing { animation: none; }
   }
-  .op-tab { animation: op-tab-pop .24s cubic-bezier(.2,1.3,.4,1); }
+  .op-tab.op-tab-new { animation: op-tab-pop .24s cubic-bezier(.2,1.3,.4,1); }
   @keyframes op-tab-pop { from{opacity:0;transform:scale(.85) translateY(-2px)} to{opacity:1;transform:none} }
   .op-tab.op-tab-closing { animation: op-tab-out .2s cubic-bezier(.5,0,.75,0) forwards; pointer-events:none; }
   @keyframes op-tab-out { to{opacity:0;transform:scale(.8);max-width:0;margin:0;padding:0} }
@@ -1357,7 +1416,7 @@
      (GPT-Agent style), no flashing. A subtle press-dot marks each click. */
   .op-agent-cursor { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 7;
     opacity: 0;
-    transition: left .55s cubic-bezier(.33,0,.18,1), top .55s cubic-bezier(.33,0,.18,1), opacity .4s; }
+    transition: left .2s cubic-bezier(.22,1,.36,1), top .2s cubic-bezier(.22,1,.36,1), opacity .25s; }
   .op-agent-cursor.show { opacity: 1; }
   /* bot cursor is the AGENT's — hide it in manual mode (the user is driving) */
   .op[data-mode="man"] .op-agent-cursor { display: none; }
@@ -1394,8 +1453,8 @@
   /* STALE FRAME (feed dropped but we have a last good frame): keep the frame on
      screen, dimmed + desaturated, with a small corner chip — no full-screen
      SIGNAL LOST flash (the owner 2026-07-10: overlay flapping read as flicker). The
-     .op-overlay is NOT shown in this mode (op-signal-stale is deliberately
-     absent from the overlay display selector above). */
+     The stale state overrides connection-state overlays during recovery. */
+  .op.op-signal-stale .op-overlay { display: none; }
   .op.op-signal-stale .op-view { filter: grayscale(.45) brightness(.6);
     transition: filter 300ms ease; }
   .op.op-signal-stale .op-stage::after {
@@ -1483,11 +1542,6 @@
     /* ×N pill digit sits ~1px low on mobile only — nudge it up (bottom-pad lifts the
        flex-centered digit; desktop keeps its 0.5px top-pad) */
     .op-act-x { padding: 0 0 1px 0; }
-    /* MOBILE: the header is taller (28px controls), so the floating minimized pill
-       needs to sit lower to clear it; man-note drops further to keep the gap. */
-    .op[data-status-min="1"] .op-action { top: 58px; }
-    .op[data-status-min="1"] .op-man-note { margin-top: 30px; }   /* clear the 32px pill without an expanded-card void */
-
     /* MOBILE: enlarge the header controls so they're comfortably tappable (≥32px).
        Desktop keeps the compact 20px sizing. */
     .op-iconbtn { width: 28px; height: 28px; min-width: 28px; font-size: 1.1rem !important; }
@@ -1586,17 +1640,15 @@
     .op[data-sheet="peek"] .op-action .op-action-sub { overflow: hidden; text-overflow: ellipsis; }
     .op[data-sheet="peek"] .op-action .op-action-txt { font-size: 0.78rem; flex: 0 0 auto; }
     .op[data-sheet="peek"] .op-action .op-action-sub { font-size: 0.68rem; }
+    .op[data-sheet="peek"] .op-token-meter { padding: .18rem .35rem; gap: .35rem; }
     /* caret pinned right, same as expanded */
     .op[data-sheet="peek"] .op-action .op-status-min { display: inline-flex; flex: 0 0 auto; margin-left: auto; }
-    /* peek + minimized-pill BOTH set -> peek wins: undo the status-min absolute float
-       + text-hide so the peek status bar shows normally. */
+    /* The peek sheet uses a full-width status row even when collapsed. */
     .op[data-sheet="peek"][data-status-min="1"] .op-action {
-       position: static; top: auto; left: auto; height: auto; min-height: 0;
-       width: 100%; padding: 0.5rem 0.75rem; z-index: auto; }
+       height: auto; min-height: 0; width: 100%; padding: 0.5rem 0.75rem; }
     .op[data-sheet="peek"][data-status-min="1"] .op-action > div {
        opacity: 1 !important; width: auto !important; overflow: visible !important;
        pointer-events: auto !important; }
-    .op[data-sheet="peek"][data-status-min="1"] .op-log { padding-top: 0; }
     .op[data-sheet="peek"] .op-inputbox { order: 0; margin: 0; flex: 0 0 auto; }
 
     /* A fresh-session launchpad is the whole mobile surface. The normal rail
@@ -1654,52 +1706,71 @@
      Unicode into an accidental symbol font. */
   .op-ham-menu { position: fixed; z-index: 200;
     background: color-mix(in srgb, var(--bg-2) 94%, transparent);
-    border: 1px solid var(--border-2); border-radius: 14px;
+    border: 1px solid var(--border-2); border-radius: 11px;
     box-shadow: 0 18px 50px -12px rgba(0,0,0,.78), 0 3px 12px rgba(0,0,0,.34);
     backdrop-filter: blur(18px) saturate(1.12);
-    padding: 7px; min-width: 238px; max-width: calc(100vw - 16px);
-    display: flex; flex-direction: column; gap: 2px;
+    padding: 5px; min-width: 186px; width: max-content; max-width: min(232px, calc(100vw - 16px));
+    display: flex; flex-direction: column; gap: 1px;
     max-height: calc(100dvh - 20px); overflow-y: auto; overscroll-behavior: contain;
     scrollbar-width: thin; transform-origin: top right;
     animation: op-ham-in .18s cubic-bezier(.16,1,.3,1); }
   @keyframes op-ham-in { from{opacity:0;transform:scale(.965) translateY(-5px)} to{opacity:1;transform:none} }
   .op-ham-menu[hidden] { display: none; }
-  .op-ham-item { display: flex; align-items: center; justify-content: space-between; gap: 1.4rem;
-    flex: 0 0 auto; min-height: 34px; background: transparent; border: none;
-    color: var(--fg-2); cursor: pointer; text-align: left; border-radius: 9px;
-    padding: 0.42rem 0.62rem; font: 550 0.72rem/1.1 'Plus Jakarta Sans', sans-serif;
+  /* Touch screens have no keyboard to match, so the shortcut chips are noise
+     there; rows grow to a finger-sized target instead. */
+  @media (hover: none) and (pointer: coarse) {
+    .op-ham-shortcut { display: none; }
+    .op-ham-item, .op-ham-quality { min-height: 38px; }
+    .op-ham-item, .op-ham-quality label { font-size: 0.74rem; }
+  }
+  .op-ham-item { display: flex; align-items: center; justify-content: space-between; gap: 0.85rem;
+    flex: 0 0 auto; min-height: 28px; background: transparent; border: none;
+    color: var(--fg-2); cursor: pointer; text-align: left; border-radius: 7px;
+    padding: 0.28rem 0.5rem; font: 550 0.65rem/1.1 'Plus Jakarta Sans', sans-serif;
+    white-space: nowrap;
     transition: background .14s ease, color .14s ease, transform .12s ease; }
   .op-ham-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
   .op-ham-item:active { transform: scale(.985); }
   .op-ham-item:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
-  .op-ham-shortcut { flex: 0 0 auto; min-height: 20px; display: inline-flex;
-    align-items: center; justify-content: center; padding: 0.12rem 0.38rem;
+  .op-ham-shortcut { flex: 0 0 auto; min-height: 17px; display: inline-flex;
+    align-items: center; justify-content: center; padding: 0.08rem 0.32rem;
     background: color-mix(in srgb, var(--bg-4) 76%, transparent);
-    border: 1px solid var(--border-2); border-radius: 6px; color: var(--muted);
+    border: 1px solid var(--border-2); border-radius: 5px; color: var(--muted);
     box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--fg) 8%, transparent);
-    font: 550 0.54rem/1 'JetBrains Mono', monospace; white-space: nowrap;
+    font: 550 0.5rem/1 'JetBrains Mono', monospace; white-space: nowrap;
     transition: color .14s ease, border-color .14s ease; }
-  .op-ham-icon { flex: 0 0 auto; width: 22px; height: 22px; display: grid;
+  .op-ham-icon { flex: 0 0 auto; width: 18px; height: 18px; display: grid;
     place-items: center; color: var(--muted);
     transition: color .14s ease, transform .14s cubic-bezier(.2,1,.3,1); }
-  .op-ham-icon svg { width: 16px; height: 16px; display: block; fill: none;
+  .op-ham-icon svg { width: 13.5px; height: 13.5px; display: block; fill: none;
     stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
   .op-ham-item:hover .op-ham-shortcut { color: var(--fg-2); border-color: var(--muted); }
   .op-ham-item:hover .op-ham-icon { color: var(--fg); transform: translateX(1px); }
-  .op-ham-sep { flex: 0 0 auto; height: 1px; background: var(--border); margin: 6px 5px; }
-  .op-ham-quality { display: flex; align-items: center; justify-content: space-between;
-    flex: 0 0 auto; gap: 0.8rem; margin: 0; padding: 0.52rem 0.58rem;
-    color: var(--fg-2); background: color-mix(in srgb, var(--bg-4) 62%, transparent);
-    border: 1px solid var(--border); border-radius: 10px; }
-  .op-ham-quality label { display: grid; gap: 0.18rem; cursor: pointer;
-    font: 600 0.7rem/1 'Plus Jakarta Sans', sans-serif; }
-  .op-ham-quality-effective { color: var(--muted);
-    font: 500 0.54rem/1.2 'JetBrains Mono', monospace; }
-  .op-ham-quality select { min-height: 30px; max-width: 7.2rem;
-    padding: 0.28rem 1.35rem 0.28rem 0.5rem; color: var(--fg);
-    background: var(--bg); border: 1px solid var(--border-2); border-radius: 8px;
+  .op-ham-sep { flex: 0 0 auto; height: 1px; background: var(--border); margin: 4px 4px; }
+  /* A settings row among the menu rows, not a card above them (the owner
+     2026-10-06: "the stream quality menu is too prominent"). */
+  .op-ham-quality { position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: space-between;
+    flex: 0 0 auto; gap: 0.65rem; margin: 0; min-height: 28px;
+    padding: 0.24rem 0.5rem; color: var(--fg-2); border-radius: 7px;
+    transition: background .14s ease, color .14s ease; }
+  .op-ham-quality:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+  .op-ham-quality label { display: flex; align-items: center; gap: 0.35rem; cursor: pointer;
+    font: 550 0.65rem/1.1 'Plus Jakarta Sans', sans-serif; white-space: nowrap; }
+  .op-ham-quality-effective { position: absolute; left: 0; top: 0; width: 1px; height: 1px;
+    overflow: hidden; opacity: 0; pointer-events: none; }
+  .op-ham-quality select { flex: 0 0 auto; min-height: 20px; max-width: 6.4rem;
+    appearance: none; -webkit-appearance: none;
+    padding: 0.14rem 1.05rem 0.14rem 0.38rem; color: var(--fg-2);
+    background-color: color-mix(in srgb, var(--bg-4) 76%, transparent);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238c95a6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 4.5L6 7.5L9 4.5'/></svg>");
+    background-repeat: no-repeat; background-position: right 0.32rem center; background-size: 9px 9px;
+    border: 1px solid var(--border-2); border-radius: 5px;
+    box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--fg) 8%, transparent);
     cursor: pointer; color-scheme: dark;
-    font: 600 0.63rem/1.1 'Plus Jakarta Sans', sans-serif; }
+    font: 550 0.54rem/1.1 'JetBrains Mono', monospace; white-space: nowrap;
+    transition: color .14s ease, border-color .14s ease, background-color .14s ease; }
+  .op-ham-quality:hover select { color: var(--fg); border-color: var(--muted); }
   [data-theme="light"] .op-ham-quality select { color-scheme: light; }
   .op-ham-quality select:focus-visible { outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
@@ -1723,8 +1794,12 @@
   .op-tab:active { transform: translateY(0) scale(.985); box-shadow: none; }
   .op-tab.active { background: var(--bg); color: var(--fg); border-color: #ededea; }
   .op-tab { cursor: grab; touch-action: pinch-zoom; }   /* custom drag owns one finger; native pinch remains available */
-  .op-tab.dragging { opacity: 0.55; cursor: grabbing; transform: scale(1.04);
-    box-shadow: 0 4px 14px rgba(0,0,0,.5); z-index: 2; }
+  /* The dragged tab rides the pointer on an inline transform, so it gets
+     no transform transition; the others keep theirs and slide aside. */
+  .op-tab.dragging { opacity: 0.8; cursor: grabbing; transition: opacity .12s, box-shadow .12s;
+    box-shadow: 0 4px 14px rgba(0,0,0,.5); z-index: 2; position: relative; }
+  .op-tab.op-tab-settling { transition: none; }
+  .op-tab .op-tab-fav[hidden] { display: none; }
   .op-tab .lbl { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
   .op-tab-x { flex: 0 0 auto; width: 15px; height: 15px; display: inline-flex; align-items: center;
     justify-content: center; color: var(--muted); border-radius: 4px;
@@ -1755,7 +1830,7 @@
      notch too. Do not re-split this into per-rule values. */
   .op { --op-composer-gap: calc(0.23rem - (0.075rem * var(--op-composer-compact, 0))); }
   .op-inputbox { border: 1px solid var(--border-2); border-radius: 11px; background: var(--bg);
-    padding: var(--op-composer-gap) 0.5rem;   /* dense shell; final A− notches still compact with text */
+    padding: var(--op-composer-gap) 0.375rem;   /* dense shell; final A− notches still compact with text */
     transition: border-color .25s, box-shadow .25s, background .3s ease, opacity .3s ease; }
   .op-inputbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(184,192,204,.18); }
   .op-steer { display: flex; gap: 0.4rem; align-items: center; }
@@ -1920,7 +1995,8 @@
      ("composer size doesnt respond beyond a few notches", the owner 2026-08-31).
      Scaling it by --chat-scale over the 1.05 default keeps today's 21px exactly
      where it is and lets every other notch move. */
-  .op-send { flex: 0 0 auto;
+  .op-send, .op-stop { flex: 0 0 auto;
+    margin-right: 0.25rem;
     /* --chat-scale already shrinks this control. Applying the compact-shell
        factor too crushed the last notch to 13px; compact the box, not the
        primary action. */
@@ -1930,6 +2006,7 @@
     border: 1px solid var(--border-2); border-radius: 6px; cursor: pointer; padding: 0;
     display: grid; place-items: center;   /* SVG centers geometrically */
     transition: filter .15s, transform .05s, background .15s; }
+  .op-stop[hidden] { display: none; }
   /* OPTICAL CENTRING. Both composer rows measure dead-centre by box maths and
      still read high, because a line box centres the font's em square and these
      faces reserve more descender room than "Message Operator" or "GPT-5.6 Luna"
@@ -1939,13 +2016,13 @@
      untouched. One number; 0 reverts it. */
   .op { --op-type-nudge: calc(0.04em + (0.015em * var(--op-composer-compact, 0))); }
   .op .op-input, .op .op-mini { position: relative; top: var(--op-type-nudge); }
-  .op-send svg { display: block; transform: translate(-0.5px, 0.5px); }
+  .op-send svg, .op-stop svg { display: block; transform: translate(-0.5px, 0.5px); }
   /* The stop square is geometrically symmetric; inheriting the arrow's
      directional correction (plus another half-pixel) pushed it off centre. */
-  .op-send.stopping svg { transform: none; }
-  .op-send:hover { background: #dedcd6; } .op-send:active { transform: translateY(1px); }
-  .op-send.stopping { background: var(--bad); color: #fff; border-color: var(--bad); }
-  .op-send.stopping:hover { filter: brightness(1.1); background: var(--bad); }
+  .op-send.stopping svg, .op-stop svg { transform: none; }
+  .op-send:hover { background: #dedcd6; } .op-send:active, .op-stop:active { transform: translateY(1px); }
+  .op-send.stopping, .op-stop { background: var(--bad); color: #fff; border-color: var(--bad); }
+  .op-send.stopping:hover, .op-stop:hover { filter: brightness(1.1); background: var(--bad); }
   /* Attach sits LEFT of send, same box as send, but a ghost: no fill, muted
      stroke, so the primary action stays the only lit control in the row. It
      is hidden until workbench.js has a files bridge to open. The old version
@@ -2328,7 +2405,7 @@
     color: var(--fg); font: 600 0.63rem/1.25 'DM Sans', 'Plus Jakarta Sans', sans-serif;
     box-shadow: 0 10px 26px -12px rgba(0,0,0,.85);
     opacity: 0; transform: translateY(-3px); pointer-events: none;
-    transition: opacity .14s ease, transform .16s cubic-bezier(.2,1,.3,1); }
+    transition: opacity .14s ease, transform .16s cubic-bezier(.2,1,.3,1), color .35s ease; }
   /* the state word is ::before content so it can be swapped purely in CSS;
      the version rides under it as a dimmed second line. */
   .op-lp-mark-ver { color: var(--muted); font-weight: 500; font-size: 0.5rem;
@@ -2434,7 +2511,7 @@
     /* r=25 => circumference 157.08. Dash 40/157 = a ~92deg arc. */
     stroke-dasharray: 40 117.08;
     will-change: transform;
-    transition: stroke-dasharray .5s cubic-bezier(.22,1,.36,1); }
+    transition: stroke-dasharray .5s cubic-bezier(.22,1,.36,1), stroke .35s ease; }
   /* The inner <g> carries the translate/scale that centers the 24-box art;
      this group carries ONLY the rotation, so transform-origin is the true
      ring center (32,32) and the mark pivots in place instead of swinging in. */
@@ -2450,6 +2527,7 @@
      nodes; the held layer is cheap. */
   .op-lp-mark-glyph { stroke: var(--fg); opacity: .3;
     will-change: transform;
+    transition: stroke .35s ease, opacity .35s ease;
     transform-origin: center; transform-box: fill-box; }
   /* Settled state — the sweep closes to a full ring, the mark resolves in.
      Gated on .op-mark-settled (set by JS on the first live feed state), NOT on
@@ -2535,7 +2613,8 @@
   #op[data-connection="connecting"] .op-lp-mark-glyph {
     animation: op-mark-glyph-turn 1.15s linear infinite; }
   #op[data-connection="connecting"] .op-lp-mark-tip { color: #e7b93e; }
-  #op[data-connection="connecting"] .op-lp-mark-tip::before { content: "Connecting…"; }
+  #op[data-connection="connecting"] .op-lp-mark-tip::before { content: "Connecting to browser…"; }
+  #op[data-connection="connecting"][data-connection-phase="starting"] .op-lp-mark-tip::before { content: "Starting browser…"; }
   #op[data-connection="live"] .op-lp-mark-sweep { stroke: #3fb950; }
   #op[data-connection="live"] .op-lp-mark-tip { color: var(--fg); }
   #op[data-connection="live"] .op-lp-mark-tip::before { content: "Connected"; }
@@ -2638,7 +2717,7 @@
   /* Home stays visible in manual mode too — its click flips back to auto and
      opens the splash (see the openBtn handler; the owner 2026-07-22). */
   .op-lp-composer { width: min(100%, 36rem); min-height: 42px; position: relative; display: flex;
-    align-items: center; padding: 0.4rem 3rem 0.4rem 0.92rem; box-sizing: border-box;
+    align-items: center; padding: 0.4rem 3rem 0.4rem calc(0.92rem - 2px); box-sizing: border-box;
     background: color-mix(in srgb, var(--bg) 78%, #000); border: 1px solid var(--border-2);
     border-radius: 999px; cursor: text;
     transition: border-color .16s ease, background .16s ease; }
@@ -2646,7 +2725,10 @@
     background: color-mix(in srgb, var(--bg) 68%, #000); }
   .op-lp-input { display: block; width: 100%; height: 1.3em; min-height: 1.3em; max-height: none;
     resize: none; overflow-y: hidden;
-    padding: 0; border: 0; outline: 0; background: transparent; color: var(--fg);
+    /* 2px of left padding, taken off the composer's: with padding 0 the
+       textarea's own overflow clip cut the caret's left half at x=0
+       (the owner 2026-10-19). */
+    padding: 0 0 0 2px; border: 0; outline: 0; background: transparent; color: var(--fg);
     font: 500 calc(0.84rem * var(--chat-scale))/1.3 'DM Sans', var(--chat-font);   /* 0.68→0.76 (the owner 2026-07-28 "placeholder too small" + "always equal to composer font") */
     letter-spacing: -.01em; caret-color: var(--fg);
     transform: translateY(0.5px);   /* optical: Jakarta's ascender-heavy metrics read ~1px high in the centered pill (the owner 2026-07-26) */
@@ -2817,7 +2899,7 @@
     .op-lp.op-lp-collapsed { justify-content: center; }
     .op-lp-hero { align-items: flex-start; gap: 0.7rem; }
     .op-lp-wordmark { align-self: center; font-size: clamp(2.2rem, 10vw, 2.7rem); margin-left: 0; }   /* one notch down (the owner 2026-07-26) */
-    .op-lp-composer { min-height: 44px; border-radius: 999px; padding: 0.42rem 3rem 0.42rem 0.9rem; }
+    .op-lp-composer { min-height: 44px; border-radius: 999px; padding: 0.42rem 3rem 0.42rem calc(0.9rem - 2px); }
     .op-lp-input { font-size: max(16px, calc(0.64rem * var(--chat-scale))); }
     .op-lp-send { width: 30px; height: 30px; right: 6px; bottom: 6px; }   /* 44px cap: 6px inset (+1px border) centers a single-line button; bottom-anchored for multi-row */
     .op-lp-cats { justify-content: flex-start; overflow-x: auto; scrollbar-width: none;
@@ -2843,7 +2925,7 @@
   @supports (-webkit-touch-callout: none) {
     @media (pointer: coarse) {
       .op-lp-composer { display: block; overflow: hidden; border-radius: 22px;
-        min-height: 0; padding: 0.86rem 3rem 0.86rem 0.92rem; }
+        min-height: 0; padding: 0.86rem 3rem 0.86rem calc(0.92rem - 2px); }
       /* 16px real font (Safari anti-zoom) scaled .7 to LOOK ~11px — but a
          transform doesn't shrink the FLOW box, so the composer was wrapping a
          21px-tall box whose visible text is 14.6px, top-anchored: placeholder
@@ -3119,17 +3201,24 @@
        #op-model is flex-shrinkable, a squeezed row used to clip the name mid-
        letter behind the caret — ellipsize instead, stopping at the gutter
        (the owner 2026-07-20: "at higher zoom the caret still hides the model name"). */
-    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M1 1l3 3 3-3' fill='none' stroke='%237e8a9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-    background-position: right 0.3em center; background-size: 0.62em 0.42em; background-repeat: no-repeat; }
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* Only the custom arrow and its measured gutter override the shared page
+     rule; appearance still follows the native/customizable-select rules. */
+  .op select.op-mini {
+    padding-right: 1.35em !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'><path d='M1 1l3 3 3-3' fill='none' stroke='%237e8a9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>") !important;
+    background-position: right 0.3em center !important; background-size: 0.62em 0.42em !important; background-repeat: no-repeat !important; }
   /* Native Windows/Brave popups ignore most option paint and can turn these
      into a white menu with pale text. Current Chromium's customizable-select
      path keeps the popup in-page and on the Operator palette; the plain option
      rule remains the readable fallback for older engines. */
   .op-mini option { color: var(--fg); background: var(--bg-2); }
   @supports (appearance: base-select) {
+    @media (min-width: 821px) and (pointer: fine) {
     .op .op-mini,
     .op select.op-action-caret { -webkit-appearance: base-select; appearance: base-select; }
+    /* Bound the closed control independently of the popup option layout. */
+    .op .op-modelrow .op-mini { box-sizing: border-box; height: calc(1.5em + 0.2rem); min-height: 0; }
     .op .op-mini::picker-icon,
     .op select.op-action-caret::picker-icon { display: none; }
     /* base-select makes the closed select an inline flex container and centers
@@ -3185,6 +3274,7 @@
         inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, var(--border-2)); }
     .op .op-mini option::checkmark,
     .op select.op-action-caret option::checkmark { display: none; }
+    }
   }
   /* MODEL picker one visible weight step over the shared 550 — effort stays
      put (the owner 2026-07-27). Sub-50 steps don't render distinguishably on this
@@ -3199,6 +3289,15 @@
   @keyframes op-mini-in { 0%{opacity:.3;transform:translateY(2px)} 100%{opacity:1;transform:none} }
   .op-mini-r { margin-left: auto; font-weight: 600; color: var(--muted);
     text-align: right; text-align-last: right; }   /* effort text hugs its caret on the right, raised to line up */
+  .op-speed { position: relative; display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 20px; width: 20px; height: 20px; margin-left: auto; color: var(--fg-2); }
+  .op-speed[hidden] { display: none; }
+  .op-speed[data-tier="default"] { color: var(--muted); }
+  .op-speed svg { position: absolute; pointer-events: none; }
+  .op .op-speed select.op-mini { color: transparent; background-image: none !important;
+    padding: 0 !important; width: 20px; height: 20px; white-space: nowrap; }
+  .op .op-speed select.op-mini:hover, .op .op-speed select.op-mini:focus { color: transparent; }
+  .op-modelrow:has(.op-speed:not([hidden])) #op-effort { margin-left: 0; }
   /* DESKTOP: the chat-input row (Message Operator / model / effort) rides the
      −/+ chat scale like mobile always did — it was a FIXED 0.70rem here, so
      the size pill couldn't touch it and a fresh browsing context (e.g. the
@@ -3384,6 +3483,7 @@
     overflow: visible; max-height: 20000px; opacity: 1;
     transition: max-height .3s cubic-bezier(.2,1,.3,1), opacity .22s ease, margin .3s, padding .3s; }
   .op-task.collapsed .op-task-steps { max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+  .op-task.collapsed .op-step-count { display: none; }
   /* trace step lines (Reading / Browsing / Clicking …) stay Jakarta — the
      --chat-font switch to DM Sans pulled them in too, but the owner wants
      these thinking headings in Jakarta (2026-07-21). NOT --chat-font. */
@@ -3523,11 +3623,11 @@
      really is, which is most of the error being fixed here.
      Residual is the 1.5px border rounding to 1 device px at DPR 1 (0.49px);
      it is exact wherever the border renders at its declared width. */
-  .op-step-count { color: var(--muted); font: 600 calc(0.7rem * var(--chat-scale))/1.3 var(--chat-font);
+  .op-step-count { color: var(--muted); font: 600 calc(0.72rem * var(--chat-scale))/1.3 var(--chat-font);
     letter-spacing: .01em; margin: 0 0 0.3rem 0;
     /* align-self:stretch so the count sizes like a row and the padding above
        resolves against the same box origin. */
-    align-self: stretch; padding-left: calc(0.44rem - 0.75px); }   /* bumped 0.66→0.70rem */
+    align-self: stretch; padding-left: calc(0.44rem - 0.75px); }
   .op-step-count[hidden] { display: none; }
 
   /* DEMO: effort pinned + invisible */
@@ -3878,8 +3978,7 @@
        on light theme the controls floated straight into the chat text */
     .op-head { border-bottom: 1px solid var(--border);
       padding-bottom: 0.5rem; margin-bottom: 0.15rem; }
-    /* the floating minimized status pill reads as part of the text without a
-       solid surface — give it one */
+    /* Keep the compact status surface distinct from conversation text. */
     .op[data-status-min="1"] .op-action { background: var(--bg-2);
       border: 1px solid var(--border);
       box-shadow: 0 6px 18px -8px rgba(0,0,0,.55); }
@@ -3967,3 +4066,25 @@
     .op-lp-chats { top: calc(1.1rem + env(safe-area-inset-top)) !important;
       right: calc(8.6rem + env(safe-area-inset-right)) !important; }
   }
+
+
+.op-browser-cursor { color: var(--fg-2); }
+.op-browser-cursor svg { display: block; width: 13px; height: 13px; }
+
+.op-step-count { display: flex; align-items: baseline; gap: .65rem; flex-wrap: wrap; }
+.op-task > .op-step-count { margin-left: calc(1.9rem + 1.5px); }
+.op-step-count .op-token-meter { padding: 0; border: 0; background: transparent; margin: 0; font-size: calc(0.60rem * var(--chat-scale)); color: var(--muted); }
+
+/* Touch devices use their native select sheet and the composer’s text scale. */
+@media (max-width: 820px), (pointer: coarse) {
+  .op select.op-mini, .op select.op-action-caret { -webkit-appearance: none; appearance: none; }
+}
+
+@media (max-width: 820px), (pointer: coarse) {
+  html:has(.op), body:has(.op), .op { touch-action: manipulation; }
+}
+
+.op .op-notice-mark { border: 0; border-radius: 0; background: transparent; }
+.op .warn { display: inline-flex; flex: 0 0 auto; align-items: center; }
+
+.op .op-notice-head.op-notice-info { color: var(--muted); }

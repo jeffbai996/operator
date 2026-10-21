@@ -428,6 +428,8 @@ def test_second_dispatch_rejected_during_pre_spawn(runner):
     try:
         res = runner.start("claude-a", "t2")
         assert not res["ok"] and "already running" in res["error"]
+        assert res["code"] == "conversation_running"
+        assert res["active_bot"] == "claude-a"
     finally:
         gate.set()
 
@@ -507,7 +509,17 @@ def test_agy_display_name_entry_drops_effort(runner, monkeypatch):
     assert effort == ""
 
 
-def test_agy_defaults_to_current_flash_slug(runner, monkeypatch):
+@pytest.mark.parametrize(('configured_model', 'expected_effort'), [
+    ('example-fast', 'high'),
+    ('example-medium', ''),
+])
+def test_agy_uses_configured_runtime_default(runner, monkeypatch, configured_model, expected_effort):
+    lookups = []
+    def configured_default(surface):
+        lookups.append(surface)
+        return configured_model
+    monkeypatch.setattr(OA, 'default_slug', configured_default)
     model, effort = _agy_start(runner, monkeypatch, model="", effort="")
-    assert model == "gemini-3.8-flash"
-    assert effort == "high"
+    assert lookups == ['runtime']
+    assert model == configured_model
+    assert effort == expected_effort

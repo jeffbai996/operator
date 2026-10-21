@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import threading
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -21,6 +22,24 @@ import uuid
 
 class Conflict(ValueError):
     pass
+
+
+APPROVAL_TIMEOUT_SECONDS = 15 * 60
+
+
+def _expire_approvals(db, job, now=None):
+    now = time.time() if now is None else now
+    changed = False
+    for approval in job['approvals']:
+        if approval['status'] == 'pending' and approval.get('created', 0) + APPROVAL_TIMEOUT_SECONDS <= now:
+            approval['status'] = 'expired'
+            approval['decided'] = now
+            changed = True
+    if not changed:
+        return job
+    if job['state'] == 'needs_input' and not any(a['status'] == 'pending' for a in job['approvals']):
+        job['state'] = 'idle'
+    return _save(db, job, preserve_updated=True)
 
 
 def root() -> Path:
@@ -32,8 +51,26 @@ def root() -> Path:
     return path
 
 
+# Opening a brand-new file switches it to WAL and creates the schema. Two
+# connections doing that at once (the cockpit's first workspace poll and a
+# DELETE landed together in the harness) hit SQLite's lock-upgrade deadlock
+# guard: one waits out the 5 s busy timeout and dies on `database is locked`.
+# Setup is serialized within the process; the connection itself is not.
+_SETUP_LOCK = threading.Lock()
+
+
 @contextlib.contextmanager
 def database():
+    with _SETUP_LOCK:
+        db = _connect()
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
+
+
+def _connect():
     db = sqlite3.connect(root() / 'workspace.sqlite3', timeout=5)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA journal_mode=WAL')
@@ -54,6 +91,8 @@ def database():
         id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, name TEXT NOT NULL,
         size INTEGER NOT NULL, digest TEXT NOT NULL, status TEXT NOT NULL,
         source TEXT NOT NULL, created REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS file_context (
+        file_id TEXT PRIMARY KEY, included INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS corrections (
         id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, run_id TEXT NOT NULL,
         text TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
@@ -63,12 +102,12 @@ def database():
       CREATE TABLE IF NOT EXISTS deleted_conversations (id TEXT PRIMARY KEY);
       PRAGMA user_version=1;
     ''')
+    # Additive repair for existing v1 workspaces; keep the version compatible
+    # with older helpers and rollback releases that do not use this table.
+    db.execute('CREATE TABLE IF NOT EXISTS file_context ('
+               'file_id TEXT PRIMARY KEY, included INTEGER NOT NULL DEFAULT 1)')
     os.chmod(root() / 'workspace.sqlite3', 0o600)
-    try:
-        with db:
-            yield db
-    finally:
-        db.close()
+    return db
 
 
 def _text(value, limit=1000):
@@ -84,13 +123,14 @@ def _job(row):
                 conversation_id=row['conversation_id'], updated=row['updated'])
 
 
-def _save(db, job):
+def _save(db, job, preserve_updated=False):
     job = dict(job)
     jid, cid = job.pop('id'), job.pop('conversation_id')
     rev = job.pop('revision', 0) + 1
-    job.pop('updated', None)
+    previous_updated = job.pop('updated', None)
     db.execute('INSERT OR REPLACE INTO jobs VALUES (?,?,?,?,?)',
-               (jid, cid, rev, time.time(), json.dumps(job, ensure_ascii=False)))
+               (jid, cid, rev, previous_updated if preserve_updated and previous_updated is not None
+                else time.time(), json.dumps(job, ensure_ascii=False)))
     return _job(db.execute('SELECT * FROM jobs WHERE id=?', (jid,)).fetchone())
 
 
@@ -105,8 +145,16 @@ def snapshot(cid):
     with database() as db:
         jobs = [_job(row) for row in db.execute(
             'SELECT * FROM jobs WHERE conversation_id=? ORDER BY updated DESC LIMIT 50', (cid,))]
+        if any(a['status'] == 'pending' and a.get('created', 0) + APPROVAL_TIMEOUT_SECONDS <= time.time()
+               for job in jobs for a in job['approvals']):
+            db.execute('BEGIN IMMEDIATE')
+            rows = list(db.execute(
+                'SELECT * FROM jobs WHERE conversation_id=? ORDER BY updated DESC LIMIT 50', (cid,)))
+            jobs = [_expire_approvals(db, _job(row)) for row in rows]
+            jobs.sort(key=lambda job: job['updated'], reverse=True)
+        # Retained files are always context; old exclusion flags no longer apply.
         files = [dict(row) for row in db.execute(
-            "SELECT * FROM files WHERE conversation_id=? AND status='ready' ORDER BY created DESC", (cid,))]
+            "SELECT files.*, 1 AS included FROM files WHERE conversation_id=? AND status='ready' ORDER BY created DESC", (cid,))]
         corrections = [dict(row) for row in db.execute(
             'SELECT id,run_id,status,created FROM corrections WHERE conversation_id=? ORDER BY created DESC LIMIT 20', (cid,))]
         total = db.execute('SELECT COALESCE(SUM(size),0) FROM files').fetchone()[0]
@@ -141,6 +189,8 @@ def start_run(cid, task, authorization=None):
         if db.execute("SELECT 1 FROM runs WHERE conversation_id=? AND state='running'", (cid,)).fetchone():
             raise Conflict('this conversation already has an active run')
         previous = _job(db.execute('SELECT * FROM jobs WHERE conversation_id=? ORDER BY updated DESC LIMIT 1', (cid,)).fetchone())
+        if previous:
+            previous = _expire_approvals(db, previous)
         if authorization is not None and previous:
             if any(a['status'] == 'pending' for a in previous['approvals']):
                 raise Conflict('finish or decline the pending approval before running another recipe')
@@ -180,6 +230,7 @@ def finish_run(run_id, state):
             run, job = _owned_run(db, run_id)
         except Conflict:
             return
+        job = _expire_approvals(db, job)
         db.execute('UPDATE runs SET state=?,ended=? WHERE id=?', (state, time.time(), run_id))
         db.execute("UPDATE corrections SET status='failed' WHERE run_id=? AND status IN ('pending','accepted')", (run_id,))
         job['state'] = 'needs_input' if any(a['status'] == 'pending' for a in job['approvals']) else state
@@ -197,14 +248,17 @@ def recover_runs():
 def context(cid):
     state = snapshot(cid)
     job = state['job']
-    if not job:
+    selected = state['files']
+    if not job and not selected:
         return ''
-    compact = {k: job[k] for k in ('goal', 'authorization')}
-    compact['constraints'] = job['constraints'][:8]
-    compact['checkpoints'] = job['checkpoints'][:10]
-    compact['decisions'] = job['decisions'][-5:]
-    compact['approvals'] = job['approvals'][-3:]
-    compact['files'] = [{'id': f['id'], 'name': f['name']} for f in state['files'][:20]]
+    compact = {k: job[k] for k in ('goal', 'authorization')} if job else {}
+    if job:
+        compact['constraints'] = job['constraints'][:8]
+        compact['checkpoints'] = job['checkpoints'][:10]
+        compact['decisions'] = job['decisions'][-5:]
+        compact['approvals'] = job['approvals'][-3:]
+    compact['files'] = [{'id': f['id'], 'name': f['name']} for f in selected]
+    compact['file_context'] = 'All retained chat files are available as context. Use them when relevant.'
     return 'Current Operator job (persisted across devices; job_state has the full record):\n' + json.dumps(compact, ensure_ascii=False)
 
 
@@ -323,8 +377,10 @@ def request_approval(run_id, credential, action):
     with database() as db:
         db.execute('BEGIN IMMEDIATE')
         _, job = _owned_run(db, run_id, credential)
+        job = _expire_approvals(db, job)
         for old in job['approvals']:
-            if old['fingerprint'] == fingerprint and old['run_id'] == run_id:
+            if (old['fingerprint'] == fingerprint and old['run_id'] == run_id
+                    and old['status'] in ('pending', 'approved')):
                 if old['status'] == 'approved' and not old.get('claimed'):
                     old['claimed'] = time.time()
                     _save(db, job)
@@ -357,21 +413,30 @@ def request_approval(run_id, credential, action):
         return item
 
 
-def decide_approval(cid, approval_id, fingerprint, approved):
+def decide_approval(cid, approval_id, fingerprint, approved, change_request=''):
+    change_request = _text(change_request, 1000) if change_request is not None else ''
+    if approved and change_request:
+        raise ValueError('approval cannot also request changes')
     with database() as db:
         db.execute('BEGIN IMMEDIATE')
         job = _job(db.execute('SELECT * FROM jobs WHERE conversation_id=? ORDER BY updated DESC LIMIT 1', (cid,)).fetchone())
         if job:
+            job = _expire_approvals(db, job)
             for item in job['approvals']:
                 if item['id'] == approval_id:
                     if item['fingerprint'] != fingerprint or item['status'] != 'pending':
                         raise Conflict('this approval is no longer pending')
-                    item['status'] = 'approved' if approved else 'declined'
+                    item['status'] = 'approved' if approved else 'changes_requested' if change_request else 'declined'
                     item['decided'] = time.time()
+                    if change_request:
+                        item['change_request'] = change_request
                     if approved:
                         job['approved_amount'] = job.get('approved_amount', sum(
                             a['action']['amount'] for a in job['approvals']
                             if a['status'] == 'approved' and a['id'] != item['id'])) + item['action']['amount']
+                    elif job['state'] == 'needs_input' and not any(
+                            a['status'] == 'pending' for a in job['approvals']):
+                        job['state'] = 'idle'
                     _save(db, job)
                     return item
         raise KeyError('approval not found')
@@ -437,9 +502,33 @@ def file_path(cid, fid):
     return path, dict(row)
 
 
+def update_file(cid, fid, fields):
+    file_path(cid, fid)
+    if not fields or set(fields) - {'name', 'included'}:
+        raise ValueError('provide name or included')
+    name = fields.get('name')
+    if name is not None:
+        name = _text(name, 240).strip()
+        if not name or '/' in name or '\\' in name or name in ('.', '..'):
+            raise ValueError('enter a filename without path separators')
+    if 'included' in fields and not isinstance(fields['included'], bool):
+        raise ValueError('included must be true or false')
+    with database() as db:
+        db.execute('BEGIN IMMEDIATE')
+        if not db.execute('SELECT 1 FROM files WHERE id=? AND conversation_id=?', (fid, cid)).fetchone():
+            raise KeyError('file not found')
+        if name is not None:
+            db.execute('UPDATE files SET name=? WHERE id=? AND conversation_id=?', (name, fid, cid))
+        if 'included' in fields:
+            db.execute('INSERT INTO file_context VALUES (?,?) ON CONFLICT(file_id) DO UPDATE SET included=excluded.included',
+                       (fid, int(fields['included'])))
+    return next(f for f in snapshot(cid)['files'] if f['id'] == fid)
+
+
 def delete_file(cid, fid):
     path, _ = file_path(cid, fid)
     with database() as db:
+        db.execute('DELETE FROM file_context WHERE file_id=?', (fid,))
         db.execute('DELETE FROM files WHERE id=? AND conversation_id=?', (fid, cid))
     path.unlink(missing_ok=True)
     import operator_file_bridge
@@ -456,8 +545,11 @@ def delete_conversation(cid):
         transfers = [r[0] for r in db.execute('SELECT id FROM transfers WHERE conversation_id=?', (cid,))]
         db.execute('INSERT OR IGNORE INTO deleted_conversations VALUES (?)', (cid,))
         db.execute("UPDATE transfers SET status='failed',error='Chat deleted' WHERE conversation_id=? AND status='downloading'", (cid,))
+        db.execute('DELETE FROM file_context WHERE file_id IN (SELECT id FROM files WHERE conversation_id=?)', (cid,))
         for table in ('jobs', 'runs', 'files', 'corrections'):
             db.execute(f'DELETE FROM {table} WHERE conversation_id=?', (cid,))
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_objects'").fetchone():
+            db.execute('DELETE FROM app_objects WHERE conversation_id=?', (cid,))
     for fid in files:
         (root() / 'files' / fid).unlink(missing_ok=True)
         import operator_file_bridge

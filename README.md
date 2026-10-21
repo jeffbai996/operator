@@ -1,7 +1,7 @@
 <p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.2.1.svg">
-    <img src="docs/img/operator-lockup-light-v1.2.1.svg" height="72" alt="Operator">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/operator-lockup-dark-v1.2.7.svg">
+    <img src="docs/img/operator-lockup-light-v1.2.7.svg" height="72" alt="Operator">
   </picture>
 </p>
 

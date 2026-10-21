@@ -83,6 +83,17 @@ def test_vecgrep_connector_preserves_brand_casing():
         ("Using vecgrep MCP", "Listing corpora")
 
 
+def test_squad_store_connector_preserves_product_casing():
+    assert OT.action_label("mcp__codex_apps__squad_store.file_list", {}) == \
+        ("Using host-app", "Listing file")
+    assert OT.action_label("host-app.connection_info", {}) == \
+        ("Using host-app", "")
+
+
+def test_approval_trace_uses_requesting_label():
+    assert OT.action_label("job_approval", {}) == ("Requesting approval", "")
+
+
 def test_booking_connector_is_a_friendly_provider_action():
     assert OT.action_label("booking_com.accommodations_search_v2", {}) == \
         ("Using Booking.com", "Searching accommodations")
@@ -251,3 +262,25 @@ def test_view_and_trace_agree_on_shot_dirs():
     same dir list or rewritten inline-image links 404."""
     import operator_view as OV
     assert OV._SHOT_DIRS == OT.shot_dirs()
+
+
+# Gemini 4 Argon (agy) glues a one-line thought summary onto its final answer
+# with no separator: "...respond concisely to the owner.Opened the closest..."
+# (the owner 2026-10-19). The glued meta sentence is scratch; the answer follows it.
+
+def test_glued_meta_preamble_is_shed_from_the_answer():
+    t = ("Everything is complete. I will now respond concisely to the owner.Opened the "
+         "closest Starbucks store page.\n\n```\nETA: 12 min\n```")
+    assert OT.strip_plan_scaffold(t) == ("Opened the closest Starbucks store page."
+                                         "\n\n```\nETA: 12 min\n```")
+    t2 = ("Now we can reply concisely to the user with the requested details, "
+          "following the formatting instructions.**Starbucks (Ambleside)** is closest.")
+    assert OT.strip_plan_scaffold(t2) == "**Starbucks (Ambleside)** is closest."
+
+
+def test_ordinary_text_without_a_glued_meta_sentence_is_untouched():
+    for t in ("Delivery fee is $4.49.The store is open.",          # no meta words
+              "I will now respond: the fee is $0 on orders over $15.",  # spaced
+              "See ubereats.com.Opened at 6am.",
+              "The total is 4.8.Rating holds."):
+        assert OT.strip_plan_scaffold(t) == t

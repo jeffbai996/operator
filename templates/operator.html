@@ -1,8 +1,8 @@
 {% extends "_base.html" %}
 {% block title %}{% if OP_TITLE_STANDALONE %}Operator{% else %}operator — host-app{% endif %}{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v1224">
-<link rel="stylesheet" href="{{ url_for('operator.static', filename='workbench.css') }}?rev=v1221">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='operator.css') }}?rev=v127-ham-stop">
+<link rel="stylesheet" href="{{ url_for('operator.static', filename='workbench.css') }}?rev=v127-approval-amber">
 {% if standalone %}
 {# Standalone instances (operator-fam): the cockpit IS the app — hide the
    host-app site chrome and give the stage the whole viewport. The 150px
@@ -73,7 +73,7 @@
       {# brow theme button: same fragify 3-icon next-stop pattern as the splash
          sun/moon (the owner 2026-07-28) — the shared .op-lp-theme-* visibility rules
          apply to any .op descendant, so the classes carry the logic here too #}
-      <button class="op-full-btn op-iconbtn" id="op-flat" title="theme: default → flat → light" aria-label="cycle theme (default, flat, light)"><svg class="op-lp-theme-day" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg><svg class="op-lp-theme-night" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg><svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg></button>
+      <button class="op-full-btn op-iconbtn" id="op-flat" title="theme: dark → OLED black → light" aria-label="cycle theme (dark, OLED black, light)"><svg class="op-lp-theme-day" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.2"></circle><path d="M10 2v1.4M10 16.6V18M2 10h1.4M16.6 10H18M4.35 4.35l1 1M14.65 14.65l1 1M15.65 4.35l-1 1M5.35 14.65l-1 1"></path></svg><svg class="op-lp-theme-night" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 12.8A7 7 0 0 1 7.2 3.6 7 7 0 1 0 16.4 12.8z"></path></svg><svg class="op-lp-theme-oled" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"></path></svg></button>
       <button class="op-full-btn op-iconbtn" id="op-full" title="fullscreen" aria-label="fullscreen"><svg viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3H3v4M13 3h4v4M17 13v4h-4M7 17H3v-4"></path></svg></button>
     </div>
 
@@ -92,6 +92,10 @@
       <span class="op-pick-wrap" id="op-pick-wrap" hidden><span class="op-pick-face" id="op-pick-face" aria-hidden="true">🤖</span><select class="op-action-caret" id="op-action-caret" title="who drives"></select></span>
       <span class="op-status-min" id="op-status-min" title="minimize" role="button" tabindex="0"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"></path></svg></span>
     </button>
+      <span class="op-token-meter" id="op-token-meter" hidden aria-label="Token usage">
+        <span class="op-token-in" title="Input tokens"><span aria-hidden="true">↑</span><span id="op-token-in">0</span></span>
+        <span class="op-token-out" title="Output tokens"><span aria-hidden="true">↓</span><span id="op-token-out">—</span></span>
+      </span>
     <div class="op-thread-observer" id="op-thread-observer" hidden>
       <span class="op-thread-observer-icon" aria-hidden="true">
         <svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="15" height="10.5" rx="2"></rect><path d="M7 17h6M10 13.5V17"></path></svg>
@@ -128,13 +132,19 @@
 
 
     <div class="op-inputbox">
+      <div class="op-resource-chips" id="op-inputbox-resources" aria-label="Selected connectors" hidden></div>
       <div class="op-steer">
         <div class="op-grow-wrap"><textarea class="op-input" id="op-input" rows="1" autocomplete="off" spellcheck="false" placeholder="Message Operator"></textarea></div>
         <button type="button" class="op-attach" id="op-files-open" aria-label="Chat files" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 5V14.5a4.5 4.5 0 0 0 9 0V7.25a3 3 0 0 0-6 0V13.5a1.5 1.5 0 0 0 3 0V8.5"></path></svg></button>
         <button class="op-send" id="op-send" title="send (Enter)" aria-label="send"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4v5a3 3 0 0 1-3 3H5"></path><path d="M8 9l-3 3 3 3"></path></svg></button>
+        <button type="button" class="op-stop stopping" id="op-stop" title="stop" aria-label="stop" hidden><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"></rect></svg></button>
       </div>
       <div class="op-modelrow" id="op-modelrow">
         <select class="op-mini" id="op-model" title="Switch model (⌘⇧E / Ctrl+Shift+E)"></select>
+        <span class="op-speed" hidden>
+          <svg viewBox="0 0 20 20" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M11.2 1.6 3.6 11h5l-.9 7.4 8.7-10.2h-5.2l1.2-6.6Z"/></svg>
+          <select class="op-mini" id="op-speed" aria-label="Processing speed" title="Processing speed"></select>
+        </span>
         <select class="op-mini op-mini-r" id="op-effort" title="effort"></select>
       </div>
     </div>
@@ -164,19 +174,6 @@
       <div class="op-ham" id="op-ham">
         <button class="op-ubtn" id="op-ham-btn" title="more" aria-label="more"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6h14M3 10h14M3 14h14"></path></svg></button>
         <div class="op-ham-menu" id="op-ham-menu" hidden>
-          <div class="op-ham-quality">
-            <label for="op-ham-quality">
-              <span>Stream quality</span>
-              <span class="op-ham-quality-effective" id="op-ham-quality-effective">Auto</span>
-            </label>
-            <select id="op-ham-quality" aria-label="stream quality">
-              <option value="auto">Auto</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-          </div>
-          <div class="op-ham-sep"></div>
           <button class="op-ham-item" data-kind="back"><span>Back</span><span class="op-ham-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M12.5 4.5 7 10l5.5 5.5"></path></svg></span></button>
           <button class="op-ham-item" data-kind="forward"><span>Forward</span><span class="op-ham-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="m7.5 4.5 5.5 5.5-5.5 5.5"></path></svg></span></button>
           <button class="op-ham-item" data-kind="reload"><span>Reload</span><span class="op-ham-shortcut" data-shortcut="reload">Ctrl R</span></button>
@@ -199,6 +196,19 @@
           <div class="op-ham-sep"></div>
           <button class="op-ham-item" data-kind="onepassword"><span>1Password</span><span class="op-ham-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="7" cy="10" r="3.2"></circle><path d="M10.2 10H17m-2.5 0v2m-2-2v2"></path></svg></span></button>
           <button class="op-ham-item" data-kind="extensions"><span>Extensions</span><span class="op-ham-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M7.5 3.5H4.8a1.3 1.3 0 0 0-1.3 1.3v2.7a2.5 2.5 0 1 1 0 5v2.7a1.3 1.3 0 0 0 1.3 1.3h2.7a2.5 2.5 0 1 1 5 0h2.7a1.3 1.3 0 0 0 1.3-1.3v-2.7a2.5 2.5 0 1 0 0-5V4.8a1.3 1.3 0 0 0-1.3-1.3h-2.7a2.5 2.5 0 1 0-5 0Z"></path></svg></span></button>
+          <div class="op-ham-sep"></div>
+          <div class="op-ham-quality">
+            <label for="op-ham-quality">
+              <span>Stream quality</span>
+              <span class="op-ham-quality-effective" id="op-ham-quality-effective">Auto</span>
+            </label>
+            <select id="op-ham-quality" aria-label="stream quality">
+              <option value="auto">Auto</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
           <button class="op-ham-item" id="op-ham-history"><span>History</span><span class="op-ham-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"></circle><path d="M10 6.5v3.8l2.5 1.5"></path></svg></span></button>
           <button class="op-ham-item" id="op-ham-settings"><span>Settings</span><span class="op-ham-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6"></circle><path d="M10 3v2m0 10v2m7-7h-2M5 10H3m12-5-1.4 1.4M6.4 13.6 5 15m10 0-1.4-1.4M6.4 6.4 5 5"></path></svg></span></button>
         </div>
@@ -221,7 +231,9 @@
         </div>
         <div class="op-set-sep"></div>
         <div class="op-set-head">Cockpit</div>
-        <div class="op-set-row" id="op-diagnostics-setting" hidden><label for="op-diagnostics-toggle">Diagnostics</label><input id="op-diagnostics-toggle" type="checkbox" role="switch"><button type="button" id="op-health-open" hidden>Health</button></div>
+        <div class="op-set-row" id="op-diagnostics-setting" hidden><label for="op-diagnostics-toggle">Diagnostics</label>
+          <span class="op-set-ctl"><button type="button" id="op-health-open" class="op-set-btn" hidden>Health</button>
+          <input id="op-diagnostics-toggle" type="checkbox" role="switch" class="op-switch"></span></div>
         <div class="op-set-row"><label for="op-set-font">Chat font</label>
           <select id="op-set-font">
             <option value="'DM Sans', 'Plus Jakarta Sans', sans-serif">DM Sans</option>
@@ -365,6 +377,7 @@
              This hero view doubles as the future "new chat" landing page once
              sessions + a conversation sidebar exist — keep it self-contained. #}
           <div class="op-lp-demonote" id="op-lp-demonote">Live demo — contact the administrator for access.</div>
+          <div class="op-resource-chips" id="op-hero-resources" aria-label="Selected connectors" hidden></div>
           <div class="op-lp-composer">
             <textarea id="op-lp-input" class="op-lp-input" rows="1" autocomplete="off" spellcheck="false" placeholder="What can I help you do?"></textarea>
             <span class="op-lp-placeholder" aria-hidden="true">What can I help you do?</span>
@@ -456,7 +469,7 @@
              autocomplete="off" placeholder="Search chats" aria-label="search chats">
     </label>
     <div class="op-chat-tools">
-      <select id="op-chat-filter" aria-label="Filter chats"><option value="all">All chats</option><option value="running">Running</option><option value="here">This device</option><option value="delegations">Delegations</option></select>
+      <select id="op-chat-filter" aria-label="Filter chats"><option value="all">All chats</option><option value="running">Running</option><option value="here">This device</option><option value="delegations">Background work</option></select>
       <select id="op-chat-sort" aria-label="Sort chats"><option value="recent">Recent first</option><option value="oldest">Oldest first</option><option value="title">Name A–Z</option></select>
       <span id="op-chat-count" role="status"></span>
     </div>
@@ -555,6 +568,7 @@
     agent_takeover: "{{ url_for('operator.operator_agent_takeover') }}",
     dispatch: "{{ url_for('operator.operator_dispatch') }}",
     drivers: "{{ url_for('operator.operator_drivers') }}",
+    resources: "{{ url_for('operator.operator_resources_list') }}",
     frame: "{{ url_for('operator.operator_frame') }}",
     history_list: "{{ url_for('operator.operator_history_list') }}",
     homepage: "{{ url_for('operator.operator_homepage') }}",
@@ -578,6 +592,7 @@
     tab_new: "{{ url_for('operator.operator_tab_new') }}",
     tab_switch: "{{ url_for('operator.operator_tab_switch', idx=0) }}",
     tabs: "{{ url_for('operator.operator_tabs') }}",
+    tabs_order: "{{ url_for('operator.operator_tabs_order') }}",
     task_delete: "{{ url_for('operator.operator_task_delete', slug='__S__') }}",
     task_run: "{{ url_for('operator.operator_task_run', slug='__S__') }}",
     tasks: "{{ url_for('operator.operator_tasks') }}"
@@ -585,6 +600,7 @@
     ,diagnostics: "{{ url_for('operator.operator_diagnostics') }}"
   };
 </script>
-<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v1224"></script>
-<script src="{{ url_for('operator.static', filename='js/workbench.js') }}?rev=v1218"></script>
+<script src="{{ url_for('operator.static', filename='js/operator_feed.js') }}?rev=v127-fps"></script>
+<script src="{{ url_for('operator.static', filename='js/operator.js') }}?rev=v127-ham-stop"></script>
+<script src="{{ url_for('operator.static', filename='js/workbench.js') }}?rev=v127-approval-copy"></script>
 {% endblock %}

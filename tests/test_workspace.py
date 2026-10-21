@@ -1,4 +1,5 @@
 import io
+import time
 
 import pytest
 
@@ -54,6 +55,47 @@ def test_approval_is_exact_and_revision_invalidates_pending():
     with pytest.raises(KeyError):
         ws.decide_approval('b', second['id'], second['fingerprint'], True)
     assert ws.decide_approval('a', second['id'], second['fingerprint'], True)['status'] == 'approved'
+
+
+def test_pending_approval_expires_on_read_and_cannot_be_confirmed():
+    run = ws.start_run('a', 'Book')
+    args = {'kind': 'booking', 'destination': 'example.com', 'description': 'Tuesday at 10'}
+    first = ws.request_approval(run['run_id'], run['credential'], args)
+    with ws.database() as db:
+        job = ws._job(db.execute('SELECT * FROM jobs WHERE id=?', (run['job']['id'],)).fetchone())
+        job['approvals'][0]['created'] = time.time() - ws.APPROVAL_TIMEOUT_SECONDS - 1
+        ws._save(db, job)
+    state = ws.snapshot('a')['job']
+    assert state['approvals'][0]['status'] == 'expired'
+    with pytest.raises(ws.Conflict):
+        ws.decide_approval('a', first['id'], first['fingerprint'], True)
+    replacement = ws.request_approval(run['run_id'], run['credential'], args)
+    assert replacement['status'] == 'pending' and replacement['id'] != first['id']
+
+
+def test_requesting_changes_invalidates_exact_pending_approval():
+    run = ws.start_run('a', 'Book')
+    args = {'kind': 'booking', 'destination': 'example.com', 'description': 'One room'}
+    first = ws.request_approval(run['run_id'], run['credential'], args)
+    revised = ws.decide_approval('a', first['id'], first['fingerprint'], False,
+                                 'Use a different payment method')
+    assert revised['status'] == 'changes_requested'
+    assert revised['change_request'] == 'Use a different payment method'
+    with pytest.raises(ws.Conflict):
+        ws.decide_approval('a', first['id'], first['fingerprint'], True)
+    assert ws.request_approval(run['run_id'], run['credential'], args)['id'] != first['id']
+
+
+def test_expired_approval_does_not_leave_finished_run_waiting_for_input():
+    run = ws.start_run('a', 'Book')
+    ws.request_approval(run['run_id'], run['credential'], {
+        'kind': 'booking', 'destination': 'example.com', 'description': 'Tuesday at 10'})
+    with ws.database() as db:
+        job = ws._job(db.execute('SELECT * FROM jobs WHERE id=?', (run['job']['id'],)).fetchone())
+        job['approvals'][0]['created'] = time.time() - ws.APPROVAL_TIMEOUT_SECONDS - 1
+        ws._save(db, job)
+    ws.finish_run(run['run_id'], 'done')
+    assert ws.snapshot('a')['job']['state'] == 'done'
 
 
 def test_recipe_authorization_is_bounded_and_cumulative():
@@ -141,3 +183,62 @@ def test_startup_recovers_stale_run_without_losing_job():
     ws.recover_runs()
     assert ws.snapshot('a')['job']['state'] == 'interrupted'
     assert ws.start_run('a', 'Continue')['job']['goal'] == 'Persistent goal'
+
+
+def test_first_open_of_a_new_workspace_is_safe_across_threads(tmp_path, monkeypatch):
+    # The cockpit's first /operator/workspace poll and a DELETE both open a
+    # brand-new file at once; both used to run the schema script and one
+    # died on `database is locked` after the 5 s busy timeout.
+    import threading
+    errors = []
+
+    def open_once(index):
+        try:
+            with ws.database() as db:
+                db.execute('SELECT 1').fetchone()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f'{index}: {exc!r}')
+
+    for attempt in range(12):
+        monkeypatch.setenv('OPERATOR_WORKSPACE_DIR', str(tmp_path / f'ws{attempt}'))
+        threads = [threading.Thread(target=open_once, args=(i,)) for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+    assert errors == []
+
+
+def test_all_retained_files_are_context_and_rename_keeps_content():
+    file = ws.put_file('context-chat', 'notes.txt', io.BytesIO(b'project requirements'))
+    fid = file['id']
+    assert 'notes.txt' in ws.context('context-chat')
+    ws.update_file('context-chat', fid, {'included': False, 'name': 'requirements.txt'})
+    assert 'requirements.txt' in ws.context('context-chat')
+    assert ws.snapshot('context-chat')['files'][0]['included'] == 1
+    path, asset = ws.file_path('context-chat', fid)
+    assert path.read_bytes() == b'project requirements'
+    assert asset['name'] == 'requirements.txt'
+    with pytest.raises(KeyError):
+        ws.update_file('other-chat', fid, {'included': True})
+    with pytest.raises(ValueError):
+        ws.update_file('context-chat', fid, {'name': '../escape.txt'})
+    ws.update_file('context-chat', fid, {'included': True})
+    assert 'requirements.txt' in ws.context('context-chat')
+    ws.delete_file('context-chat', fid)
+    with ws.database() as db:
+        assert db.execute('SELECT * FROM file_context WHERE file_id=?', (fid,)).fetchone() is None
+
+
+def test_existing_v1_workspace_migrates_file_context_without_losing_data():
+    run = ws.start_run('migration', 'Keep this job')
+    with ws.database() as db:
+        db.execute('DROP TABLE file_context')
+        db.execute('PRAGMA user_version=1')
+    assert ws.snapshot('migration')['job']['id'] == run['job']['id']
+    assert 'Keep this job' in ws.context('migration')
+    with ws.database() as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM file_context').fetchone()[0] == 0
+    # Reopening the migrated database is idempotent.
+    assert ws.snapshot('migration')['job']['id'] == run['job']['id']

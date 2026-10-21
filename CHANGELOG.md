@@ -1,237 +1,235 @@
 # Changelog
 
-Newest first. The current release is described in the README.
+Operator release history, newest first. The release notes for the current
+line come first, then the version ladder from v1.2.7 back to v1.0.8, then the
+earlier releases folded and grouped by theme.
+
+## v1.2.7 — pushed browser frames, adaptive 25 fps streaming and reliable Stop
+
+The browser feed now uses pushed compositor frames (`Page.startScreencast`) as
+its primary path, falling back to polled screenshots only if a page fails to
+emit frames. High stream quality runs at 25 fps, Medium holds 15 fps (`960px`
+cap), and Low steps down cadence and resolution for constrained links. `Auto`
+scales across High, Medium and Low from observed frame delivery speed. Pushed
+frames record the accepted viewport dimensions directly so steady pages no
+longer re-run layout-metric probes on every 1 Hz gate tick, and cursor handoff
+after a user tap in AUTO mode glides faster (`140 ms`).
+
+Stopping a run now settles the cockpit immediately instead of waiting on
+backend teardown, keeps a dedicated Stop control beside Send while a follow-up
+draft is in the composer, and prevents stopped `agy`/`gemma` runs from flushing
+trailing trajectory steps into a new task card. Large session flushes skip
+`keepalive` while the tab is visible so long transcripts stay within browser
+request limits.
+
+The browser settings menu is narrower and more compact, with the stream quality
+control styled as an inline pill that shows the active `Auto` tier directly, and
+pending permission cards use a warmer amber border and heading (`Operator needs
+your permission`).
+
+## v1.2.6 — dependable connections and named failures
+
+Claude bots run on their long-lived sign-in token when their config folder has
+one, so an expired stored login no longer fails the run. When a bot's sign-in
+has lapsed, Operator refuses the dispatch and says which bot needs to sign in
+again. An error result from the runtime appears as the failure reason instead
+of as the reply.
+
+The browser connection budget now ends at the first frame. Optional attachment
+hooks run afterward with their own short limits, so a slow page cannot cancel a
+feed that is already showing. A dead connection can no longer freeze the feed,
+tab-follow probes run outside the capture loop, and held frame requests wake as
+soon as a frame is published. Closed-page errors from abandoned browser calls
+are no longer logged.
+
+A run state that has not been recorded stays unresolved rather than done, in
+history, Operator MCP, Codex tool status and downloads. Deleting a conversation
+retires its runner and saved state. A saved task opens its start page only after
+admission, and an effort the model does not offer is refused. Keys released
+while queued are still pressed, and the sandbox container pauses when unused.
+The model menu includes Claude Haiku 5.5 and Mythos 5.1 with measured usage,
+and OLED black follows the host-app theme.
+
+## v1.2.5 — faster startup and clearer task status
+
+Input/output token counts share the step count’s baseline in live and completed
+traces. Copied order numbers now show a visible confirmation, with a larger
+touch target and an inline failure state if clipboard access is denied.
+
+The status headline describes the task lifecycle; the smaller line keeps the
+current action. Pending approvals and human handoffs remain explicit even while
+the browser reconnects. Model and effort controls follow the mobile composer’s
+text scale, and the viewing notice uses a neutral dark surface.
+
+The first browser frame is captured before optional attachment setup. After
+90 seconds without a viewer, capture pauses while the attachment remains warm
+until 270 seconds. Startup timing milestones are available in the viewport
+diagnostics; slow initial connection no longer presents as a lost signal.
+
+## v1.2.2 — durable approvals and clearer results
+
+Permission requests remain in the conversation after a decision, and approved
+requests stay visible after reload. Result cards group repeated checks of the
+same page into one source link, with check times available on hover. A verified
+order number links to its observed order page when one is available; otherwise
+the number can be copied without guessing a destination.
+
+The live status card shows a short action and compact input/output token counts
+when reported by the runtime. The approval transition reads “Requesting
+approval”.
+
+## v1.2.1 — the tab you watch is the tab being driven
+
+The cockpit streams the tab the agent is actually working in. Reopening the
+cockpit after an idle stop lands on the live run's own tab, then on Chrome's
+real front tab, then on the newest page with content; Chrome's empty New Tab
+is never promoted over a page with work in it. During a run the streamer
+follows the conversation's registered tab from the tab registry instead of
+re-asserting its own guess, so a same-URL workload (one SPA page for the
+whole task) can no longer pin the view on the wrong tab. Every page switch
+leaves a flight-recorder event, and the recorder holds 240 of them.
+
+Tab titles use the chat face: DM Sans on the private host, DM Sans in
+the public package and demo.
+
+The polish pass under the same label: one table-tested decision picks the
+streamed tab (dead-current, owned, mover, front, new-tab) and a count change
+mid-run is no longer a reason to switch. The delegation MCP gains
+`operate_look`, one JPEG of a delegation's own tab as image content, and runs
+from the published release. Delegation chats carry `origin: mcp`, stay out of
+the Chats library unless the Delegations filter is chosen, never become the
+human's draft, and are pruned after a week untouched. On a brand-new cockpit
+the trash button works again (a fresh delete of the implicit conversation is
+idempotent). The idle-tab reaper's websocket dependency is declared, so it can
+finally close a tab. The suite is green apart from stated skips, and the mirror
+proves the public cut collects before it ships.
+
+Everything since the 1.2.0 label ships under this number: Operator MCP
+delegation from other bots, steering that no longer loses the run it
+interrupted, durable chat delete and chat metadata, result cards anchored to
+their turn, composer drafts that survive refresh, owned-tab reaping, the
+1Password popup left alone, per-run isolation of sandbox transport, downloads
+and Gemini MCP config, and Gemini Flash 3.8.
+
+## v1.2.0 — jobs, results, files and steering
+
+The private cockpit now keeps a durable job alongside each conversation:
+checkpoints in the status card, expandable constraints/decisions, and result
+cards with observed sources and chat files. Simple questions remain simple.
+Saved recipes can specify success criteria and exact authorization limits;
+otherwise Operator prepares the action and asks for approval.
+
+Corrections use Codex's native in-flight steering. Other runtimes deliver at a
+tool boundary, with a three-second interrupt/resume fallback when needed.
+Stop remains separate. The paperclip opens Chat files (uploads, generated files
+and completed downloads from owned Windows Chrome tabs). Operator health is
+hidden behind Settings → Diagnostics and records bounded metadata, not content.
+
+See [WORKSPACE.md](WORKSPACE.md) for storage, rollback, provider boundaries and
+verification. This is a private-service release; no package or public-demo
+deployment is implied. Existing chats and native thread IDs are retained.
+
+## Version ladder
 
 | version | what shipped |
 |---|---|
-| v1.2.1 | the tab you watch is the tab being driven: attach and follow prefer the run's registered tab, then the browser's real front tab, then the newest page with content; every page switch is recorded; tab titles use the chat face |
-| v1.2.0 | jobs, results, files and steering: durable checkpoints and evidence-linked results, native in-flight steering, chat files and owned-browser downloads, recipe authorization limits, bounded diagnostics |
-| v1.1.0 | threads that travel, one browser that does not become a knife fight: server-authoritative conversations, observer mode and take over, per-conversation runners and Chrome tab leases |
-
-**v1.2.0** — **jobs, results, files and steering**. Each conversation keeps a
-durable job: checkpoints in the status card, expandable constraints and
-decisions, and result cards with observed sources and chat files. Saved
-recipes can state success criteria and exact authorization limits; otherwise
-Operator prepares the action and asks. Corrections use Codex's native
-in-flight steering; other runtimes deliver at a tool boundary with an
-interrupt/resume fallback. The paperclip opens Chat files, including completed
-downloads from owned browser tabs. Diagnostics live behind Settings and record
-bounded metadata, not content. See `WORKSPACE.md` for storage, rollback and
-provider boundaries.
-
-**v1.1.0** — **threads that travel, one browser that does not become a knife
-fight**. Conversations are revisioned and server-authoritative across devices;
-one device controls while others observe and can deliberately take over. Every
-conversation keeps separate runner/runtime state and a stable Chrome tab lease.
-Agents still share the logged-in profile, cookies, 1Password, and content
-blocking, but their Playwright contexts expose only their owned tabs and popups.
-The finished launchpad Chats library is a centered desktop modal and a
-near-full-height phone sheet, with search, prompt previews, bot/surface/live
-state, inline rename, guarded delete, and reusable empty drafts. It lives in the
-browser top layer, so opening it cannot reflow the composer. Loop-breaker and
-completion-recheck nudges render as amber recovery notices instead of false red
-failures. The first 1.1 start uses a fresh conversation store; the run-history
-ledger is retained.
-
-**v1.0.40** — **one clear handoff + a finished header**. Human-handoff alerts
-use one clear headline and keep the specific takeover instruction in the body,
-without repeating it. The compact wordmark sets its close-coupled version in a
-self-hosted Urbanist subset; yellow SANDBOX and red COMPUTER badges both remain
-explicit and optically centered. The theme control now crossfades and rotates
-between its sun/moon states instead of snapping through `display:none`, with an
-instant reduced-motion path.
-
-**v1.0.39** — **alerts mean the human is needed**. Routine activity, failures,
-and completions stay in the cockpit. The optional alert channel receives a card
-only for an explicit `TAKE_CONTROL` handoff, including token-cap takeovers.
-
-**Public-demo hardening (2026-08-21)** — demo mode is an inert preview by
-default. Runtime state, frames, screenshots, tasks, steering, and dispatch stay
-behind an explicit unsafe local-test flag; screenshot responses are non-cacheable,
-browser mutations receive same-origin checks, and markdown attributes escape
-quote delimiters.
-
-**v1.0.37** — **correct on arrival + restart-safe runs**. The cockpit force-sends
-its visible stage geometry on first load and on re-entry, even when its saved
-dimensions look unchanged, so a stale browser target cannot leave a bottom
-letterbox until the user drags the divider. Deployments take an admission lock,
-refuse new work with an explicit message, and wait for active slots to finish.
-The reusable restart-guard helper lets a deployment or service stop boundary
-adopt the same drain semantics without hard-coding a particular service layout.
-
-**v1.0.36** — **conversation-scoped runners + bounded admission**. The old
-module-level runner becomes a registry keyed by conversation id. Every chat owns
-its transcript, resumed runtime sessions, working directory, state file, steer
-queue, stop target, telemetry, and history identity. Two different runtimes can
-work concurrently by default; a global cap and one-slot-per-runtime guard prevent
-box starvation and profile collisions. Rejections name the requested runtime and
-the conversation holding the slot.
-
-**v1.0.35** — **the transaction batch, and runs that tell you they finished**.
-1Password now fills saved logins, cards, addresses and identity items, with its
-load-time injection behaviour documented so a missing inline suggestion gets a
-reload before being mistaken for missing credentials. A purchase asks for the
-CVV and permission to submit in one authorization gate instead of interrupting
-the user twice, while personal data is resolved through an explicit manifest
-rather than improvised searching. Browser control gets more honest about the
-page underneath it: element refs beat stale pixel coordinates on moving pages,
-dialog/hover/download reachability is taught up front, a collapsed viewport can
-no longer calibrate a click, and the feed follows the tab the agent is actually
-driving. The loop-breaker learns the failure it kept missing: a rolling window
-catches *varied*-coordinate flailing, while `browser_snapshot` clears the window
-because re-grounding on the DOM is the intended recovery.
-
-A run can now travel without the cockpit open. An optional alerts channel gets
-one in-flight card that is edited as the trace grows, then a separate completion
-post with the final frame — edits do not buzz, posts do, so each run produces
-one live instrument panel and exactly one completion notification. Updates are
-driven by agent activity rather than a timer, run off the run thread, and cannot
-break the run. Restart requests made mid-turn defer until the terminal
-transition. **Conversations** land in the same release: chats are switchable,
-renamable and deletable, New chat returns to the welcome view, and an untitled
-chat adopts the first task's name. The effort auto-switch experiment is removed
-in favour of manual effort, and the release version is now one injected constant
-instead of three hand-synchronized template strings.
-
-**v1.0.33** — **the letterbox, root-caused**. Two long-standing viewport complaints turn out to be one mechanism failing in two places, both found in the viewport flight recorder rather than reasoned about. **Re-entry:** returning to a backgrounded cockpit tab fires `visibilitychange`, not `resize`, so nothing re-beaconed the stage size — and the remote target does drift while you are away, because a force-desktop on navigation re-applies the stored target, which before any beacon has landed is `WIDTHx0` (auto height = the window's native height); `object-fit: contain` renders that as a letterbox. Re-entry now resyncs, and clears the send's no-op guard first — the stage size is normally *unchanged* across the away period, which is exactly why the old code swallowed the re-send. **Collapse:** the repair for a collapsed layout viewport required N *consecutive* gate misses, and any healthy read zeroed the counter — so a viewport flipping between healthy and collapsed (ten such flips in one recorded session) never reached the threshold, and the captured frame kept changing size under the viewer. The collapsed band now scores instead of counting: a collapsed read outweighs a healthy one, so a flip-flop converges on a repair while a lone navigation transient still decays to nothing and never reflows the real window. Also: the version line under the wordmark moves to the chat face.
-
-<details>
-<summary><b>Earlier 1.0.x releases</b> (v1.0.0 – v1.0.32)</summary>
-
-**v1.0.32** — **the light-mode siege + a renderer that survives malformed model output**. A full contrast pass lands light mode for real: the missing surface token that rendered user bubbles dark-on-dark, a darkened muted text tier, the live trace verb re-set in the reading face, a truer attention-blinker yellow, scrollbars that follow the theme via `color-scheme`, and the fullscreen canvas finally following the theme instead of framing light mode in black. The chat renderer grows resilience for malformed model output: `+---+` ASCII grids render as real tables even *outside* code fences (some models stutter their fences and dump grids into prose), empty fences render nothing, and an unterminated trailing fence renders as text instead of swallowing the rest of the message. Frames net the full stage width now — the vertical scrollbar's ~15px viewport shave is measured in device units and compensated in the emulation override (the persistent left/right pillarbox) — and the emulated capture clips to the page's actual laid-out body, so body-min-width sites under a profile page zoom keep their right edge. The composer can't be mangled by deleting a multi-line draft in one go (inline grow styles reset outright — iPad Safari outlives the CSS clamp), and the model picker row is pinned to the painted input height so a three-line draft can't spill onto it. Style/template deploys are restart-free (template hot-reload) — every restart used to blank the live feed to a placeholder for a few seconds, which read as random black screens.
-
-**v1.0.31** — **bots can talk in tables + the shared viewport learns whose aspect it is**. Chat markdown grows real pipe-table rendering — bordered, rounded corners, sideways-scrolling when a table overflows the rail, host-page table styling neutralized inside bubbles — and tabular code fences (ASCII `+---+` art, box-drawing characters) render unwrapped with horizontal scroll while prose code keeps word-wrapping. The chat scroller tops out in an 18px fade so bubbles melt out under the status card instead of hard-clipping. Three viewport bugs die at the root: the per-navigation clear+apply pulse (force-desktop now overwrites stale metrics instead of clearing first — the visible resize strobe on display-scaled hosts), the letterbox chin (captures clip to whichever viewport actually rendered the frame — the CSS layout viewport under emulation, the device viewport native, detected per frame), and viewport ownership (the cockpit sends a per-tab client id, so a backgrounded phone tab can no longer re-aspect the shared browser out from under the active desktop viewer). Light mode reclaims the splash-ring hover card and the wordmark hover cue.
-
-**v1.0.30** — **the About card, the mobile refactor, and geometric state marks**. Clicking the splash status ring opens an About card — logo, wordmark, and version on one baseline, rights line, brand foot — animated open/close with a backdrop that no longer clicks through to the splash. The phone cockpit gets its real refactor: the splash is a fixed full-viewport takeover above the sheet (no more painting under it), the ring/theme/close controls pinned as one top row, the hero dead-centered until a pill tap animates it up, and saved-task cards hidden on entry until summoned. The chat's finished-state ✓/✕/⏹ become geometric masked glyphs matched to the flat UI, saved-task examples grow by six per category (every card on a unique site), resumed threads deliver their boot context exactly once, and web pages stay in dark mode through a run instead of strobing light.
-
-**v1.0.29** — **the canonical Operator mark: favicon + animated splash logo**. The PWA/tab icon becomes the Operator mark itself, generated reproducibly rather than hand-authored. The same mark lands on the launchpad as a status ring: a green arc sweeps while the feed connects, then closes into a full ring — the loader is the logo assembling, not a spinner that gets swapped for one — and thereafter the ring is a health readout: amber while connecting or hung, pulsing red when the browser backend is down, all driven off the cockpit's existing state machine. Hovering it plays a greet. The chat's per-task spinner becomes the mark too — a halted spin: a fast 360°, an inhale-exhale hold, another full turn — with its viewBox cropped to the glyph's own bounds and the box sized in em of the verb beside it, so it holds proportion at every chat scale. The status card's ring runs the same language. A pivot bug dies with it: a px `transform-origin` on an SVG child resolves against the viewport, not the element, so the mark orbited a corner and swung out of frame every turn.
-
-**v1.0.28** — **native `<select>` dropdowns work again + a run of interface polish**. A click on a native `<select>` used to open the OS-drawn popup, whose option list lives outside the page — so the CDP-dispatched option click landed on nothing and the value never changed (a regression from moving clicks to raw input events for a connection-stability fix). Now a click on a select renders an in-page, clickable option overlay the input pipeline can actually hit, only for selects, leaving every other click untouched. Alongside it: the chat, status card, disclaimer, saved-tasks heading, and input placeholder move to the reading typeface while the step-trace verbs stay in the UI sans; the model picker sizes to its selected name and re-measures on zoom so the name never clips; the send button holds the input's bottom-right at a stable size as the draft grows, with even space above and below the placeholder; a scroll trap where the cursor landing on a code block froze the chat is gone (each block forwards wheel and touch scroll to the log); and the History menu item gets a stroked clock icon.
-
-**v1.0.27** — **minimized status card shows the live action + steer no longer leaves an orphan**. Collapse the status pill during a run and the current action's emoji now rides beside the spinner — the at-a-glance "what's it doing" the hidden label used to carry — animated the same way the expanded card cycles it. Barge-in steering also stops emitting a stray "Worked for 1s" card next to the real "Steered" one: the guard that swallows the killed run's trailing state now keys on the steer flag itself, which clears only when the replacement run actually starts, instead of a fixed timer that raced. Trace polish: the repeat-count badge on coalesced actions shrinks and drops to the sans face, and the inline coordinate detail beside a tool call matches it.
-
-**v1.0.26** — **flash-free splash boot + the agent drives the browser you're watching**. The welcome splash now ships pre-collapsed in the markup itself, so a page refresh paints the calm wordmark-and-composer assembly directly instead of flashing the category tabs and card grid for the beat before the post-paint JS collapse landed. And a new cockpit contract kills the invisible-browsing failure mode: launch adapters set `OPERATOR_REQUIRE_CDP=1`, so when the feed's Chrome is unreachable the Playwright MCP fails loudly instead of silently falling back to a headless browser the live view never shows — the agent reports the browser down, which is the truth. The sandbox desktop also moves from XGA to a compact 960×768 (5:4) viewport that fits tall and high-zoom cockpit layouts better while keeping the coordinate scale the model's click grounding is calibrated for.
-
-**v1.0.25** — **restored-session wiring + composer auto-resize**. The launchpad lifecycle separates into wiring, rendering, and visibility layers: control wiring always runs, so a device restoring a cached conversation boots a live cockpit with a working HOME/reopen path instead of a painted, inert splash (the old nonempty-log guard returned before any listeners attached; init failures were also swallowed by blind catches — they surface on the console now). Both composers auto-resize like a chat, including a scale-aware pill on coarse-pointer WebKit that grows per painted line to a ~9-line cap before scrolling. Polish: the trash lands on the solid splash, category pills gain clearance from their scroll row's clip edge, fullscreen panel margins tighten, and the schedule picker's empty state reads "None".
-
-**v1.0.23** — **splash, viewport, and composer polish**. Separate top-right theme and close controls return, steering hints hide while the splash owns the screen, and light mode replaces gray blocks with white surfaces and softer card borders. The splash paints before session state restores, launchpad controls initialize independently from model discovery (a slow backend can't leave cards, pills, or close inert), click-away collapse uses a compact 24px halo around the card block, and both composers expand through useful multiline drafts before scrolling. Asset cache revisions are independent from the displayed release so long-lived tabs can't retain stale styling.
-
-**v1.0.22** — **viewport recovery + launchpad polish**. Browser targets retain a persistent desktop-metrics session, switched tabs reassert it, and capture self-repairs collapsed viewports instead of rendering a blank or mobile-width frame. The launchpad gets quieter crossfades, stable search/refresh/add ordering, clearer Browse/Food/Local/Shop/Travel/Research/Media categories, and a Saved source with a minimal empty state.
-
-**v1.0.21** — **true homepage state**. The fresh-session splash owns the full viewport with no chat rail, resize gutter, site header, browser chrome, or empty-cockpit escape hatch; the first submitted task reveals the complete interface in one transition.
-
-**v1.0.20** — **the real-desktop input boundary, fixed for good**. WSL-interoped PowerShell can *capture* the interactive session but Windows silently denies its window-station *input* writes (`SetCursorPos` returns false — clicks vanished without an error). Input now crosses a per-user `InteractiveToken` Task Scheduler broker (`computer-use/install-win-input-broker.ps1` — no elevation, no service), rejected actions fail loudly instead of silently, and desktop-real dispatch pre-flights both capture and broker health. The automation Chrome learns the same trick: launched via an interactive scheduled task, so a watchdog relaunch lands on the real desktop instead of a session-0 void where the window clamps to a 1024×768 virtual display and single-instancing poisons every later manual open. Plus: the demo-badge regex accepts bare version strings (a hardcoded `v` prefix silently ate the " demo" suffix), chat input and placeholder re-proportioned to the model picker, saved-task card titles get a smaller face and a longer run before the ellipsis.
-
-**v1.0.19** — **viewport geometry + browser chrome**. Scrolled CDP captures now follow the live viewport instead of recording the blank document region above it (the "giant white band" on any scrolled page), the demo browser returns to a landscape frame, touch scrolling follows touchscreen convention without native stage overscroll, and the URL brow regains its full-height proportions.
-
-**v1.0.0** — **full hands-off computer-use — perception, game_macro, desktop surfaces**. This fulfills the `v1.0.0` promise: the agent can now drive **three surfaces** — the logged-in browser (as before), an **isolated sandbox desktop** (Xvfb — nothing outside it can be touched), and the **real desktop** (gated: never the default, needs an explicit per-session confirm, panic-**STOP** always on screen). Switch from a popover on the brand mark; the live feed follows whichever surface is active, mid-session, no reconnect. **Local perception** (`vision/`): a `perceive` tool grounds the agent in labeled on-screen targets without a single extra model call — template + colour-blob matching, OCR text extraction, per-game region maps (Lichess, OpenRSC shipped), and an optional coordinate grid or region-crop overlay for when raw pixels are still the fastest read. **game_macro planner/controller split** (`control/`): instead of one LLM round-trip per click, the model emits a multi-step macro once — click-by-target-label, waits on local conditions, repeats — and a local controller executes and verifies it at machine speed with **zero mid-macro model calls**, bailing back to the planner only on completion or genuine surprise. **Trace integration**: every macro op and perception call streams into the same live action trace as browser tool calls, so a desktop run reads exactly like a browser one — thinking interleaved with what actually happened on screen.
-
-
-**v1.0.18** — **iOS keyboard geometry**. Visual-viewport tracking pins the input sheet above the software keyboard, removing the per-keystroke caret-pan fight.
-
-**v1.0.17** — **runtime + mobile reliability**. First-turn watchdog birth race fixed, cold-state polling stops the signal-lost strobe, Codex MCP environment compatibility restored, and the mobile sheet gains a feed-fit detent.
-
-**v1.0.16** — **the fix release closing the 1.0.x line**. Demo/prod store isolation (a demo visitor's mid-run steer could reach a live production run — found in review, fixed at the launch layer with code backstops), Win-key hotkeys via `keybd_event` (SendKeys silently dropped the Win modifier — "switch virtual desktop" sent Ctrl+Right into the void), sandbox latency back to browser-level (a stale X lock silently wedged container restarts; the boot script self-heals now), the trash button pushes the cleared session (the server used to resurrect the chat), a smooth Finish-up hand-back flow, the surface chip sheds size on narrow rails instead of colliding with the mode toggle, red-✕/green-✓ consent pills, and the desktop taskbar auto-minimizes to icons when idle.
-
-**v1.0.15** — **run economics + trace replay**. A live token meter on the working card (the ledger's burn numbers while the run burns), and History rows expand on click into the full role-tagged trace. A run queue was deliberately *not* built: the single-flight runner is a safety property, and mid-run steering already answers "message while busy".
-
-**v1.0.14** — **the JS extraction + PWA**. The ~3,600-line inline cockpit script became `static/js/operator.js` — extracted mechanically (scripted cut with abort-on-surprise guards), endpoints injected via a tiny inline config so the client file is plain JS: cacheable, lintable, `node --check`-able. Plus install-to-home-screen: a web manifest with relative scope (works under any mount path), generated icons, standalone meta — the cockpit installs as an app on a tablet.
-
-**v1.0.13** — **task templates + re-run**. Saved-task prompts take `{{variables}}`, filled at dispatch — an unfilled run bounces with the missing names, and Go loads the prompt into the composer with the first placeholder selected. Scheduled tasks refuse variables at save (nobody is there to fill them when cron fires). History rows get ↻ run-again carrying the row's own agent/model/surface, and the real desktop still demands its consent flow.
-
-**v1.0.12** — **mid-run steering**. A message sent during a live run now *reaches the agent* instead of killing it. Two delivery seams: a PostToolUse hook injects the message right after the agent's next tool call (mid-loop, via resume-safe project settings), and anything unconsumed becomes one more resumed turn when the process exits — so delivery is guaranteed on every runtime. The composer soft-steers with queued→delivered feedback; Stop stays the hard redirect.
-
-**v1.0.11** — **one shared session + the flight recorder**. The cockpit chat/mode/pickers live server-side now — open the cockpit on another device and the conversation is just there. And every finished run writes one row to a SQLite ledger (who ran what, where, how it ended, token spend, the full trace) surfaced in a History popover. The real-desktop dispatch pre-flights the screen and refuses a locked console instead of clicking into a void.
-
-**v1.0.10** — **the client harness + feed truth**. A headless-Chromium page harness now loads the REAL cockpit page and fails on any `pageerror` — the class of client-side init crash that server tests can't see (and it has caught real bugs every release since). Placeholder frames no longer count as live signal (kills a reconnect word-flap), the streamer's browser driver is stopped on every exit path with relaunch backoff (an orphaned-driver leak), and finished runs sweep any leftover viewport emulation off the browser.
-
-**v1.0.9** — **the runner decomposed**. `operator_agent.py` (2,450 lines) is now a 1,250-line state machine plus focused modules: per-runtime **launch adapters** (`operator_runtimes.py` — each owns its argv + MCP-config write, pinned by exact-argv tests and byte-parity prompt fixtures), the **Gemini trajectory subsystem** quarantined into `operator_agy.py` (agy emits no event stream — the live trace is reverse-engineered from its on-disk trajectory; the extraction is proven by fixture replay), and a **hardened stream parser**: truncated JSON, non-dict events, `content: null`, string-typed usage blocks — none of it can kill the reader thread and wedge a run anymore.
-
-**v1.0.8** — **adaptive frame tier + a snappier feed**. The feed takes `?tier=lo|hi`: small screens and Save-Data connections get downscaled, harder-compressed frames (~35% of the bytes on a busy page — measured, not vibes) while desktop keeps full quality; the sandbox stream drops to a leaner ffmpeg rate on `lo`. A cockpit input action now **wakes the capture loop immediately**, so the click's result paints within a frame instead of up to a full interval later (idle cadence unchanged). Under the hood: the prompt prose (~28KB of personas + directives) moved to `operator_prompts.py` with **byte-identical** output proven by pre-refactor fixtures, trace labeling moved to `operator_trace.py`, and a real bug died: the cron matcher ANDed day-of-month with day-of-week, so `0 9 1 * 1` ("the 1st, or any Monday") almost never fired — standard cron ORs them; now it does too.
-
-**v1.0.7** — **the run state machine goes correctness-first**. Four confirmed races fixed: the status poll iterating `messages` while the run thread appends (intermittent 500s under any active run — reads now copy under the lock); the stall watchdog SIGTERMing a healthy run in the inter-turn completion-gate gap; a user Stop during that gap being silently swallowed by the follow-up turn's state reset (a separate cancel flag that only a new dispatch clears); and terminal-reason races (token-cap vs stall vs stop vs clean-exit) resolved by one deterministic priority, so a run can never end mislabeled "done" when it was actually stopped.
-
-**v1.0.6** — **the launchpad grows up**. **Search** across saved tasks and examples (always-on magnifier next to refresh, AND-across-words over name/prompt/sites, Escape to clear); the card grid **auto-cycles every 15s** with a smooth cross-fade (pauses on hover, while searching, and when the tab is backgrounded; honors reduced-motion); **12 new example tasks** on fresh services, wired into the Save-task suggestions too.
-
-**v1.0.4–1.0.5** — **reliability stretch + model refresh**. A **server-side stall watchdog** (soft "stalled" signal → hard auto-stop with the reason in the trace) plus a runtime-agnostic **repeat-action loop-breaker** (N identical actions → a one-shot warning + a next-turn corrective nudge); a **completion gate** — a clean exit without recent visual evidence, or one that reads like a bail, gets exactly one verify/replan follow-up turn; **auto-look on failed clicks** (a zoomed crop + OCR text with coordinates lands in the same tool result, so the model re-aims instead of re-guessing); the **self-clocking frame pump** (fetch → render → fetch: a slow client can never queue behind the feed, killing the progressive iPad lag); launchpad example cards with tap-to-load; GPT **5.6 Sol/Terra/Luna** in the picker with per-tier effort ladders.
-
-**v1.0.3** — **the sandbox becomes a usable computer**. **File transfer**: a Transfer control on the desktop taskbar sends files into the container's `~/Downloads` and downloads anything the agent saves to `Downloads` / `Desktop` / `Documents` (whitelisted dirs only, traversal-proof path gate, 200MB cap, disabled on shared demo instances). **Persistent home**: `/home/opuser` now lives on a named Docker volume, so an image upgrade keeps your files — only the two-tap Delete factory-resets (it removes the volume too). **A real app set**: LibreOffice Writer/Calc, PDF viewer (Atril), archive manager, image viewer, calculator, nano, plus `curl`/`wget`/`git`/`unzip`/`python3` in the terminal. The agent is told where the exchange dirs are, so "save the report where I can grab it" just works.
-
-**v1.0.2** — **the sandbox looks and feels like a computer**. The container desktop is now a **full XFCE4 session** (Greybird theme, app menu, window-list panel, wallpaper, Thunar/Mousepad/Ristretto/galculator) instead of a bare openbox + tint2 shell. And the feed/input latency got attacked at the root: the live feed is now **one long-lived ffmpeg MJPEG pipe** out of the container (~7–8 fps JPEG) instead of a scrot + two `docker exec`s per frame (~1 fps of heavy PNGs), and manual-steer input goes down **one persistent shell pipe** with an ack handshake instead of a fresh `docker exec` per action — warm steer round-trips dropped from ~130–210ms to **~5ms**. (Older images without ffmpeg fall back to the scrot path automatically.)
-
-**v1.0.1** — **the sandbox grows up: a real Docker desktop, manual steer, and driver parity**. The sandbox surface is now a **persistent Docker container** (Xvfb → openbox → taskbar → Chromium already open at boot) instead of a host Xvfb — nothing outside the container can be touched, it survives restarts, and only an explicit Delete destroys it (the feed auto-provisions a fresh one after). It runs at **1024×768 (XGA)** — the resolution vision-model click grounding is calibrated around — with the **mouse pointer drawn in every frame**, so the agent can *see* where its cursor landed, measure a miss, and correct it instead of re-guessing (plus click-precision and date-picker directives that encode exactly that tactic). One **virtual desktop only**: stock openbox ships four, and a stray wheel-scroll on the root window silently switched — every open app "vanished" mid-run. **Desktop taskbar**: on desktop surfaces the browser URL bar collapses into a taskbar — app launcher (Chromium / Terminal / Files), the game-map picker's new home, container Restart, and a two-tap Delete. **Manual steer on desktop surfaces**: full manual interaction — click/double/triple, **right-click** (ported to the browser surface too, via CDP), drag, scroll, typing and key chords, and **live hover streaming** (move your pointer over the feed and the container's cursor tracks it). **Driver parity, pulled forward from the roadmap**: the operator-control MCP now wires itself into the GPT (Codex) and Gemini (Antigravity) runtimes at dispatch, so desktop surfaces and `game_macro` are no longer Claude-only. **Activity tab-follow**: the live view follows the tab the agent is *driving* (URL-change detection, not visibility polling — CDP-driven tabs never report visible), gated on a live run so it can't steal focus while a human steers. **Clean desktop trace labels**: `computer`/`perceive`/`game_macro` calls read like browser ones — "Clicking (512, 384)", "Reading the screen", "Running macro · 4 steps". **Launchpad polish**: example task cards on fresh installs; **Go is the only launch trigger** (tapping elsewhere on a card is inert); X-only dismiss with a real touch-size target; overlay scroll no longer leaks to the page on iOS. **Inline screenshots**: agent-posted screenshots from any runtime render as image cards in the chat with a lightbox zoom (file-path links from non-Claude runtimes included), and chat code blocks word-wrap instead of sideways-scrolling. **One-command onboarding**: `./start.sh` — venv, deps, the automation Chrome, runtime/surface detection, serve.
-
-</details>
-
-<details>
-<summary><b>Older releases</b> (v0.1 – v0.9)</summary>
-
-**v0.9.0** — **coordinate contract + hardening**: locked down the device-px→CSS-px scale conversion across the surface stack (unconverted clicks landed down-right on any DPR>1 window); `control/README.md` documents the planner/controller split + safety model; a launch-error path that used to die silently now surfaces a real error in the chat.
-
-**v0.8.0** — **the surface axis**: dispatch now takes a **surface** — `browser` / `desktop-sandbox` / `desktop-real` — routed through a dedicated **control MCP** (`computer` / `perceive` / `game_macro`). Surface picker in a popover off the brand mark (`desktop-real` needs a two-step confirm every session); the live feed switches source with the surface; a **panic STOP** arms a shared kill-switch file whenever a desktop run is live.
-
-**v0.7.2** — **stability + UI polish**: Chrome launches exactly once at server boot (no more duplicate-window races); scheduler fired-keys persisted to disk (atomic tmp+replace); vision lazy-imports `pytesseract`; stylesheet extracted to a served `static/operator.css`; 1Password autofill hint.
-
-**v0.7.1** — intermediate infra tag (folded into v0.7.2): scheduler persistence, CSS extraction, single-boot Chrome, lazy OCR, env-tunable token-cap governor.
-
-**v0.7.0** — **saved tasks + run governor**: OpenAI-Operator-style **saved tasks** — a **/ slash palette**, a Save-task modal (name / prompt / tools-and-sites pill field), and a **launchpad** of task cards on the idle stage. Optional 5-field **cron schedule** per task (background dispatcher, per-minute dedupe) feeds an unseen-runs counter. **Run governor**: per-run token caps that auto-stop a runaway vision task, plus an image governor that downscales oversized screenshots before ingest. Plus drag-to-reorder tabs, per-tab favicons, nav status dot.
-
-**v0.6.8** — **mobile polish + reliability**: model/effort pickers no longer clip long names; a dead run no longer wedges future dispatches (liveness verified, reset force-clears); Gemini live trace locks onto the run's own trajectory file; clicks go through a raw CDP input dispatch that can't wedge the frame lock; scroll-up fixed (steer endpoint was dropping wheel-delta). Sonnet → **Sonnet 5**.
-
-**v0.6.7** — **trace + streaming polish**: Gemini/Antigravity steps stream live; status card reads Ready/Connecting by live-browser state; gpt-oss harmony reasoning tokens stripped; agent sessions isolated from the interactive list.
-
-**v0.6.6** — **reliability + cost**: clean interrupt handling (Stop → "Interrupted", no phantom error); orphaned browser-tool process reaped; screenshot-economy directive + per-turn token guard; "Reconnecting" state instead of a false "Ready" over a dropped feed.
-
-**v0.6.5** — **inline agent screenshots**: agent-reported screenshots render in the chat (guarded `/operator/shot/<name>` route — basename-only, extension whitelist, traversal-safe); Gemini's Playwright MCP is stripped back out of the global config after each run; trace shows what a tool acted on (`Searching ("the terms")`, paths, commands).
-
-**v0.6.2** — **third driver**: a **Gemini** driver (Antigravity CLI, subscription-backed); coordinate gesture tools for canvas/board UIs; markdown + code-block backgrounds; assorted post-Stop / label fixes.
-
-**v0.5.9** — **smarter agent**: sharper computer-use prompt (act→wait→continue, vision fallback, scroll-to-find, never repeat a failed action, pixel-click cookie banners); prompt-injection guard (page content is data, not orders); stuck-loop backtracking; vision-click accuracy fixed in attach mode.
-
-**v0.5.8** — **control row + responsive header**: header controls on one aligned row; the chat rail drags narrow and the header sheds chrome via container queries (the wordmark smoothly collapses).
-
-**v0.5.7** — **Finish-up hand-back**: after a Take-control hand-off, a *Finish up* pill hands control back (optional note), resuming where the agent left off. Plus clickable trace URLs, back/forward no longer stalls the feed.
-
-**v0.5.6** — hand-off polish: no redundant done-line under a hand-off card; traffic-light status dot; held arrow keys scroll continuously; ×N repeat badge as a circular pill.
-
-**v0.5.5** — **Take control** hand-off: at a human-only gate (captcha, 2FA, password login, payment/confirm) the agent surfaces a *Take control* card instead of brute-forcing it. **Verify-after-action** (re-check the page after each consequential action), a running numbered plan, and coalesced duplicate trace lines.
-
-**v0.5.3** — native coordinate mouse tools (`browser_mouse_drag_xy` etc.) for board/canvas games; `browser_pdf_save`; held-key navigation; interrupt-steer closes the turn as "Steered after Xs".
-
-**v0.5.2** — interrupt-steer: a mid-run message stops the turn and redirects immediately (instead of queueing); the −/+ control scales the whole chat box.
-
-**v0.5.1** — fixed a JS temporal-dead-zone crash that halted page scripts on load (feed stuck "Connecting" while the server was fine); idle status shows the selected driver; no reply duplication on refresh.
-
-**v0.5.0** — runtime documented + generalized: generic `claude` + `gpt` drivers, both BYO-subscription; config via env; `.env.example` + Quickstart.
-
-**v0.4.1** — vendored a cross-platform Chrome harness (`browse/chrome-attach.sh` on macOS / Linux / Windows / WSL; `browse/playwright-mcp.sh` wires the Playwright MCP to it).
-
-**v0.4.0** — standalone app: `app.py` + base template + `requirements.txt`, so it runs on its own instead of needing a host Flask app.
-
-**v0.3.8** — major mobile + reliability pass: mobile bottom-sheet redesign (draggable peek/half/full over a full-screen browser); focus no longer zooms the viewport; screenshot-by-default-or-real-pixels agent vision; present-continuous status card; static-page frame-dedup (~0.5fps heartbeat) for battery/data.
-
-**v0.3.7** — scroll-through (wheel + iPad swipe); status-card minimize to a pill; red error ring; tighter code blocks.
-
-**v0.3.6** — per-message hover timestamps; edit/retry the last prompt; animated status subline; "Starting up…" on launch.
-
-**v0.3.5** — tab UI: close button, open/close animations, live view follows the agent into a new tab.
-
-**v0.3.4** — sliding MAN/AUTO segmented control (persists across refresh); restored the collapsible in-flight trace head.
-
-**v0.3.3** — agent cursor (smooth CDP-captured glide); browser zoom + back/forward chrome; URL bar Google-searches non-URL input.
-
-**v0.3.2** — manual-mode card redesign; convo dims rather than clears in MAN; mobile bottom-sheet chat; theme toggle.
-
-**v0.3.1** — trace fences commands + URLs only; stderr surfaces a specific failure reason; license/README split to this repo.
-
-**v0.3.0** — Operator version label; markdown fixed (fenced blocks, auto-linked URLs); trace step-count header.
-
-**v0.2.x** — drag-to-resize chat; mobile scroll + capped height; iOS focus-zoom fix; clicks on eval-disabled sites via CDP.
-
-**v0.2.0** — multi-driver on subscription auth; shared cross-bot transcript persisted across restarts; browser-first behavior.
-
-**v0.1.x** — feed hardening (flicker-free, wedge auto-recovery, SIGNAL-LOST overlay); status card; MAN/AUTO; per-action emoji trace.
-
-**v0.1.0** — initial live browser stream (CDP MJPEG) + manual steering.
-
-</details>
+| v1.2.7 | **pushed browser frames, adaptive 25 fps streaming and reliable Stop** — Chrome screencast push is the primary browser capture path with 25 fps High / 15 fps Medium / Low tiers and dynamic `Auto` scaling; Stop settles immediately and stays available while typing a follow-up draft; compact browser settings menu and warmer amber permission cards. |
+| v1.2.6 | **dependable connections and named failures** — Claude bots use their long-lived sign-in token, an expired sign-in is refused by name before dispatch, the connection budget ends at the first frame, and unrecorded run states stay unresolved. |
+| v1.2.5 | Trace token counts align with the step count; order-number copy controls have larger touch targets and visible success/failure feedback. |
+| v1.2.2 | **durable approvals and clearer results** — completed permission cards remain in history; result sources are deduplicated and observed order links are actionable; the status card has concise actions and input/output token counts. |
+| v1.2.1 | **the tab you watch is the tab being driven** — attach and follow prefer the run's registered tab, then Chrome's real front tab, then the newest page with content; busy enforcement fronts the owned tab only; every page switch is recorded; tab titles use the chat face. Carries the 1.2.0-labelled work on Operator MCP delegation, steering, chat library, results, composer drafts, tab reaping and per-run isolation. |
+| v1.2.0 | **jobs, results, files and steering** — durable checkpoints and evidence-linked results, native Codex steering, chat files and owned-browser downloads, recipe authorization limits, and bounded diagnostics. See [WORKSPACE.md](WORKSPACE.md) for provider and deployment boundaries. |
+| v1.1.0 | **threads that travel, one browser that does not become a knife fight** — conversations are server-authoritative, revisioned, and visible on every signed-in device. The launchpad owns a finished, responsive Chats library with search, prompt previews, bot/surface/live state, inline rename, guarded delete, and a reusable empty draft so repeated New chat taps do not leave blank debris. The modal lives in the browser top layer, so opening it cannot reflow the launchpad or knock the composer out of place. One device holds the editing lease at a time; another can watch live and deliberately take over without stale local state overwriting newer work. Concurrent conversations retain separate runners, transcripts, resumed model sessions, working directories, state files, and browser-tab leases behind the existing shared admission cap. Every agent sees only its own tab and any popup it opened even though all tabs live in the same logged-in Windows Chrome, and selecting a conversation foregrounds its tab for the human. Recovery nudges such as the loop breaker now render as calm amber notices instead of false red “Turn failed” errors. The Operator browser returns to an interactive Windows launch so its existing 1Password and AdBlock extensions load again. This release starts a fresh conversation store; run history remains intact. |
+| v1.0.40 | **one clear handoff + a finished header** — the alert headline now says “Operator needs your input,” while the specific takeover instruction appears once in the body instead of being duplicated. The compact wordmark now sets its close-coupled version in self-hosted Urbanist, the yellow SANDBOX and red COMPUTER surface badges both remain explicit and optically centered, and the three-stop theme control crossfades and rotates between its sun/moon marks instead of snapping through `display:none`. Reduced-motion users still get an instant state change. |
+| v1.0.39 | **alerts mean the human is needed** — routine Operator messages, actions, failures, and completions stay in the cockpit. `#alerts` receives one card only when Operator emits an explicit `TAKE_CONTROL` handoff (including a token-cap takeover), with the reason and latest frame attached. |
+| v1.0.38 | **one run, one alert** — the live Discord card still edits in place while Operator works and the completion still arrives as a new post so the phone buzzes, but a successful completion now removes its retired live card. Posting happens before cleanup, so a failed completion leaves the useful original card intact instead of deleting the only receipt. |
+| v1.0.37 | **correct on arrival + restart-safe runs** — a first-load/re-entry stage beacon force-reapplies CDP metrics even when the saved target dimensions already match, repairing the stale bottom letterbox a dead runner can leave without waiting for a divider drag. Host-app publishing drains Operator admission and refuses to restart through an active run; a systemd stop-boundary guard covers direct `systemctl restart` calls too, waiting for the live slot to finish while new dispatches receive an explicit deployment-in-progress refusal. |
+| v1.0.36 | **conversation-scoped runners + bounded admission** — each cockpit conversation owns its runner, transcript, resumed bot sessions, steer/stop channel, state file, and working directory. Two different bots can run concurrently by default; a shared global cap and one-slot-per-bot guard prevent one conversation from starving or colliding with another. Dispatch rejection names the requested bot and the conversation holding the blocking slot, stop and telemetry target only the selected conversation, and history records the conversation id. The original single-conversation path keeps its legacy state and behavior. |
+| v1.0.35 | **the transaction batch, and runs that tell you they finished** — the pieces a real purchase needs land together: the 1Password extension fills cards and IDs (load-time injection noted), the CVV request and the go-ahead to submit are asked for as ONE authorisation rather than two separate favours, and personal data is treated as a manifest instead of something to hunt for. Browsing gets more honest about the page underneath it: element refs beat stale pixel coordinates on a moving page, dialog/hover/download reachability is taught rather than discovered by failing, a collapsed viewport can no longer calibrate a click, and the feed streams the tab the agent is actually working on. The loop-breaker learns the failure it kept missing — a rolling window catches VARIED-coordinate flailing (a booking run burned ~25 calls clicking different wrong spots, resetting the exact-repeat streak every time), while a `browser_snapshot` clears the window, because re-grounding on the DOM is the recovery the nudge asks for. Restarts requested mid-turn defer to the terminal transition. New surface: **an alerts channel that carries the run**. A run posts an in-flight card the moment it starts and EDITS it as the trace grows, so the phone shows what the agent is doing right now without opening the cockpit; when the run ends, that card retires to its final state and a separate completion ping lands as a new message with the final frame attached (edits don't notify, posts do — one card and exactly one buzz per run). Change is measured by what the agent DID, not by the clock, so a silent hour costs one edit rather than one per poll. Both are off unless `OPERATOR_PING_CHANNEL` names a channel, both run off the run thread, and neither can break a run by contract. Headings stay markdown and every readout line sits in a code block, so a ping reads as an instrument panel rather than as chat. This reverses the 2026-07-01 rejection: the objection was never the ping, it was the ping landing in a channel people talk in, which a dedicated alerts channel answers. Also: the effort auto-switcher is reverted and effort stays manual, the launchpad reports real browser state instead of the idle feed's, midnight-theme code wells go to true black, **conversations** land with it — the cockpit's one-and-only chat becomes a map of them, switchable/renamable/deletable from a Chats popover, New chat lands on the welcome view, and an untitled chat takes the name of the first task run in it; and the release version stops being typed into three templates and pinned in a test — one `OP_VERSION` constant, injected into every template the blueprint renders. |
+| v1.0.33 | **the letterbox, root-caused** — two long-standing viewport complaints turn out to be one mechanism failing in two places, both found in the viewport flight recorder rather than reasoned about. Re-entry: returning to a backgrounded cockpit tab fires visibilitychange, not resize, so nothing re-beaconed the stage size — and while away the remote target drifts, because a force-desktop on navigation re-applies the stored target, which before any beacon is `WIDTHx0` (auto height = the window's native height) and object-fit:contain shows that as a letterbox (recorder: `apply 1280x0`, eight minutes before the session's first beacon). Re-entry now resyncs, clearing the no-op guard first because the stage size is normally unchanged across the away period — the reason the old code swallowed the re-send. Collapse: the repair for a collapsed layout viewport required REPAIR_AFTER_MISSES *consecutive* gate misses, and a healthy read zeroed the counter — so a viewport FLIPPING between healthy and collapsed (recorder: ten `vp-walk 1024->651` in one session) never reached the threshold and the captured frame kept changing size under the viewer. The collapsed band now scores instead of counting: a collapsed read outweighs a healthy one, so a flip-flop converges on a repair while a lone navigation transient still decays to nothing and never reflows the real window. Also: the version line under the wordmark moves to DM Sans. |
+| v1.0.32 | **the light-mode papercut siege + a resilient renderer** — a full contrast pass lands non-flat light mode for real: the missing --bg-4 that rendered user bubbles dark-on-dark (flat-light masked it for weeks), a darkened muted tier (disclaimer, "Follow up", version line), the chat's live verb recolored to the muted shade (and re-set in DM Sans at 600/0.78rem after a full up-and-back tuning loop), a truer input-blinker yellow, theme-following scrollbars via color-scheme, and the fullscreen page canvas finally following the theme instead of framing light mode in black. The renderer grows resilience for malformed model output: +---+ ASCII grids render as real tables even OUTSIDE code fences (Flash stutters its fences — ```text immediately closed — dumping grids into prose), empty fences render nothing, and an unterminated trailing fence renders as text instead of swallowing the message. Viewport: frames net the FULL stage width (the vertical scrollbar's ~15px shave is measured in device units and compensated in the override — the persistent left/right pillarbox), and the emulated clip grows to the page's laid-out body so body-min-width sites (google.com under profile page zoom) keep their right edge. Composer: a multi-line draft deleted in one go can't leave the grown pill behind (inline styles reset outright — iPad Safari outlives the CSS clamp), and the model-picker row is pinned to the painted input height so a 3-line draft can't spill onto it. Ops: template hot-reload makes style deploys restart-free (every restart blanked the live feed to the placeholder — the "random black screens"), and fam gets its favicon cache-buster, an "Operator" tab title, and the restored tailnet serve mapping. |
+| v1.0.31 | **bots can talk in tables, and the shared viewport learns whose aspect it is** — chat markdown grows real pipe-table rendering (bordered, rounded, sideways-scrolling, host-site table chrome neutralized) and tabular code fences (ASCII +---+ art, box-drawing) render unwrapped with horizontal scroll while prose code keeps wrapping; the chat scroller tops out in an 18px fade so bubbles melt out under the status card instead of hard-clipping. Three viewport bugs die: the per-nav clear+apply pulse (force-desktop now overwrites stale metrics instead of clearing first — the host window strobe), the letterbox chin (captures now clip to the CSS layout viewport, which display-scale zoom renders 1:1 rather than canvas-filling), and viewport ownership (the cockpit finally sends a per-tab client id, so a backgrounded phone tab can no longer re-aspect the browser under the active desktop viewer). Light mode reclaims the splash-ring hover card and the wordmark hover cue. |
+| v1.0.30 | **the About card, the mobile refactor, and geometric state marks** — clicking the splash status ring opens an About card: logo + wordmark + version on one baseline, rights line, and an Operator · BaiCloud brand foot, animated open/close with a backdrop that no longer clicks through to the splash. The phone cockpit gets its real refactor: the splash is a fixed full-viewport takeover above the sheet (no more painting under it), with the ring/theme/X controls pinned as one top row, the hero dead-centered until a pill tap animates it up, card titles at desktop proportions, and saved-task cards hidden on entry until summoned. The chat's finished-state ✓/✕/⏹ become geometric masked glyphs matched to the flat UI, the trail spinner's em-vs-rem drift is re-anchored so alignment survives font scaling, saved-task examples grow by six per category (every card on a unique site), and gemma/gpt runs finally board with squad context — resumed threads deliver the boot prompt exactly once. Placeholders settle at weight 525, and web pages stay in dark mode through a run instead of strobing light. |
+| v1.0.29 | **canonical Operator mark: favicon + animated splash logo** — the icon stack finally carries the real logo. The PWA/tab icon was a generic cursor arrow; it becomes the Operator mark itself (the two interlocking hooks from the BaiCloud services dropdown) set in the host-app favicon's ring stack, generated reproducibly by `tools/gen_icons.py` rather than hand-authored. The same mark lands on the launchpad as a STATUS RING in the top-right control row (sized and spaced to the theme toggle and the X, not stacked over the wordmark): a green arc sweeps it while the feed connects, then closes into a full ring — the loader IS the logo assembling, not a spinner that gets swapped for one — and thereafter the ring is a health readout, going amber while connecting or hung and pulsing red when the browser backend is down, all driven off the cockpit's existing `data-state` rather than new plumbing. Hovering it plays a greet: the mark swells as it turns a full 360deg and relaxes back to rest. It settles on the first resolved feed state (not `op-ready`, which flips ~32ms after parse and would skip the animation entirely), with a min-spin floor so a fast connect can't flicker and a 4s ceiling so a dead backend can't spin forever; `prefers-reduced-motion` gets the finished mark and no spin. The chat's per-task spinner becomes the mark too: the conic-gradient arc (and the z-order bug where its track swallowed it into a bare gray ring) is replaced by the logo doing a halted spin — a fast 360deg sweep, then a hold during which the mark inhales and exhales, then a second full turn (720deg per cycle). This one wears NO outer ring (that belongs to the splash badge) and its viewBox is cropped to the hooks' own bounds so the art fills the icon instead of floating in the ring's dead margin, with the box sized in em of the verb beside it — a fixed 14px ran 1.39x the text height at the smallest chat scale and 0.84x at the largest. Each pause reads as deliberate rather than stalled. The same halt-and-breathe now runs INSIDE the status card's ring too, so the cockpit's two live indicators speak one language (the ring itself is untouched and keeps every state colour). A pivot bug is fixed with it: the hooks carried `transform-origin: 12px 12px`, but a px origin on an SVG child resolves against the viewport rather than user units — against the cropped viewBox that landed at 80% of the box instead of the glyph's centre, so the mark orbited a corner and swung out of frame for a split second every turn; the finished ✓/✕/⏹ still owns the box at busy=0. Also: the host-app favicon's white outer ring was a 7-unit band against the green's 6, rendering ~15% heavy at every real size — the radii now step by a uniform 6, asserted as a step so it can't silently drift back. |
+| v1.0.28 | **DM Sans sweep, native-select overlay, chat-error hygiene, installed-app fullscreen** (folds the unreleased 1.0.27 batch) — the cockpit's text voice moves to DM Sans: chat, composer, status card, disclaimers, history, and the Jump pill (un-bolded with the new face), with the model picker's dynamic caret re-fitting on zoom, the send button bottom-pinned with even input padding, and the minimized status card centering its action emoji without clipping. Native `<select>` clicks render an in-page overlay instead of the OS popup the feed can't show. Chat-error hygiene: manual steering fires one silent action per gesture, and the network-failure catch ignored the silent flag — a disconnected browser now coalesces into a single ⚠-flagged "Action failed" line with a ×N counter instead of a message per wheel tick, and error step-lines actually render red (the muted `!important` base rule had been silently beating the err color). Also in the fold: code blocks no longer trap chat scroll (wheel + touch), finish-input carved out of the iOS 16px force-up, SVG history icon, trace tweaks, and the steer orphan fix. The 1.0.14 PWA becomes a real fullscreen app on iPhone/iPad: an operator-only `viewport-fit=cover` override takes the installed app edge-to-edge, with standalone-scoped safe-area padding clearing the status bar, home indicator, and landscape sensor housing — browser-tab layout untouched. |
+| v1.0.26 | **flash-free splash boot + the agent drives the browser you're watching** — the splash ships pre-collapsed in the markup, so a refresh paints the calm wordmark-and-composer assembly directly instead of flashing the category tabs and card grid for the beat before the post-paint JS collapse landed. The wrong-browser regression is fixed at both layers: the bot-Chrome split (v1.0.20 era) had flipped the shared Playwright launcher's default to the bots' :9224 browser and the operator runtimes never pinned themselves back, so the agent browsed a Chrome the cockpit feed never shows — all three runtime adapters now pin `BROWSE_CHROME_PORT=9222` (claude via MCP-entry env, codex via per-server config overrides through its scrubbed env, agy via inherited process env), and `OPERATOR_REQUIRE_CDP=1` makes an unreachable cockpit Chrome fail the MCP loudly instead of silently browsing a headless fallback nobody can see. Underneath both: Windows interop (powershell/cmd/schtasks) fails from a Linux-filesystem cwd on this host, and every MCP launches from `~/.cache/computer-use` — so the CDP probe always reported Chrome "down" and the self-heal died before launching; all Windows-binary calls now hop to `/mnt/c` first, which un-breaks Chrome attach for every browse consumer, squad bots included. |
+| v1.0.25 | **restored-session wiring + composer auto-resize** — the launchpad lifecycle separates into wiring, rendering, and visibility layers: control wiring always runs, so a device restoring a cached conversation boots a live cockpit with a working HOME/reopen path instead of a painted, inert splash (the nonempty-log guard used to return before any listeners attached, skipping the saved-tasks fetch; init failures were also swallowed by blind catches — they surface on the console now). Both composers auto-resize like a chat: the splash gains a block-context scaled pill on coarse-pointer WebKit — computed 16px painted at the compact 11.2px, immune to the flex-shrink and centered-margin defeats that froze the 1.0.23 hack, overflow-clipped at a 22px radius so text and caret stay inside, growing per painted line to a ~9-line cap before scrolling. Polish: the trash can lands on the solid splash rather than the over-feed blur, the rail chatbox and save-task dialog controls are carved out of the coarse-pointer 16px force-up so typed text matches its placeholders at the compact scale, category pills gain clearance from their scroll row's clip edge, the splash composer line sits a hair higher, the URL bar slims toward the rail head, fullscreen panel margins tighten from 10px to 6px, and the schedule picker's empty state reads "None". |
+| v1.0.23 | **splash, viewport, and composer polish** — restores separate top-right theme and close controls, hides steering hints while the splash owns the screen, and replaces light-mode gray blocks with white surfaces and softer card borders. Operator now paints the splash before restoring session state, retains the original 10px fullscreen panel margin without zoom drift, and follows the visible browser stage without crossing the desktop layout floor. Launchpad controls initialize independently from model discovery, so a slow backend cannot leave cards, pills, or close inert. The launchpad uses a compact 24px click-away halo, clears category selection when collapsed, optically aligns its theme/close controls, and treats the full composer pill as a focus target without allowing empty placeholder selection. Both splash and rail composers expand and shrink through useful multiline drafts before scrolling, including compensation for iOS text scaling; the iOS URL field retains its compact browser typography. Asset cache revisions remain independent from the displayed release so long-lived tabs cannot retain stale styling. |
+| v1.0.22 | **viewport recovery + launchpad polish** — browser targets retain a persistent desktop-metrics session, switched tabs reassert it, and capture self-repairs collapsed viewports instead of rendering a blank/mobile-width frame. The launchpad gets quieter crossfades, smaller composer type, stable search/refresh/add ordering, a centered SVG add glyph, no cursor flash through the splash, clearer Browse/Food/Local/Shop/Travel/Research/Media categories, and a Saved source that exists only when tasks do. Operator remains full-bleed while the shared site header keeps its normal centered gutter. The unavailable public-demo notice remains in place. |
+| v1.0.21 | **true homepage state** — the fresh-session splash owns the full viewport with no chat rail, resize gutter, site header, browser chrome, or empty-cockpit escape hatch; the first submitted task reveals the complete interface in one transition. The oversized Plus Jakarta Sans wordmark keeps its prior weight while opening tracking from `-.06em` to `-.03em` for cleaner H1 forms. |
+| v1.0.20 | **real-desktop input boundary + bot-Chrome lifecycle** — WSL-interoped PowerShell can capture Session 1 but Windows denies its window-station input writes (`SetCursorPos=false`); input now crosses a per-user `InteractiveToken` Task Scheduler broker, rejected actions fail loudly, and desktop-real dispatch pre-flights both capture and broker health. The bot Chrome itself launches through the same scheduler pattern: watchdog self-heals land in the interactive session instead of a session-0 void (where the window clamps to a 1024×768 virtual display and poisons later manual opens), with a single launch-flags source shared by the startup entry, the manual opener, and the self-heal. Both Operator browsers standardize on a 1500×1360 window; the demo-badge regex accepts bare version strings (the hardcoded `v` silently ate the " demo" suffix); chat input + placeholder proportioned to the model picker; saved-task card titles get a smaller face and a longer run before the ellipsis |
+| v1.0.19 | **viewport geometry + browser chrome** — scrolled CDP captures follow the live viewport instead of recording the blank document region above it, the demo browser returns to a landscape frame, touch scrolling follows touchscreen convention without native stage overscroll, and the URL brow regains its full-height proportions |
+| v1.0.18 | **iOS keyboard geometry** — visual-viewport tracking lifts the fixed sheet above Safari's software keyboard, removing the per-keystroke caret-pan fight that remained after the JavaScript typing optimizations |
+| v1.0.17 | **runtime + mobile reliability** — first-turn watchdog birth race fixed, cold-state polling stops the signal-lost strobe, Codex MCP environment/exec-bridge compatibility restored, iPhone typing work reduced, and the mobile sheet gains a feed-fit detent |
+| v1.0.16 | **the fix release closing the 1.0.x line** — demo/prod store isolation (a demo visitor's steer could reach a live production run — review-found, launch-scoped + `.demo` code backstops), Win-key hotkeys via `keybd_event` (SendKeys silently dropped the Win modifier, so "switch virtual desktop" sent Ctrl+Right into the void), sandbox latency back to browser-level (stale X lock wedged container restarts; boot script self-heals now), trash pushes the cleared session (the server used to resurrect the chat), smooth Finish-up flow, surface-chip shed ladder on narrow rails, consent pills (red ✕ / green ✓), taskbar auto-minimize |
+| v1.0.15 | **run economics + trace replay** — live token meter on the working card (the ledger's burn numbers while the run burns; cache reads excluded as ever), History rows expand on click into the full role-tagged trace (lazy-fetched, toggling). Run queue deliberately not built: the single-flight runner is a safety property and 1.0.12 steering already answers "message while busy" |
+| v1.0.14 | **JS extraction + PWA** — the ~3,600-line inline cockpit script becomes `static/js/operator.js` (endpoints injected via a tiny inline `window.OP_URLS` config — the only Jinja the client needs; cacheable, lintable, `node --check`-able), plus install-to-home-screen: web manifest (relative start_url/scope so it works under both mount paths), 192/512/180 icons, apple standalone meta |
+| v1.0.13 | **task templates + re-run** — saved-task prompts take `{{variables}}` (filled at dispatch; unfilled runs bounce 400 with the missing names; Go loads the prompt into the composer with the first placeholder selected; scheduled×variables refused at save), History rows get ↻ run-again with the row's own bot/model/effort/surface (desktop-real still demands its consent flow), launchpad cards grow a variables chip |
+| v1.0.12 | **mid-run steering** — a message sent during a live run reaches the agent instead of killing it: PostToolUse steer hook injects it right after the agent's next tool call (claude runtime, mid-loop; project-settings wiring so `--resume` survives), leftovers become one more resumed turn at the exit seam (every runtime), composer soft-steers with queued→delivered feedback, Stop (■) stays the hard redirect |
+| v1.0.11 | **one shared session + flight recorder** — server-side session (chat history follows you across devices; demo stays per-visitor), SQLite run ledger written at the terminal transition + History popover (who/where/how-it-ended/token spend), desktop-real dispatch pre-flight refuses a locked Windows console, sandbox/control/vision surfaces re-verified end-to-end |
+| v1.0.10 | **client harness + feed truth** — headless-Chromium page harness (pageerror watch, signal-state sampling), placeholder frames no longer count as signal (kills the Connecting↔Reconnecting flap), streamer driver stopped on every exit path + relaunch backoff (the orphaned-driver leak), emulation sweep on run end + "Fix stuck zoom", launchpad mobile collapse |
+| v1.0.9 | **runner decomposed** — `operator_runtimes.py` launch adapters (exact-argv tests), `operator_agy.py` trajectory quarantine (fixture-replay parity), `_consume`/`_consume_codex` hardened against malformed stream input |
+| v1.0.8 | **feed tiers + monolith relief** — `?tier=lo\|hi` adaptive frames (mobile ~35% of bytes), eager post-action grabs, `operator_trace.py` + `operator_prompts.py` extracted (byte-parity proven), shot-dirs single source, cron dom/dow OR fix |
+
+## Before v1.0.8
+
+### v1.0.7 — the run state machine, correctness-first
+
+Four confirmed races in the agent runner fixed: the status poll reading the
+message list while the run thread appends (intermittent 500s under load); the
+stall watchdog killing a healthy run during the inter-turn gap of a completion
+check; a Stop pressed in that same gap being silently swallowed; and racing
+terminal flags resolved by one deterministic priority — token-cap beats stall
+beats stop beats exit code — so a stopped run can never end mislabeled "done".
+
+### v1.0.4 – v1.0.6 — reliability + the launchpad
+
+- **Stall watchdog**: a run that stops making progress gets flagged softly in
+  the UI, then auto-stopped with the reason in the trace — but a quiet agent
+  that's genuinely working is never killed just for being silent.
+- **Loop-breaker**: the same action repeated with no effect trips a warning
+  and a corrective nudge on the next turn.
+- **Completion gate**: a run that ends without visual evidence of its outcome
+  (or sounding blocked) gets exactly one verify-or-replan follow-up turn.
+- **Auto-look on failed clicks**: a rejected click comes back with a zoomed
+  crop and OCR'd coordinates in the same tool result.
+- **Self-clocking frame pump**: the client fetches the next frame only after
+  the previous one decodes — latency stays bounded on any device, and the
+  feed can never fall progressively behind.
+- **Launchpad**: saved-task cards with search, auto-cycling pages, and
+  tap-to-load examples on the idle stage.
+
+### v1.0.1 – v1.0.3 — the sandbox becomes a real computer
+
+The isolated desktop went from a throwaway X server to a persistent Docker
+machine: full XFCE session, a real ffmpeg MJPEG feed, file transfer in and
+out of the container, and a home directory that survives restarts. Driver
+parity pulled forward: every supported agent runtime gets the desktop
+control tools, not just one.
+
+### v1.0.0 — GA: perception + macros
+
+The agent can *see* and *grind*: `perceive` finds targets by template,
+colour, and OCR against per-game maps with grid/crop grounding, and
+`game_macro` runs a planner/controller split — the model plans, a local
+controller executes and verifies each step by pixels, zero model calls
+mid-macro. Proven end-to-end on a live canvas game.
+
+### v0.9.0 — hardening
+
+Coordinate contracts documented in the tool descriptions (frame space vs
+screenshot space), launch errors surfaced instead of silently killing the
+run thread, service-environment fixes.
+
+### v0.8.0 — the surface axis
+
+One cockpit, three screens: the browser, an isolated sandbox desktop, and
+the real desktop. Surface picker in the header, server-side gating (the real
+desktop demands explicit confirmation, every session, no shortcuts), and a
+panic STOP overlaid on the feed.
+
+### v0.7.x — cockpit stability, saved tasks, run governor
+
+The foundation release line: a stable live feed, re-runnable saved tasks,
+and hard token caps so a runaway run stops itself instead of burning the
+subscription.

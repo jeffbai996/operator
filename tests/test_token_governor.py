@@ -167,3 +167,31 @@ def test_warn_still_fires_once_at_threshold(monkeypatch):
     r._note_token_usage(1_700_000)
     warns = [t for t in notice_texts(r) if "High token use" in t]
     assert len(warns) == 1
+
+
+def test_claude_meter_counts_fresh_input_and_cache_writes_and_deduplicates_segments():
+    """Cache reads stay out of the displayed input (they re-send the whole
+    context every step); cache writes are the context each step adds and
+    count, as does fresh input."""
+    import json
+    r = make_runner()
+    r._cumulative_out_tokens = 0
+    r._output_usage_seen = False
+    event = {'type': 'assistant', 'message': {'id': 'message-one', 'content': [], 'usage': {
+        'input_tokens': 14, 'cache_read_input_tokens': 12000,
+        'cache_creation_input_tokens': 4800, 'output_tokens': 173}}}
+    r._consume(json.dumps(event))
+    assert r.snapshot()['cumulative_in_tokens'] == 4814
+    assert r.snapshot()['cumulative_out_tokens'] == 173
+    r._consume(json.dumps(event))
+    assert r.snapshot()['cumulative_in_tokens'] == 4814
+    assert r.snapshot()['cumulative_out_tokens'] == 173
+    event['message']['usage']['output_tokens'] = 250
+    r._consume(json.dumps(event))
+    assert r.snapshot()['cumulative_out_tokens'] == 250
+    event['message'].update(id='message-two', usage={
+        'input_tokens': 11, 'cache_read_input_tokens': 18000, 'output_tokens': 150})
+    r._consume(json.dumps(event))
+    assert r.snapshot()['cumulative_in_tokens'] == 4825
+    assert r.snapshot()['cumulative_out_tokens'] == 400
+    assert r._cumulative_in_tokens == 25  # Preserve the existing governor basis.

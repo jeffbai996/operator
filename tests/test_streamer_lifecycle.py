@@ -46,7 +46,8 @@ class FakeSess:
         if method == "Page.captureScreenshot":
             return {"data": _JPEG_B64}
         if method == "Page.getLayoutMetrics":
-            return {"visualViewport": {"clientWidth": 1280, "clientHeight": 800}}
+            return {"layoutViewport": {"clientWidth": 1280, "clientHeight": 800},
+                    "visualViewport": {"clientWidth": 1280, "clientHeight": 800}}
         if method == "Page.addScriptToEvaluateOnNewDocument":
             return {"identifier": f"zoom-{len(self.sent)}"}
         return {}
@@ -167,6 +168,9 @@ def streamer(monkeypatch):
     # idle window and skews timing assertions. The probe isn't under test here.
     monkeypatch.setattr(OV, "CDP_URL", "http://127.0.0.1:9299")
     monkeypatch.setattr(OV._Streamer, "_ensure_chrome_alive", lambda self: None)
+    # Existing lifecycle cases isolate one failed connection. Startup retry
+    # cases below explicitly opt into the production attempt count.
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_ATTEMPTS", 1)
     s = OV._Streamer()
     s.last_view = time.monotonic()
     return s
@@ -182,6 +186,120 @@ def test_driver_stopped_when_connect_fails(monkeypatch, streamer):
     assert pw.stopped == 1, "driver must be stopped when connect_over_cdp fails"
     assert streamer.status == "error"
     assert not streamer._running
+
+
+def test_slow_chrome_launch_does_not_consume_the_attach_timeout(monkeypatch, streamer):
+    """Launching the host browser has its own bound, before the CDP timer."""
+    pw = FakePW(ctx=FakeCtx(n_pages=1))
+    _install(monkeypatch, [pw])
+    connect = pw.connect_over_cdp
+
+    async def yielding_connect(url):
+        await asyncio.sleep(0.001)
+        return await connect(url)
+
+    captured = []
+
+    async def capture():
+        captured.append(True)
+
+    async def leave_viewport_unchanged(page):
+        # Viewport repair deliberately waits for reflow; this test isolates
+        # the connection timer rather than that independent settling delay.
+        pass
+
+    monkeypatch.setattr(pw, "connect_over_cdp", yielding_connect)
+    monkeypatch.setattr(streamer, "_force_desktop_page", leave_viewport_unchanged)
+    monkeypatch.setattr(streamer, "_ensure_chrome_alive", lambda: time.sleep(0.12))
+    monkeypatch.setattr(streamer, "_active_target_id", lambda: None)
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_TIMEOUT", 0.05)
+    monkeypatch.setattr(streamer, "_grab_loop_inner", capture)
+
+    asyncio.run(streamer._grab_loop())
+
+    assert captured == [True]
+    assert pw.stopped == 1
+
+
+def test_transient_attach_failure_recovers_without_another_viewer_action(monkeypatch, streamer):
+    first = FakePW(connect_exc=ConnectionError("browser still restoring"))
+    second = FakePW(ctx=FakeCtx(n_pages=1))
+    created = _install(monkeypatch, [first, second])
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_ATTEMPTS", 3)
+    monkeypatch.setattr(streamer, "_active_target_id", lambda: None)
+    streamer.status = "connecting"
+    states = []
+    teardown = streamer._teardown
+
+    async def observe_teardown():
+        await teardown()
+        states.append(streamer.status)
+
+    async def capture():
+        states.append(streamer.status)
+
+    monkeypatch.setattr(streamer, "_teardown", observe_teardown)
+    monkeypatch.setattr(streamer, "_grab_loop_inner", capture)
+
+    asyncio.run(streamer._grab_loop())
+
+    assert created == [first, second]
+    assert first.stopped == second.stopped == 1
+    assert states == ["connecting", "live", "idle"]
+
+
+def test_startup_retries_stop_at_the_limit_and_clean_up_every_driver(monkeypatch, streamer):
+    pws = [FakePW(connect_exc=ConnectionError("unreachable")) for _ in range(3)]
+    created = _install(monkeypatch, pws)
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_ATTEMPTS", 3)
+    streamer.status = "connecting"
+    streamer._running = True
+
+    streamer._run()
+
+    assert created == pws
+    assert all(pw.stopped == 1 for pw in pws)
+    assert streamer.status == "error"
+    assert streamer.detail == "unreachable"
+    assert streamer._fail_streak == 1
+
+
+def test_confirmed_chrome_launch_failure_is_not_retried(monkeypatch, streamer):
+    calls = []
+
+    def fail_launch():
+        calls.append(True)
+        streamer._user_closed = True
+        streamer.status = "error"
+        raise ConnectionError("browser could not start")
+
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_ATTEMPTS", 3)
+    monkeypatch.setattr(streamer, "_ensure_chrome_alive", fail_launch)
+    streamer._running = True
+
+    streamer._run()
+
+    assert calls == [True]
+    assert streamer.status == "error"
+    assert streamer.detail == "browser could not start"
+
+
+def test_capture_failure_does_not_restart_the_startup_sequence(monkeypatch, streamer):
+    pw = FakePW(ctx=FakeCtx(n_pages=1))
+    created = _install(monkeypatch, [pw])
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_ATTEMPTS", 3)
+    monkeypatch.setattr(streamer, "_active_target_id", lambda: None)
+
+    async def fail_capture():
+        raise RuntimeError("capture failed")
+
+    monkeypatch.setattr(streamer, "_grab_loop_inner", fail_capture)
+
+    with pytest.raises(RuntimeError, match="capture failed"):
+        asyncio.run(streamer._grab_loop())
+
+    assert created == [pw]
+    assert pw.stopped == 1
 
 
 def test_first_viewer_demand_starts_closed_chrome(monkeypatch):
@@ -353,6 +471,8 @@ def test_full_run_stops_driver_and_resets_streak(monkeypatch, streamer):
     pw = FakePW(ctx=ctx)
     _install(monkeypatch, [pw])
     monkeypatch.setattr(OV, "IDLE_STOP_AFTER", 0.35)
+    monkeypatch.setattr(streamer, "_onepassword_popup_targets", lambda: set())
+    monkeypatch.setattr(streamer, "_active_target_id", lambda: None)
     streamer._fail_streak = 3
     streamer._backoff_until = 0.0
     streamer._running = True
@@ -915,16 +1035,24 @@ def test_agent_run_falling_edge_triggers_one_restore(monkeypatch, streamer):
         return {"ok": True, "cleared": 1, "failed": 0}
     monkeypatch.setattr(streamer, "_restore_operator_view", _fake_restore)
 
-    # busy for 2 polls, then idle; stop the loop a few iterations later
-    seq = iter([True, True, False, False, False])
+    # Browser-follow and capture pacing both inspect the runner. Drive the
+    # transition by captured frames, so extra harmless status reads cannot
+    # consume the falling edge before the capture loop observes it.
+    captured = 0
+    original_grab = streamer._grab
+
+    async def grab(page):
+        nonlocal captured
+        captured += 1
+        if captured >= 5:
+            streamer._running = False
+        return await original_grab(page)
+
+    monkeypatch.setattr(streamer, "_grab", grab)
 
     class _Runner:
         def is_running(self):
-            v = next(seq, None)
-            if v is None:
-                streamer._running = False
-                return False
-            return v
+            return captured <= 2
     monkeypatch.setattr(OV.operator_agent, "runner", _Runner())
 
     streamer._running = True
@@ -1240,44 +1368,35 @@ def test_target_id_cache_drops_closed_tabs(monkeypatch, streamer):
         "closed-tab entries must be pruned so the cache can't grow unbounded"
 
 
-def test_onepassword_popup_is_brought_to_a_visible_tab_once(monkeypatch, streamer):
-    """Chrome extension popups are CDP targets but not Playwright pages.
+@pytest.mark.parametrize("busy", [True, False])
+def test_onepassword_popup_preserves_focus_and_merchant_tab(
+        monkeypatch, streamer, busy):
+    """A credential/card selection must keep its original extension popup.
 
-    An unlock prompt therefore needs a normal tab for the streamed browser
-    surface. It must happen once per popup target, not steal focus every poll.
-
-    busy=True since 2026-09-16: mirroring only happens while a run is driving,
-    because bringing the mirror to the front closes the popup, which broke the
-    owner's own clicks. The once-per-target property is what this still pins.
+    Chrome closes that popup when another tab is fronted, including when the
+    streamer re-fronts the agent-owned merchant tab during a run. Neither a
+    mirrored tab nor focus enforcement may interrupt the selection.
     """
     ctx = _follow_setup(monkeypatch, streamer, n_pages=1, active_index=0,
-                        busy=True)
-    unlock = FakePage(ctx)
+                        busy=busy)
+    merchant = ctx.pages[0]
     opens = []
-
-    def popup_targets():
-        return {"onepassword-popup"}
-    monkeypatch.setattr(streamer, "_onepassword_popup_targets", popup_targets)
-
-    async def open_unlock(url):
-        opens.append(url)
-        if unlock not in ctx.pages:
-            ctx.pages.append(unlock)
-        return unlock
-    monkeypatch.setattr(streamer, "_cdp_open_tab", open_unlock)
-
-    async def target_id(self, page):
-        return "onepassword-unlock-tab" if page is unlock else "normal-tab"
-    monkeypatch.setattr(OV._Streamer, "_page_target_id", target_id)
+    monkeypatch.setattr(streamer, "_onepassword_popup_targets",
+                        lambda: {"onepassword-popup"})
+    monkeypatch.setattr(streamer, "_open_onepassword_tab",
+                        lambda: opens.append("mirror"))
+    monkeypatch.setattr(OV, "_live_run_targets",
+                        lambda running: ["TARGET0"] if running else [])
 
     asyncio.run(streamer._follow_active_tab())
-    assert streamer._page is unlock
-    assert unlock.fronted == 1
-    assert opens == ["chrome-extension://aeblfdkhhhdcdjpifhhbdiojplfjncoa/popup/index.html"]
-
+    assert streamer._page is merchant
+    assert merchant.fronted == 0
+    assert opens == []
     streamer._tab_check_ts = 0
+    streamer._front_ts = 0
     asyncio.run(streamer._follow_active_tab())
-    assert len(opens) == 1, "one unlock popup must not continuously steal focus"
+    assert merchant.fronted == 0
+    assert opens == []
 
 
 # ---- dead-driver self-heal (the 2026-08-10 operator-fam incident) ----------
@@ -1363,42 +1482,6 @@ def test_failed_cdp_session_rebuild_reapplies_viewport_metrics(streamer):
     assert rebuilt is ctx.sess and rebuilt is not stale
     assert any(method == "Emulation.setDeviceMetricsOverride"
                for method, params in rebuilt.sent)
-
-
-def test_a_1password_popup_is_only_mirrored_while_a_run_is_driving(monkeypatch):
-    """the owner 2026-09-16: clicking the 1Password autofill button did nothing,
-    "even if i hop onto the desktop and click it myself".
-
-    The mirror exists so that an unlock the AGENT triggered is visible to
-    whoever is watching the stream — Chrome exposes the extension popup as a
-    target Playwright will not list, so we copy it into an ordinary tab and
-    bring that tab to the front. Chrome closes an extension popup the instant
-    it loses focus. The check ran on every tick regardless of whether a run
-    was live, so a human clicking the button at the keyboard had the popup
-    yanked out from under them within 0.8s by a mirror nobody needed.
-
-    While a run is driving, mirror as before. While idle, leave the popup
-    alone: there is no agent to watch and the person clicking can see it.
-    """
-    import operator_view
-
-    calls = []
-
-    class _Streamer:
-        _onepassword_seen: set = set()
-        def _onepassword_popup_targets(self):
-            return {"target-1"}
-        async def _open_onepassword_tab(self):
-            calls.append("mirrored")
-            return object()
-
-    assert operator_view.should_mirror_onepassword(
-        _Streamer(), fresh={"target-1"}, busy=True) is True
-    assert operator_view.should_mirror_onepassword(
-        _Streamer(), fresh={"target-1"}, busy=False) is False
-    # nothing fresh is nothing to do, whatever the run is doing
-    assert operator_view.should_mirror_onepassword(
-        _Streamer(), fresh=set(), busy=True) is False
 
 
 # ------------------------------------------------ tab selection + follow ----
@@ -1576,3 +1659,119 @@ def test_grab_target_picks_the_page_with_the_registered_target(monkeypatch, stre
     assert shot["url"] == "https://example.com/agent"
     assert shot["jpeg"] == b"jpeg:https://example.com/agent"
     assert asyncio.run(streamer._grab_target(["T-none"])) is None
+
+
+# ------------------------------------- hung teardown (2026-10-06 freeze) --
+# Bot Chrome closed at 03:17 and took the Playwright connection with it. The
+# next attach attempt timed out and its retry path awaited browser.close() and
+# playwright.stop() with no limit; on the dead connection neither returned. The
+# streamer thread sat in teardown for over an hour, still "alive", so every page
+# visit skipped starting a new one and /frame kept serving the pre-crash frame.
+
+class _HungProc:
+    def __init__(self):
+        self.returncode = None
+        self.killed = 0
+
+    def kill(self):
+        self.killed += 1
+        self.returncode = -9
+
+
+class _HungPW(FakePW):
+    """A started driver whose connection died: stop() never returns."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.proc = _HungProc()
+        transport = types.SimpleNamespace(_proc=self.proc)
+        self._impl_obj = types.SimpleNamespace(
+            _connection=types.SimpleNamespace(_transport=transport))
+
+    async def stop(self):
+        self.stopped += 1
+        await asyncio.sleep(3600)
+
+
+class _HungBrowser(FakeBrowser):
+    async def close(self):
+        self.closed += 1
+        await asyncio.sleep(3600)
+
+
+def test_teardown_abandons_a_dead_connection_instead_of_waiting_forever(monkeypatch, streamer):
+    monkeypatch.setattr(OV, "TEARDOWN_STEP_TIMEOUT", 0.05)
+    pw = _HungPW()
+    streamer._pw, streamer._browser = pw, _HungBrowser(FakeCtx())
+    started = time.monotonic()
+    asyncio.run(streamer._teardown())
+    assert time.monotonic() - started < 2.0
+    assert streamer._pw is None and streamer._browser is None
+
+
+def test_a_driver_whose_stop_hangs_is_killed_not_leaked(monkeypatch, streamer):
+    monkeypatch.setattr(OV, "TEARDOWN_STEP_TIMEOUT", 0.05)
+    pw = _HungPW()
+    streamer._pw = pw
+    asyncio.run(streamer._teardown())
+    assert pw.proc.killed == 1
+
+
+def test_attach_retry_recovers_after_a_hung_teardown(monkeypatch, streamer):
+    monkeypatch.setattr(OV, "TEARDOWN_STEP_TIMEOUT", 0.05)
+    monkeypatch.setattr(OV, "BROWSER_ATTACH_ATTEMPTS", 3)
+    first = _HungPW(connect_exc=ConnectionError("Chrome closed"))
+    second = FakePW(ctx=FakeCtx(n_pages=1))
+    created = _install(monkeypatch, [first, second])
+    monkeypatch.setattr(streamer, "_active_target_id", lambda: None)
+    reached = []
+
+    async def capture():
+        reached.append(streamer.status)
+
+    monkeypatch.setattr(streamer, "_grab_loop_inner", capture)
+    started = time.monotonic()
+    asyncio.run(streamer._grab_loop())
+    assert created == [first, second]
+    assert reached, "the second attach must reach the capture loop"
+    assert time.monotonic() - started < 5.0
+
+
+def test_a_cached_scrollbar_compensation_still_records_the_apply(streamer):
+    """The cached path returned before its recorder line, so applied beacons
+    read as unapplied while the 2026-10-06 freeze was being traced."""
+    ctx = FakeCtx()
+    page = ctx.pages[0]
+    page.url = "https://example.com/"
+    streamer.view_w, streamer.view_h = 1600, 1186
+    streamer._sb_comp = {1600: 1615}
+    streamer._metric_sessions[page] = ctx.sess
+
+    async def metric_session(p):
+        return ctx.sess
+
+    streamer._metric_session = metric_session
+    asyncio.run(streamer._apply_view_metrics(page, force=True))
+    kinds = [e["kind"] for e in streamer._vp_events]
+    assert "apply" in kinds
+    assert any(m == "Emulation.setDeviceMetricsOverride" and p["width"] == 1615
+               for m, p in ctx.sess.sent)
+
+
+def test_attach_records_the_phases_between_connect_and_first_tab(monkeypatch, streamer):
+    """A cold open spent 4.2 s between the CDP connect and the first tab with
+    nothing saying where (2026-10-06)."""
+    ctx = FakeCtx(n_pages=1)
+    _install(monkeypatch, [FakePW(ctx=ctx)])
+    monkeypatch.setattr(streamer, "_active_target_id", lambda: None)
+
+    async def capture():
+        return None
+
+    monkeypatch.setattr(streamer, "_grab_loop_inner", capture)
+    asyncio.run(streamer._grab_loop())
+    phases = streamer._startup_ms
+    for phase in ("cdp_attached", "pages_listed", "desktop_forced", "target_ready"):
+        assert phase in phases, phases
+    assert phases["cdp_attached"] <= phases["pages_listed"] <= phases["desktop_forced"] \
+        <= phases["target_ready"]

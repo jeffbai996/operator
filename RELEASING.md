@@ -7,7 +7,7 @@ This checklist does not authorize publishing a package, public mirror, or demo.
    and new product versions. `operator_view.py::OP_VERSION` is the UI source of
    truth; the Codex transport also advertises the product version in `clientInfo`.
 2. Search tracked Operator files for the old version and all version declarations,
-   including README/current-release headings and ladder, templates (header,
+   including the CHANGELOG.md release heading and ladder row, templates (header,
    launchpad, About, demo), runtime metadata, manifests, build/deploy tools, and
    test expectations. Check Operator references in host scripts and adjacent
    deployment code too. Classify matches; do not replace them indiscriminately.

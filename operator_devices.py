@@ -45,6 +45,9 @@ def device_label(address, fallback=''):
                 node = json.loads(result.stdout).get('Node') or {}
                 name = (node.get('Hostinfo') or {}).get('Hostname') or node.get('Name', '').split('.')[0]
                 name = ' '.join(str(name).split())[:40]
+                # Mobile Hostinfo may report localhost, which identifies no device.
+                if name.lower().rstrip('.') in ('localhost', 'localhost.localdomain'):
+                    name = ''
             except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError):
                 pass
         if len(_cache) >= 128:

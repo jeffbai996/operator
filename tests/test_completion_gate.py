@@ -244,3 +244,35 @@ def test_is_running_stays_true_across_the_gate_gap(runner):
     assert runner.is_running() is False        # dead run reads dead (§2.2)
     runner._gate_pending = True
     assert runner.is_running() is True         # gate gap reads alive (§3.3)
+
+
+@pytest.mark.parametrize("task", [
+    "can you write me a handoff describing the issue with the emulator and how we could help you interface with the games better",
+    "Please draft a summary of what happened.",
+    "Write a handoff",
+])
+def test_written_handoff_does_not_require_browser(runner, task):
+    runner._configure_task_purpose(task)
+    assert not runner._browser_required
+    runner.messages.append({"role": "assistant", "text": "Saved the handoff."})
+    assert runner._completion_gate_check() == ""
+    assert not runner._browser_contract_failed
+    assert runner.messages[-1]["text"] == "Saved the handoff."
+
+
+@pytest.mark.parametrize("task", [
+    "Write a handoff and then book it",
+    "Write a report and check the site",
+    "Open the game and write a handoff",
+    "Write a report and send it to Bob",
+])
+def test_mixed_document_and_live_action_still_requires_browser(runner, task):
+    runner._configure_task_purpose(task)
+    assert runner._browser_required
+
+
+def test_emulator_call_counts_as_browser_evidence(runner):
+    runner._browser_required = True
+    runner._note_action("mcp__operator-control__emu_input", {"button": "a"})
+    assert runner._completion_gate_check() == ""
+    assert not runner._browser_contract_failed

@@ -61,7 +61,8 @@ def register(bp, *, demo, conversation, control_guard, runner):
         if not isinstance(data.get('approved'), bool):
             return jsonify(ok=False, error='approved must be true or false'), 400
         try:
-            result = workspace.decide_approval(cid, data.get('id'), data.get('fingerprint'), data['approved'])
+            result = workspace.decide_approval(cid, data.get('id'), data.get('fingerprint'),
+                                               data['approved'], data.get('change_request', ''))
             return jsonify(ok=True, approval=result)
         except (ValueError, KeyError) as exc:
             return error_response(exc)
@@ -84,12 +85,17 @@ def register(bp, *, demo, conversation, control_guard, runner):
         except ValueError as exc:
             return error_response(exc)
 
-    @bp.route('/operator/workspace/files/<fid>', methods=['GET', 'DELETE'])
+    @bp.route('/operator/workspace/files/<fid>', methods=['GET', 'DELETE', 'PATCH'])
     def operator_workspace_file(fid):
-        cid, _, error = guarded(request.method == 'DELETE')
+        cid, data, error = guarded(request.method in ('DELETE', 'PATCH'))
         if error:
             return error
         try:
+            if request.method == 'PATCH':
+                if runner().is_running(conversation_id=cid):
+                    return jsonify(ok=False, error='stop this run before changing its files'), 409
+                fields = {k: data[k] for k in ('name', 'included') if k in data}
+                return jsonify(ok=True, file=workspace.update_file(cid, fid, fields))
             if request.method == 'DELETE':
                 if runner().is_running(conversation_id=cid):
                     return jsonify(ok=False, error='stop this run before deleting its files'), 409
@@ -97,6 +103,44 @@ def register(bp, *, demo, conversation, control_guard, runner):
                 return jsonify(ok=True)
             path, asset = workspace.file_path(cid, fid)
             response = send_file(path, as_attachment=True, download_name=asset['name'])
+            response.headers['Cache-Control'] = 'private, no-store'
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
+        except (ValueError, KeyError) as exc:
+            return error_response(exc)
+
+    @bp.route('/operator/workspace/files/<fid>/preview')
+    def operator_workspace_file_preview(fid):
+        cid, _, error = guarded()
+        if error:
+            return error
+        try:
+            path, asset = workspace.file_path(cid, fid)
+            from pathlib import Path
+            extension = Path(asset['name']).suffix.lower()
+            if extension in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif'):
+                from PIL import Image, UnidentifiedImageError
+                try:
+                    with Image.open(path) as image:
+                        if image.format not in ('PNG', 'JPEG', 'GIF', 'WEBP', 'AVIF'):
+                            raise ValueError('unsupported image format')
+                        image.verify()
+                except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+                    return jsonify(ok=False, error='This image cannot be previewed. Download it to open it.'), 415
+                response = jsonify(ok=True, name=asset['name'], image=True)
+                response.headers['Cache-Control'] = 'private, no-store'
+                return response
+            if extension not in ('.md', '.txt', '.json', '.csv', '.tsv', '.log', '.yaml', '.yml'):
+                return jsonify(ok=False, error='Preview unavailable. Download this file to open it.'), 415
+            with path.open('rb') as handle:
+                raw = handle.read(256 * 1024 + 1)
+            if len(raw) > 256 * 1024:
+                return jsonify(ok=False, error='File is too large to preview. Download it to read it.'), 413
+            try:
+                text = raw.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                return jsonify(ok=False, error='Preview unavailable. Download this file to open it.'), 415
+            response = jsonify(ok=True, name=asset['name'], text=text, markdown=extension == '.md')
             response.headers['Cache-Control'] = 'private, no-store'
             response.headers['X-Content-Type-Options'] = 'nosniff'
             return response

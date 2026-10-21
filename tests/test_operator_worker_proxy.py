@@ -37,26 +37,31 @@ def _app():
     return app
 
 
-def test_web_recreation_preserves_worker_and_auth(tmp_path, monkeypatch):
-    path = str(tmp_path / 'operator.sock')
-    monkeypatch.setenv('OPERATOR_WORKER_SOCKET', path)
-    monkeypatch.delenv('OPERATOR_WORKER', raising=False)
-    context = multiprocessing.get_context('spawn')
-    ready = context.Event()
-    worker = context.Process(target=_worker, args=(path, ready))
-    worker.start()
-    try:
-        assert ready.wait(5)
-        for _ in range(5):
-            app = _app()  # independent frontend instances, same live worker
-            with app.test_client() as client:
-                assert client.get('/operator/agent').status_code == 403
-                result = client.get('/operator/agent?since=7', headers={'X-Test-Auth': 'yes'})
-                assert result.data == b'running:/operator/agent?since=7'
-                assert worker.is_alive()
-    finally:
-        worker.terminate()
-        worker.join(5)
+def test_web_recreation_preserves_worker_and_auth(monkeypatch):
+    import tempfile
+
+    # AF_UNIX has a short complete-path limit. pytest's descriptive temporary
+    # path can exceed it on both macOS and Linux, before the worker can signal.
+    with tempfile.TemporaryDirectory(prefix='op-worker-', dir='/tmp') as directory:
+        path = str(Path(directory) / 'worker.sock')
+        monkeypatch.setenv('OPERATOR_WORKER_SOCKET', path)
+        monkeypatch.delenv('OPERATOR_WORKER', raising=False)
+        context = multiprocessing.get_context('spawn')
+        ready = context.Event()
+        worker = context.Process(target=_worker, args=(path, ready))
+        worker.start()
+        try:
+            assert ready.wait(5)
+            for _ in range(5):
+                app = _app()  # independent frontend instances, same live worker
+                with app.test_client() as client:
+                    assert client.get('/operator/agent').status_code == 403
+                    result = client.get('/operator/agent?since=7', headers={'X-Test-Auth': 'yes'})
+                    assert result.data == b'running:/operator/agent?since=7'
+                    assert worker.is_alive()
+        finally:
+            worker.terminate()
+            worker.join(5)
 
 
 def test_unavailable_worker_does_not_create_a_second_owner(tmp_path, monkeypatch):

@@ -190,20 +190,21 @@ def test_cdp_probe_preserves_visible_and_edited_pages_in_real_chromium(tmp_path)
     Headless Chrome has no real foreground window. Explicitly simulate hidden
     state ONLY in this blank test target to exercise the remaining DOM checks.
     """
+    import json
     import subprocess
     import time
     import os
     pw = pytest.importorskip('playwright.sync_api')
     with pw.sync_playwright() as playwright:
-        executable = os.environ.get('OPERATOR_TEST_CHROMIUM') or playwright.chromium.executable_path
+        executable = os.environ.get('CC_TEST_CHROMIUM') or playwright.chromium.executable_path
     if not os.path.exists(executable):
-        pytest.skip(f'no Chromium at {executable}; set OPERATOR_TEST_CHROMIUM')
+        pytest.skip(f'no Chromium at {executable}; set CC_TEST_CHROMIUM')
     # Chrome will not start a profile on the squad's tmpfs test temp
     # (/dev/shm, nosuid+nodev): no files, no port, no error. Use the bulk
     # scratch disk when the box has one, else pytest's temp.
     import shutil
     import tempfile
-    scratch_root = os.environ.get('OPERATOR_TEST_CHROME_DIR') or (
+    scratch_root = os.environ.get('CC_TEST_CHROME_DIR') or (
         '/mnt/wsl-storage/scratch' if os.path.isdir('/mnt/wsl-storage/scratch') else str(tmp_path))
     profile = Path(tempfile.mkdtemp(prefix='op-scratch-chrome-', dir=scratch_root))
     # --disable-dev-shm-usage: a profile under /dev/shm (the squad's test
@@ -216,10 +217,20 @@ def test_cdp_probe_preserves_visible_and_edited_pages_in_real_chromium(tmp_path)
     try:
         port_file = profile / 'DevToolsActivePort'
         deadline = time.monotonic() + 30       # a loaded WSL box takes >10s
-        while not port_file.exists() and time.monotonic() < deadline:
+        port = None
+        while time.monotonic() < deadline:
             assert proc.poll() is None
+            try:
+                lines = port_file.read_text().splitlines()
+                candidate = int(lines[0]) if lines else 0
+            except (OSError, ValueError):
+                candidate = 0
+            if 1 <= candidate <= 65535:
+                port = candidate
+                break
             time.sleep(0.05)
-        endpoint = 'http://127.0.0.1:' + port_file.read_text().splitlines()[0]
+        assert port is not None, 'Chrome did not publish a valid DevTools port'
+        endpoint = 'http://127.0.0.1:' + str(port)
         # the port file lands before the HTTP endpoint answers; on a loaded
         # box the first /json call can outrun the client's own 5s budget
         import urllib.request
@@ -230,8 +241,21 @@ def test_cdp_probe_preserves_visible_and_edited_pages_in_real_chromium(tmp_path)
                     break
             except OSError:
                 time.sleep(0.2)
-        client = BT.TabCleanupClient(endpoint, timeout=15)   # scratch Chrome, loaded box
-        owned = BT._new_target(endpoint)
+        class ScratchClient(BT.TabCleanupClient):
+            def _rpc(self, url, method, params=None):
+                # The transport budget alone does not extend Runtime.evaluate's
+                # independent 500ms production deadline. A cold scratch renderer
+                # gets a bounded 5s execution budget, with its safety guard intact.
+                if params and params.get('throwOnSideEffect'):
+                    params = {**params, 'timeout': 5000}
+                return super()._rpc(url, method, params)
+        client = ScratchClient(endpoint, timeout=15)
+
+        # Target creation is fixture setup, not the probe under test. Use the
+        # same loaded-host budget as the client instead of the live helper's 5s.
+        req = urllib.request.Request(endpoint + '/json/new?about:blank', method='PUT')
+        with urllib.request.urlopen(req, timeout=15) as response:
+            owned = json.load(response)['id']
         row = client.pages()[owned]
         assert not client.idle_page(row)
         client._rpc(row['webSocketDebuggerUrl'], 'Runtime.evaluate', {'expression':

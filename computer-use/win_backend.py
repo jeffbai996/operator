@@ -506,6 +506,9 @@ def execute(action: dict, _target: str) -> None:
     if kind == "type":
         _broker_request({"action": "type", "text": action.get("text", "")})
         return
+    if kind == "paste_text":
+        _broker_request({"action": "paste_text", "text": action.get("text", "")})
+        return
     if kind == "key":
         combo = action.get("text", "")
         parts = [p.strip().lower() for p in combo.split("+")]

@@ -82,6 +82,24 @@ def test_record_and_read_back(store):
     assert full["trace"][0]["text"] == "done!"
 
 
+def test_public_turns_retain_usage_and_redact_legacy_trace(store):
+    rid = store.record(_fake_runner(_native_usage={'inputTokens': 20, 'outputTokens': 5},
+        messages=[{'role': 'thinking', 'text': 'Comparing options'},
+                  {'role': 'assistant', 'text': 'Ready'}]))
+    with store._conn() as c:
+        c.execute('UPDATE runs SET trace=? WHERE id=?', (json.dumps([
+            {'role': 'thinking', 'text': 'Comparing options'},
+            {'role': 'error', 'text': 'OPERATOR_RUN_CREDENTIAL="fixture-private"'},
+            {'role': 'assistant', 'text': 'Ready'}]), rid))
+    turn = store.conversation_turns('conv-a')['turns'][0]
+    assert turn['final'] == 'Ready'
+    assert turn['messages'][0]['text'] == 'Comparing options'
+    assert turn['usage']['outputTokens'] == 5
+    assert turn['ended_ts'] > turn['started_ts']
+    assert 'fixture-private' not in json.dumps(turn)
+    assert 'fixture-private' not in json.dumps(store.get(rid))
+
+
 def test_recent_newest_first_and_limited(store):
     for i in range(5):
         store.record(_fake_runner(task=f"task {i}"), reason="exit 0")
@@ -207,3 +225,38 @@ def test_runner_terminal_transition_records_once(store, monkeypatch):
     runner.state = "running"
     runner._set_state("interrupted", "user stop")
     assert calls == ["exit 0", "user stop"]
+
+
+def test_turn_usage_and_exact_steps_survive_capped_trace(store):
+    messages = [{'role': 'action', 'text': 'Reading'} for _ in range(450)]
+    store.record(_fake_runner(messages=messages, _cumulative_in_tokens=48927,
+        _cumulative_out_tokens=1000, _output_usage_seen=True,
+        _native_usage={'inputTokens': 48927, 'outputTokens': 999}))
+    turn = store.conversation_turns('conv-a')['turns'][0]
+    assert turn['cumulative_in_tokens'] == 48927
+    assert turn['cumulative_out_tokens'] == 1000
+    assert turn['step_count'] == 450
+    assert len(turn['messages']) == 100
+
+
+def test_unreported_output_and_legacy_step_count_stay_unknown(store):
+    ident = store.record(_fake_runner(_cumulative_in_tokens=None))
+    with store._conn() as conn:
+        conn.execute("UPDATE runs SET usage_json='{}' WHERE id=?", (ident,))
+    turn = store.conversation_turns('conv-a')['turns'][0]
+    assert turn['cumulative_in_tokens'] is None
+    assert turn['cumulative_out_tokens'] is None
+    assert turn['step_count'] is None
+
+
+def test_durable_steps_match_action_and_verification_retry_notices(store):
+    store.record(_fake_runner(messages=[
+        {'role': 'action', 'text': 'Reading'},
+        {'role': 'notice', 'reason': 'verification', 'text': 'Checking'},
+        {'role': 'notice', 'reason': 'retry', 'text': 'Retrying'},
+        {'role': 'notice', 'text': '🔎 Completion check passed'},
+        {'role': 'notice', 'text': '🔁 Auto-replan'},
+        {'role': 'notice', 'reason': 'loop', 'text': 'Waiting'},
+        {'role': 'thinking', 'text': 'Considering'},
+    ]))
+    assert store.conversation_turns('conv-a')['turns'][0]['step_count'] == 5

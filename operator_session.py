@@ -110,8 +110,10 @@ def _read_unlocked() -> dict:
             item["rev"] = max(0, int(item.get("rev") or 0))
             clean[key] = item
         active = raw.get("active") if raw.get("active") in clean else ""
+        if active and _background(clean[active]):
+            active = ''
         if not active and clean:
-            active = _newest(clean)
+            active = _human_newest(clean)
         return {"schema": 3, "rev": rev, "active": active, "sessions": clean}
     # v1 → v2: the one shared session becomes the first conversation, keeping
     # its rev so a client mid-flight doesn't see the counter go backwards.
@@ -204,10 +206,10 @@ def save(data: dict, conversation_id: str | None = None,
                 raise SessionConflict({
                     "rev": st["rev"], "conversation_rev": current_rev,
                     "data": prev.get("data")})
-        st["sessions"][sid] = {"rev": current_rev + 1,
+        st["sessions"][sid] = {**prev, "rev": current_rev + 1,
                                "title": prev.get("title") or "",
                                "updated_ts": time.time(), "data": data}
-        if not st["active"]:
+        if not st["active"] and not _background(prev):
             st["active"] = sid
         return _write_unlocked(st)
 
@@ -267,7 +269,7 @@ def create(title: str = "", *, activate: bool = True,
         st = _read_unlocked()
         # a bot's empty delegation chat is never the human's draft
         empty = [(sid, sess) for sid, sess in st["sessions"].items()
-                 if _is_empty(sess) and sess.get("origin") != DELEGATION_ORIGIN
+                 if _is_empty(sess) and sess.get("origin") not in {DELEGATION_ORIGIN, "app"}
                  ] if reuse_draft else []
         if empty:
             sid, _sess = max(
@@ -278,10 +280,57 @@ def create(title: str = "", *, activate: bool = True,
         sid = _new_id()
         st["sessions"][sid] = {"rev": 0, "title": _clip_title(title),
                                "updated_ts": time.time(), "data": None,
-                               "origin": _clip_meta(origin, META_LIMIT)}
+                               "origin": _clip_meta(origin, META_LIMIT),
+                               **({'browser_exposed': True} if activate and origin in {'mcp', 'app'} else {})}
         if activate:
             st["active"] = sid
         return {"id": sid, "rev": _write_unlocked(st), "reused": False}
+
+
+def is_personal_app(sid: str | None) -> bool:
+    """Server-owned session origin; user-editable chat data cannot opt into it."""
+    if not sid:
+        return False
+    with _LOCK:
+        return (_read_unlocked()["sessions"].get(sid) or {}).get("origin") == "app"
+
+
+def _background(sess: dict) -> bool:
+    return sess.get('origin') in {'mcp', 'app'} and not sess.get('browser_exposed')
+
+
+def _human_newest(items: dict) -> str:
+    human = {sid: row for sid, row in items.items() if not _background(row)}
+    return _newest(human) if human else ''
+
+
+def background_ids() -> set[str]:
+    """Server-owned job origins, excluding explicit human browser handoffs."""
+    with _LOCK:
+        return {sid for sid, row in _read_unlocked()['sessions'].items() if _background(row)}
+
+
+def is_background(sid: str | None) -> bool:
+    return bool(sid and sid in background_ids())
+
+
+def is_machine(sid: str) -> bool:
+    with _LOCK:
+        return (_read_unlocked()['sessions'].get(sid) or {}).get('origin') in {'mcp', 'app'}
+
+
+def set_browser_exposed(sid: str, exposed: bool) -> None:
+    with _LOCK:
+        st = _read_unlocked()
+        row = st['sessions'].get(sid)
+        if row is None:
+            raise KeyError(sid)
+        if row.get('origin') not in {'mcp', 'app'}:
+            return
+        row['browser_exposed'] = bool(exposed)
+        if not exposed and st['active'] == sid:
+            st['active'] = _human_newest(st['sessions'])
+        _write_unlocked(st)
 
 
 def exists(sid: str) -> bool:
@@ -341,6 +390,8 @@ def activate(sid: str) -> dict:
         if sid not in st["sessions"]:
             raise KeyError(sid)
         st["active"] = sid
+        if st['sessions'][sid].get('origin') in {'mcp', 'app'}:
+            st['sessions'][sid]['browser_exposed'] = True
         rev = _write_unlocked(st)
         return {"rev": rev,
                 "conversation_rev": int(st["sessions"][sid].get("rev") or 0),
@@ -372,7 +423,7 @@ def delete(sid: str, *, fresh: bool = False) -> dict:
             st["sessions"].pop(sid)
         if fresh or st["active"] == sid or st["active"] not in st["sessions"]:
             if st["sessions"] and not fresh:
-                st["active"] = _newest(st["sessions"])
+                st["active"] = _human_newest(st["sessions"])
             else:
                 new = _new_id()
                 st["sessions"][new] = {"rev": 0, "title": "",
@@ -420,7 +471,9 @@ def touch_presence(conversation_id: str, client_id: str, label: str = "",
     """Claim/renew a thread's editing lease or observe its current owner.
 
     The lease is deliberately process-local: it describes live browser tabs,
-    expires quickly after a device disappears, and must not survive a deploy.
+    tracks heartbeat freshness, and must not survive a deploy. An expired
+    owner remains reserved until an explicit takeover; backgrounding a phone
+    must never let an observing desktop claim control from routine polling.
     """
     sid = str(conversation_id or "").strip() or _LEGACY_ID
     client = str(client_id or "").strip()[:80]
@@ -434,8 +487,7 @@ def touch_presence(conversation_id: str, client_id: str, label: str = "",
     now = _clock()
     with _PRESENCE_LOCK:
         current = _PRESENCE.get(sid)
-        expired = current is None or now - current["seen"] >= PRESENCE_TTL
-        if expired or take_over or current.get("client_id") == client:
+        if current is None or take_over or current.get("client_id") == client:
             current = {"client_id": client, "label": clean_label, "seen": now}
             _PRESENCE[sid] = current
         return _presence_result(current, client, now)
@@ -446,8 +498,10 @@ def presence(conversation_id: str, client_id: str = "") -> dict:
     now = _clock()
     with _PRESENCE_LOCK:
         current = _PRESENCE.get(sid)
-        if current is None or now - current["seen"] >= PRESENCE_TTL:
-            _PRESENCE.pop(sid, None)
+        if current is None:
             return {"can_control": False, "controller_label": "",
                     "lease_expires_in": 0.0}
-        return _presence_result(current, str(client_id or "").strip(), now)
+        result = _presence_result(current, str(client_id or "").strip(), now)
+        if now - current["seen"] >= PRESENCE_TTL:
+            result["can_control"] = False
+        return result

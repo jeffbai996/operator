@@ -107,14 +107,17 @@ def test_usage_as_non_dict_keeps_token_state_sane(runner):
                            "message": {"usage": "oops", "content": []}}))
     assert runner._peak_in_tokens == 0
     assert runner._cumulative_in_tokens == 0
+    assert runner.snapshot()['cumulative_out_tokens'] is None
 
 
 def test_wellformed_usage_lands_input_tokens(runner):
     runner._consume(_line({"type": "assistant", "message": {
-        "usage": {"input_tokens": 1234},
+        "usage": {"input_tokens": 1234, "output_tokens": 56},
         "content": [{"type": "text", "text": "hi"}]}}))
     assert runner._peak_in_tokens == 1234
     assert runner._cumulative_in_tokens == 1234
+    assert runner._cumulative_out_tokens == 56
+    assert runner.snapshot()['cumulative_out_tokens'] == 56
     assert runner.messages[-1]["text"] == "hi"
 
 
@@ -246,8 +249,10 @@ def test_identical_codex_browser_code_batches_still_trigger_repeat_guard(codex):
 
 def test_codex_wellformed_token_count_lands(codex):
     codex._consume(_line({"type": "token_count",
-                          "info": {"last_token_usage": {"input_tokens": 777}}}))
+                          "info": {"last_token_usage": {"input_tokens": 777,
+                                                         "output_tokens": 29}}}))
     assert codex._peak_in_tokens == 777
+    assert codex.snapshot()['cumulative_out_tokens'] == 29
 
 
 # ── the funnel keeps the run's heartbeat even on garbage ─────────────────────
@@ -256,3 +261,19 @@ def test_any_line_still_touches_progress(runner):
     t0 = runner.last_progress_ts
     runner._consume("complete garbage\n")
     assert runner.last_progress_ts > t0   # stall watchdog must not starve
+
+
+def test_an_error_result_is_a_run_error_not_the_reply(runner):
+    runner.bot = "claude-a"
+    runner._consume(_line({"type": "result", "is_error": True,
+                           "result": "API Error: overloaded"}))
+    assert [m["role"] for m in runner.messages] == ["error"]
+    assert runner.messages[0]["text"] == "API Error: overloaded"
+
+
+def test_an_expired_claude_sign_in_names_the_bot_and_the_next_step(runner):
+    runner.bot = "claude-a"
+    runner._consume(_line({"type": "result", "is_error": True, "result":
+                           "Failed to authenticate: OAuth session expired and could not be refreshed"}))
+    assert runner.messages[-1]["role"] == "error"
+    assert runner.messages[-1]["text"].startswith("Claude sign-in for claude-a has expired.")

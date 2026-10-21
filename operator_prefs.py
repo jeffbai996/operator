@@ -125,3 +125,43 @@ def set_homepage(url: str) -> str:
         data["homepage"] = clean
         _write(data)
     return clean
+
+
+# ── tab order ────────────────────────────────────────────────────────────────
+# Chrome exposes no CDP call to move a tab, so the strip's drag order is the
+# cockpit's own: a list of target ids, applied when the tab list is served.
+# Tabs the list does not name keep Chrome's order after the named ones.
+MAX_TAB_ORDER = 64
+
+
+def tab_order() -> list[str]:
+    with _LOCK:
+        value = _read().get("tab_order")
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def set_tab_order(ids) -> list[str]:
+    """Persist the strip's order; returns the stored list."""
+    if not isinstance(ids, list):
+        raise ValueError("order must be a list of tab ids")
+    clean = []
+    for v in ids:
+        if not isinstance(v, str) or not v or len(v) > 128:
+            raise ValueError("tab ids are short strings")
+        if v not in clean:
+            clean.append(v)
+    clean = clean[:MAX_TAB_ORDER]
+    with _LOCK:
+        data = dict(_read())
+        data["tab_order"] = clean
+        _write(data)
+    return clean
+
+
+def order_tabs(tabs: list, order: list) -> list:
+    """Chrome's tab list in the strip's order: named ids first, in order, then
+    the rest as Chrome lists them."""
+    rank = {tid: n for n, tid in enumerate(order)}
+    named = sorted((t for t in tabs if t.get("id") in rank), key=lambda t: rank[t["id"]])
+    rest = [t for t in tabs if t.get("id") not in rank]
+    return named + rest

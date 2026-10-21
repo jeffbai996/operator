@@ -9,7 +9,11 @@ through the real launch path).
 Run from modules/operator:  PYTHONPATH=. pytest tests/test_operator_runtimes.py -q
 """
 import json
+import re
+import shutil
+import subprocess
 import os
+import time
 
 import pytest
 
@@ -34,6 +38,45 @@ def _spec(**over):
     return RT.RunSpec(**base)
 
 
+def test_background_browser_policy_survives_scrubbed_runtime_environments():
+    spec = _spec(background_browser=True, conversation_id='job')
+    codex = RT.build_cmd('codex', spec)
+    assert 'mcp_servers.playwright.env.OPERATOR_BACKGROUND_BROWSER="1"' in codex.cmd
+    claude = RT.build_cmd('claude', spec)
+    servers = json.load(open(claude.mcp_config_path))['mcpServers']
+    assert servers['playwright']['env']['OPERATOR_BACKGROUND_BROWSER'] == '1'
+    agy = RT.build_cmd('agy', spec)
+    assert agy.env['OPERATOR_BACKGROUND_BROWSER'] == '1'
+
+
+def test_shared_connectors_reach_all_runtime_adapters(fake_home):
+    profile = fake_home / '.gemini' / 'config'
+    profile.mkdir(parents=True)
+    (profile / 'mcp_config.json').write_text(json.dumps({'mcpServers': {
+        'lookup': {'serverUrl': 'https://example.com/mcp'},
+        'notes': {'command': 'notes-server', 'args': ['--stdio']},
+        'off': {'command': 'off-server', 'disabled': True}}}))
+    claude = RT.build_cmd('claude', _spec())
+    servers = json.load(open(claude.mcp_config_path))['mcpServers']
+    assert servers['lookup'] == {'type': 'http', 'url': 'https://example.com/mcp'}
+    assert servers['notes']['command'] == 'notes-server'
+    agy = RT.build_cmd('agy', _spec(config_dir=str(fake_home / '.gemini')))
+    servers = json.load(open(agy.mcp_config_path))['mcpServers']
+    assert servers['lookup'] == {'serverUrl': 'https://example.com/mcp'}
+    codex = RT.build_cmd('codex', _spec(config_dir=str(fake_home / '.codex-operator')))
+    assert 'mcp_servers."lookup".url="https://example.com/mcp"' in codex.cmd
+    assert 'mcp_servers."notes".command="notes-server"' in codex.cmd
+    assert not any('off-server' in arg for arg in codex.cmd)
+
+
+@pytest.mark.parametrize('tier', ['default', 'priority', 'ultrafast'])
+def test_codex_speed_override_survives_native_transport_conversion(tier):
+    from operator_codex_transport import command
+    plan = RT.build_cmd('codex', _spec(service_tier=tier))
+    assert f'service_tier="{tier}"' in plan.cmd
+    assert f'service_tier="{tier}"' in command(plan)
+
+
 # ── claude ───────────────────────────────────────────────────────────────────
 
 def test_claude_argv_and_mcp_config(fake_home):
@@ -50,12 +93,30 @@ def test_claude_argv_and_mcp_config(fake_home):
     assert plan.env["CLAUDE_CONFIG_DIR"] == os.path.expanduser("~/.claude")
 
 
+def test_claude_run_uses_the_config_dirs_long_lived_token(fake_home):
+    config_dir = fake_home / ".claude"
+    config_dir.mkdir()
+    (config_dir / "oauth-token").write_text("  token-value\n")
+    plan = RT.build_cmd("claude", _spec(config_dir=str(config_dir)))
+    assert plan.env["CLAUDE_CODE_OAUTH_TOKEN"] == "token-value"
+
+
+@pytest.mark.parametrize("contents", [None, "", " \n"])
+def test_claude_run_without_a_token_file_keeps_stored_oauth(fake_home, contents):
+    config_dir = fake_home / ".claude"
+    config_dir.mkdir()
+    if contents is not None:
+        (config_dir / "oauth-token").write_text(contents)
+    plan = RT.build_cmd("claude", _spec(config_dir=str(config_dir)))
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in plan.env
+
+
 def test_claude_resume_model_effort_flags():
     plan = RT.build_cmd("claude", _spec(resume_id="sess-1",
-                                        model="claude-sonnet-5", effort="medium"))
+                                        model="claude-sonnet-5-5", effort="medium"))
     c = plan.cmd
     assert c[c.index("--resume") + 1] == "sess-1"
-    assert c[c.index("--model") + 1] == "claude-sonnet-5"
+    assert c[c.index("--model") + 1] == "claude-sonnet-5-5"
     assert c[c.index("--effort") + 1] == "medium"
 
 
@@ -129,9 +190,9 @@ def test_codex_resume_threads_the_conversation():
 
 
 def test_codex_model_and_effort_flags():
-    plan = RT.build_cmd("codex", _spec(model="gpt-6-sol", effort="low"))
+    plan = RT.build_cmd("codex", _spec(model="gpt-6.1-sol", effort="low"))
     c = plan.cmd
-    assert c[c.index("-m") + 1] == "gpt-6-sol"
+    assert c[c.index("-m") + 1] == "gpt-6.1-sol"
     assert 'model_reasoning_effort="low"' in c
 
 
@@ -216,7 +277,7 @@ def test_agy_desktop_surface_wires_control_mcp(fake_home):
     assert set(servers) == {"playwright", "operator-control"}
 
 
-def test_agy_run_retires_legacy_operator_mcps_and_excludes_global_servers(fake_home):
+def test_agy_run_retires_legacy_controls_and_preserves_shared_connectors(fake_home):
     cfg = _agy_cfg(fake_home)
     os.makedirs(os.path.dirname(cfg), exist_ok=True)
     original = {"mcpServers": {
@@ -234,7 +295,8 @@ def test_agy_run_retires_legacy_operator_mcps_and_excludes_global_servers(fake_h
     plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini")))
 
     isolated = json.load(open(_agy_plan_cfg(plan)))["mcpServers"]
-    assert set(isolated) == {"playwright"}
+    assert set(isolated) == {"playwright", "user-server"}
+    assert isolated['user-server'] == original['mcpServers']['user-server']
     assert json.load(open(cfg)) == {
         "mcpServers": {"user-server": {"command": "keep-me"}},
         "unrelatedSetting": True,
@@ -371,3 +433,200 @@ def test_agy_cockpit_honors_instance_cdp_override(fake_home, monkeypatch):
     assert plan.env["OPERATOR_DEMO_CDP"] == _OP2_CDP
     assert plan.env["OPERATOR_REQUIRE_CDP"] == "1"
     assert "BROWSE_CHROME_PORT" not in plan.env
+
+
+def test_personal_app_codex_disables_implicit_workspace_and_memory_context():
+    plan = RT.build_cmd('codex', _spec(personal_app=True, bot='gpt', config_dir=os.path.expanduser('~/.codex-operator')))
+    assert 'project_doc_max_bytes=0' in plan.cmd
+    assert 'developer_instructions=""' in plan.cmd
+    assert 'features.memories=false' in plan.cmd
+
+
+@pytest.mark.parametrize('surface', ['browser', 'desktop-sandbox', 'desktop-real'])
+@pytest.mark.parametrize('demo', [False, True])
+def test_direct_claude_harness_marks_operator_context(surface, demo):
+    plan = RT.build_claude_cmd(_spec(surface=surface, demo=demo))
+    assert plan.env['OPERATOR_SURFACE'] == surface
+
+
+@pytest.mark.parametrize('resume_id', ['', 'sess-1'])
+@pytest.mark.parametrize('surface', ['browser', 'desktop-sandbox', 'desktop-real'])
+def test_claude_startup_wait_is_bounded_without_disabling_integrations(monkeypatch, resume_id, surface):
+    monkeypatch.delenv('CLAUDE_CODE_MCP_STARTUP_WAIT_MS', raising=False)
+    plan = RT.build_claude_cmd(_spec(resume_id=resume_id, surface=surface))
+    assert plan.env['CLAUDE_CODE_MCP_STARTUP_WAIT_MS'] == '2000'
+    assert '--strict-mcp-config' not in plan.cmd
+    assert '--settings' not in plan.cmd
+    assert ('--resume' in plan.cmd) == bool(resume_id)
+    monkeypatch.setenv('CLAUDE_CODE_MCP_STARTUP_WAIT_MS', '5000')
+    override = RT.build_claude_cmd(_spec(resume_id=resume_id, surface=surface))
+    assert override.env['CLAUDE_CODE_MCP_STARTUP_WAIT_MS'] == '5000'
+
+
+def _credentials(config_dir, **oauth):
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": oauth}))
+
+
+def test_claude_auth_is_usable_with_a_long_lived_token(fake_home):
+    config_dir = fake_home / ".claude"
+    _credentials(config_dir, accessToken="", refreshToken="", expiresAt=0)
+    (config_dir / "oauth-token").write_text("token-value\n")
+    assert RT.claude_auth_problem(str(config_dir), "claude-a") is None
+
+
+def test_claude_auth_is_usable_with_a_live_refresh_token(fake_home):
+    config_dir = fake_home / ".claude"
+    future_ms = (time.time() + 86400) * 1000
+    _credentials(config_dir, accessToken="a", refreshToken="r", expiresAt=0,
+                 refreshTokenExpiresAt=future_ms)
+    assert RT.claude_auth_problem(str(config_dir), "claude-a") is None
+
+
+@pytest.mark.parametrize("oauth", [
+    {"accessToken": "", "refreshToken": "", "expiresAt": 0},
+    {"accessToken": "a", "refreshToken": "r", "expiresAt": 0,
+     "refreshTokenExpiresAt": 1_000_000},
+])
+def test_claude_auth_refuses_a_wiped_or_lapsed_login(fake_home, oauth):
+    config_dir = fake_home / ".claude"
+    _credentials(config_dir, **oauth)
+    problem = RT.claude_auth_problem(str(config_dir), "claude-a")
+    assert problem.startswith("Claude sign-in for claude-a has expired.")
+
+
+def test_claude_auth_does_not_guess_without_a_credentials_file(fake_home):
+    # macOS keeps the login in the Keychain, not in the config folder.
+    assert RT.claude_auth_problem(str(fake_home / ".claude"), "claude-a") is None
+
+
+def test_claude_auth_trusts_an_inherited_token(fake_home, monkeypatch):
+    config_dir = fake_home / ".claude"
+    _credentials(config_dir, accessToken="", refreshToken="", expiresAt=0)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "inherited")
+    assert RT.claude_auth_problem(str(config_dir), "claude-a") is None
+
+
+# ── agy browser tool signatures (the owner 2026-10-19) ───────────────────────────
+# Argon spent a model turn per new tool reading its schema before calling it.
+# The agy browser prompt now carries the core Playwright signatures; a wrong
+# signature would be worse than none, so they are checked against the
+# installed @playwright/mcp tool list.
+
+_SIG_LINE = re.compile(r"^- (browser_\w+)\((.*)\)", re.M)
+
+
+def _agy_browser_prompt(**over):
+    plan = RT.build_cmd("agy", _spec(config_dir=os.path.expanduser("~/.gemini"), **over))
+    return plan.cmd[2]
+
+
+def test_agy_browser_prompt_carries_core_tool_signatures():
+    prompt = _agy_browser_prompt()
+    names = {name for name, _ in _SIG_LINE.findall(prompt)}
+    assert {"browser_navigate", "browser_snapshot", "browser_click",
+            "browser_type", "browser_take_screenshot"} <= names
+    assert "schema" in prompt.lower()          # tells the model no lookup is needed
+
+
+def test_agy_desktop_prompt_has_no_browser_tool_signatures():
+    prompt = _agy_browser_prompt(surface="desktop-sandbox")
+    assert not _SIG_LINE.search(prompt)
+
+
+def _installed_playwright_tools() -> dict:
+    """tools/list from the installed @playwright/mcp, or skip when absent."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [os.path.join(here, "..", "..", "browse"),
+                  os.path.expanduser("~/agents/browse"),
+                  "/data/dev/repos/agents-repo/modules/browse"]
+    browse = next((c for c in candidates
+                   if os.path.exists(os.path.join(c, "node_modules/@playwright/mcp/cli.js"))), None)
+    if not browse or not shutil.which("node"):
+        pytest.skip("@playwright/mcp is not installed on this host")
+    msgs = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "sig-check", "version": "0"}}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    ]
+    proc = subprocess.Popen(
+        ["node", "node_modules/@playwright/mcp/cli.js", "--caps", "vision,pdf",
+         "--headless", "--isolated"],
+        cwd=browse, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True)
+    try:
+        proc.stdin.write("".join(json.dumps(m) + "\n" for m in msgs))
+        proc.stdin.flush()
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            line = proc.stdout.readline()
+            if '"id":2' in line:
+                return {t["name"]: t["inputSchema"]
+                        for t in json.loads(line)["result"]["tools"]}
+        pytest.fail("@playwright/mcp did not answer tools/list")
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_agy_tool_signatures_match_installed_playwright_mcp():
+    tools = _installed_playwright_tools()
+    sigs = _SIG_LINE.findall(RT.AGY_BROWSER_TOOLS)
+    assert sigs
+    for name, params in sigs:
+        assert name in tools, f"{name} is not a Playwright MCP tool"
+        props = tools[name].get("properties", {})
+        required = set(tools[name].get("required", []))
+        listed = {}
+        for p in filter(None, (s.strip() for s in params.split(","))):
+            key = re.match(r"(\w+)(\??)", p)
+            listed[key.group(1)] = key.group(2) == "?"
+        for key, optional in listed.items():
+            assert key in props, f"{name}: no parameter {key!r}"
+            # a defaulted parameter may be shown either way
+            if "default" not in props[key]:
+                assert optional == (key not in required), \
+                    f"{name}: {key!r} optionality is wrong"
+        missing = {r for r in required if "default" not in props[r]} - set(listed)
+        assert not missing, f"{name}: required {missing} not listed"
+
+
+_JOB_SIG_LINE = re.compile(r"^- (job_\w+)\((.*)\)", re.M)
+
+
+def test_agy_job_run_prompt_carries_job_result_signature():
+    prompt = _agy_browser_prompt(run_id="run-123", run_credential="test-credential",
+                                 workspace_dir=os.path.expanduser("~/workspace"))
+    assert "job_result" in {n for n, _ in _JOB_SIG_LINE.findall(prompt)}
+
+
+def test_agy_prompt_without_job_tools_has_no_job_signature():
+    assert not _JOB_SIG_LINE.search(_agy_browser_prompt())
+    assert not _JOB_SIG_LINE.search(_agy_browser_prompt(
+        demo=True, run_id="run-123", run_credential="test-credential"))
+
+
+def test_agy_job_signatures_match_the_job_tool_schemas():
+    import operator_job_tools
+    tools = {t["name"]: t["inputSchema"] for t in operator_job_tools.TOOLS}
+    sigs = _JOB_SIG_LINE.findall(RT.AGY_JOB_TOOLS)
+    assert sigs
+    for name, params in sigs:
+        props = tools[name]["properties"]
+        required = set(tools[name].get("required", []))
+        listed = {}
+        for p in filter(None, (s.strip() for s in params.split(","))):
+            key = re.match(r"(\w+)(\??)", p)
+            listed[key.group(1)] = key.group(2) == "?"
+        assert set(listed) == set(props), f"{name}: parameters differ"
+        for key, optional in listed.items():
+            assert optional == (key not in required), f"{name}: {key!r} optionality"
+
+
+def test_agy_browser_prompt_says_to_read_the_linked_snapshot():
+    # Playwright 0.0.76 links each action's page snapshot as a file. Calling
+    # browser_snapshot again costs a second step for the same page.
+    low = _agy_browser_prompt().lower()
+    assert "snapshot file" in low and "browser_snapshot again" in low

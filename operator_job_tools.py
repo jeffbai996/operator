@@ -11,6 +11,8 @@ def _schema(name, description, properties):
 
 
 TOOLS = [
+    _schema('job_save_task', 'Save a reusable task in this personal app when a repeatable workflow would be useful later. Use concise plain-language instructions describing the user\'s goal, changing inputs, and desired result. Omit internal tool names, file protocols, and runtime policy; the app supplies those when the task runs. Ask for changing inputs at run time, and never include secrets, past approval grants, or one-time purchases. Do not save ordinary chat or every request. This saves a definition only; tell the user after success and never run or schedule it automatically.', {
+        'title': {'type': 'string'}, 'prompt': {'type': 'string'}}),
     _schema('job_file', 'Use chat files by ID. stage returns server_path for reading and a Windows browser_path. upload attaches a file to an observed file-input CSS selector in a target owned by this chat. publish stores a generated file from the run artifact directory; never use arbitrary host files.', {
         'action': {'enum': ['stage', 'upload', 'publish']}, 'file_id': {'type': 'string'},
         'target_id': {'type': 'string'}, 'selector': {'type': 'string'}, 'path': {'type': 'string'}}),
@@ -43,6 +45,24 @@ def call(name, arguments):
     if not isinstance(arguments, dict):
         raise ValueError('tool arguments must be an object')
     rid, secret = os.environ['OPERATOR_RUN_ID'], os.environ['OPERATOR_RUN_CREDENTIAL']
+    if name == 'job_save_task':
+        import hashlib
+        import operator_app_workspace as app
+        import operator_session
+        current = workspace.run_state(rid, secret)
+        cid = current['job']['conversation_id']
+        if not operator_session.is_personal_app(cid):
+            raise PermissionError('saved tasks require a personal-app conversation')
+        title = app._text(arguments.get('title', ''), 200)
+        prompt = app._text(arguments.get('prompt', ''), 3500)
+        oid = 'task-' + hashlib.sha256((cid + ':' + title.casefold()).encode()).hexdigest()[:32]
+        old = next((obj for obj in app.objects(cid) if obj['id'] == oid), None)
+        if old and old['title'] == title and old['prompt'] == prompt and not old.get('archived'):
+            result = old
+        else:
+            result = app.save_object(cid, {'id': oid, 'kind': 'recipe', 'revision': old['revision'] if old else 0,
+                                          'title': title, 'prompt': prompt, 'origin': 'agent'})
+        return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}
     if name == 'job_file':
         import asyncio
         from pathlib import Path
@@ -63,6 +83,7 @@ def call(name, arguments):
                 raise ValueError('publish a file inside the run artifact directory')
             with candidate.open('rb') as stream:
                 result = workspace.put_file(cid, candidate.name, stream, source='generated')
+            result['chat_link'] = 'operator-file:' + result['id']
         else:
             raise ValueError('unknown file action')
         return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}]}

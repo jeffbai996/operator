@@ -9,6 +9,32 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import os
+import signal
+import subprocess
+
+
+def close_process(process, timeout=2):
+    """Boundedly reap this owned process group without changing turn outcome."""
+    try:
+        if process.stdin:
+            process.stdin.close()
+    except (OSError, ValueError):
+        pass
+    for sig in (None, signal.SIGTERM, signal.SIGKILL):
+        if sig is not None:
+            try:
+                os.killpg(process.pid, sig)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                return False
+        try:
+            process.wait(timeout=timeout)
+            return True
+        except subprocess.TimeoutExpired:
+            continue
+    return False
 
 
 class TransportError(RuntimeError):
@@ -83,13 +109,15 @@ class AppServer:
             with self._lock:
                 self._pending.pop(ident, None)
 
-    def begin(self, *, prompt, cwd, model, effort, resume_id=""):
+    def begin(self, *, prompt, cwd, model, effort, resume_id="", service_tier=""):
         self.request("initialize", {"clientInfo": {
-            "name": "operator", "title": "Operator", "version": "1.2.1"}})
+            "name": "operator", "title": "Operator", "version": "1.2.7"}})
         self._send({"method": "initialized", "params": {}})
         params = {"cwd": cwd, "approvalPolicy": "never", "sandbox": "danger-full-access"}
         if model:
             params["model"] = model
+        if service_tier:
+            params['serviceTier'] = service_tier
         if resume_id:
             params["threadId"] = resume_id
         reply = self.request("thread/resume" if resume_id else "thread/start", params, timeout=30)
@@ -97,6 +125,8 @@ class AppServer:
         params = {"threadId": self.thread_id, "input": [{"type": "text", "text": prompt}]}
         if effort:
             params["effort"] = effort
+        if service_tier:
+            params['serviceTier'] = service_tier
         self.dispatched = True
         reply = self.request("turn/start", params, timeout=30)
         self.turn_id = reply["turn"]["id"]
@@ -111,6 +141,7 @@ class AppServer:
         return reply
 
     def notifications(self):
+        started = False
         while True:
             event = self.events.get()
             if event is None:
@@ -118,8 +149,12 @@ class AppServer:
             params = event.get("params", {})
             if params.get("threadId", self.thread_id) != self.thread_id:
                 continue
-            if params.get("turnId", self.turn_id) != self.turn_id:
+            if params.get("turnId", params.get("turn", {}).get("id", self.turn_id)) != self.turn_id:
                 continue
+            if event.get('method') == 'turn/started':
+                started = True
+            if event.get('method') == 'thread/tokenUsage/updated' and not started:
+                continue  # resume notifications describe the prior turn
             yield event
             if event.get("method") == "turn/completed" and params.get("turn", {}).get("id") == self.turn_id:
                 return
@@ -149,6 +184,10 @@ def cli_event(event):
         types = {"agentMessage": "agent_message", "commandExecution": "command_execution",
                  "mcpToolCall": "mcp_tool_call", "reasoning": "reasoning", "fileChange": "file_change"}
         item["type"] = types.get(item.get("type"), item.get("type"))
+        if item["type"] == "reasoning":
+            # Public summaries only. The raw reasoning content is not a UI feed.
+            summary = item.get("summary", [])
+            item["text"] = "\n".join(s for s in summary if isinstance(s, str)) if isinstance(summary, list) else ""
         if "aggregatedOutput" in item:
             item["aggregated_output"] = item["aggregatedOutput"]
         if "exitCode" in item:

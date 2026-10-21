@@ -72,8 +72,57 @@ def _grab_with(tier, vw=1400, vh=900, metrics="auto", view=None, body=None):
     st._cdp = sess
     st._cdp_for = pg
     out = asyncio.run(st._grab(pg))
-    shot = next(p for m, p in sess.calls if m == "Page.captureScreenshot")
+    shot = next((p for m, p in sess.calls if m == "Page.captureScreenshot"), None)
     return out, shot
+
+
+def test_geometry_transport_failure_recovers_on_next_capture(monkeypatch):
+    """A detached metrics session must not survive until the feed restarts."""
+    from types import SimpleNamespace
+
+    class DetachedSession(_FakeSess):
+        detached = 0
+
+        async def send(self, method, params=None):
+            raise RuntimeError("Session closed")
+
+        async def detach(self):
+            self.detached += 1
+
+    stale = DetachedSession()
+    healthy = _FakeSess(_mk_metrics(1400, 900))
+    created = []
+    reapplied = []
+
+    async def new_session(page):
+        created.append(page)
+        return healthy
+
+    async def apply_metrics(page, session, force=False):
+        reapplied.append((page, session, force))
+
+    page = SimpleNamespace(context=SimpleNamespace(new_cdp_session=new_session))
+    # Session caches use Playwright's page identity as a dictionary key.
+    class Page:
+        context = page.context
+        url = "https://example.com/"
+
+    page = Page()
+    st = OV._Streamer()
+    st.vw, st.vh = 1400, 900
+    st._cdp, st._cdp_for = stale, page
+    st._metric_sessions[page] = stale
+    monkeypatch.setattr(st, "_apply_view_metrics", apply_metrics)
+
+    async def run():
+        assert await st._grab(page) is None
+        assert await st._grab(page) == b"\xff\xd8fakejpeg"
+
+    asyncio.run(run())
+    assert created == [page]
+    assert stale.detached == 1
+    assert st._cdp is healthy
+    assert reapplied == [(page, healthy, True)]
 
 
 def test_grab_hi_native_page_clips_device_viewport():
@@ -183,10 +232,10 @@ def test_grab_eco_is_smaller_and_more_compressed_than_lo():
     assert OV.TIER_ECO_MAX_W < OV.TIER_LO_MAX_W
 
 
-def test_grab_skips_clip_when_metrics_unavailable():
-    _, shot = _grab_with("lo", vw=0, vh=0, metrics=None)
-    assert shot["quality"] == OV.TIER_LO_QUALITY
-    assert "clip" not in shot     # no metrics — unclipped full frame beats a blind crop
+def test_grab_keeps_last_frame_when_metrics_unavailable():
+    out, shot = _grab_with("lo", vw=0, vh=0, metrics=None)
+    assert out is None
+    assert shot is None
 
 
 def test_grab_lo_narrow_device_viewport_not_upscaled():
@@ -630,3 +679,67 @@ def test_a_departed_hi_viewer_releases_the_stream_to_lo():
 def test_no_live_viewer_defaults_to_hi():
     assert OV.effective_tier({}, 500.0) == "hi"
     assert OV.effective_tier({"gone": ("lo", 1.0)}, 500.0) == "hi"
+
+
+@pytest.mark.parametrize("tier", ["hi", "lo", "eco"])
+def test_capture_retry_preserves_scaled_frame_and_viewport(tier, tmp_path):
+    """Alternate successful and failed captures in isolated scaled Chromium."""
+    import io
+    from PIL import Image
+    from playwright.async_api import async_playwright
+
+    async def run():
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True,
+                args=["--disable-gpu", "--disable-software-rasterizer"])
+            try:
+                page = await browser.new_page(
+                    viewport={"width": 1280, "height": 900}, device_scale_factor=1.25)
+                # Static geometry isolates framing from font rasterization
+                # and native scrollbar fade animations in the bandwidth page.
+                await page.set_content("""<style>
+                  html, body { margin:0; width:100%; height:100%; overflow:hidden }
+                  body { background:repeating-linear-gradient(45deg,
+                    #c33 0 40px,#38c 40px 80px,#3c8 80px 120px) }
+                  div { position:fixed; inset:20px; border:12px solid #ff0 }
+                  i { position:fixed; width:80px; height:80px; right:0;
+                    bottom:0; background:#fff }
+                  </style><div></div><i></i>""")
+                await page.evaluate("new Promise(resolve => requestAnimationFrame("
+                                    "() => requestAnimationFrame(resolve)))")
+                st = OV._Streamer()
+                st.view_w, st.view_h = 1280, 900
+                st.tier = tier
+                session = await st._cdp_session(page)
+
+                class IntermittentCapture:
+                    fail = False
+                    async def send(self, method, params=None):
+                        if method == "Page.captureScreenshot" and self.fail:
+                            raise RuntimeError("injected capture transport failure")
+                        return await session.send(method, params)
+
+                transport = IntermittentCapture()
+                st._cdp = transport
+                st._cdp_for = page
+                before = await page.evaluate("[innerWidth, innerHeight]")
+                frames = []
+                for fail in [False, True] * 6:
+                    transport.fail = fail
+                    frames.append(await st._grab(page))
+                    assert st._cdp is transport  # a transient never resets emulation
+                    assert await page.evaluate("[innerWidth, innerHeight]") == before
+                assert all(frames)
+                decoded = [Image.open(io.BytesIO(frame)).convert("RGB") for frame in frames]
+                assert len({frame.size for frame in decoded}) == 1
+                from PIL import ImageChops
+                for index, frame in enumerate(decoded[1:], 1):
+                    difference = ImageChops.difference(decoded[0], frame)
+                    if difference.getbbox():
+                        decoded[0].save(tmp_path / "normal.png")
+                        frame.save(tmp_path / "different.png")
+                    assert difference.getbbox() is None, (index, difference.getbbox(), str(tmp_path))
+            finally:
+                await browser.close()
+
+    asyncio.run(run())

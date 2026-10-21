@@ -112,3 +112,30 @@ def test_download_service_survives_viewer_idle_without_capture(monkeypatch):
     assert connect.call_args.kwargs['no_defaults'] is True
     manager.configure.assert_awaited_once()
     manager.close.assert_awaited_once()
+
+
+def _transfer_status(guid):
+    with ws.database() as db:
+        return db.execute('SELECT status, error FROM transfers WHERE id=?', (guid,)).fetchone()
+
+
+def _progress(state, guid):
+    local, native = bridge.staging()
+    manager = bridge.DownloadBridge(None, local, native)
+    async def send(method, params):
+        pass
+    manager.session = SimpleNamespace(send=send)
+    with ws.database() as db:
+        db.execute('INSERT INTO transfers VALUES (?,?,?,?,?,?)', (guid, 'a', 'x.txt', 'downloading', 0, ''))
+    asyncio.run(manager.handle('progress', {'guid': guid, 'state': state, 'receivedBytes': 1, 'totalBytes': 1}))
+    return _transfer_status(guid)
+
+
+def test_download_in_a_state_chrome_never_reported_does_not_stay_downloading():
+    row = _progress('suspended', 'a1' * 16)
+    assert row['status'] == 'failed'
+    assert 'suspended' in row['error']
+
+
+def test_download_still_in_progress_stays_downloading():
+    assert _progress('inProgress', 'b2' * 16)['status'] == 'downloading'

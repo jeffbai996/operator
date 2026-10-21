@@ -46,7 +46,13 @@ def _load_backend():
 #   - older (sonnet 4.5, haiku 4.5, 3.5/3.7) → computer_20250124
 #       + beta header computer-use-2025-01-24
 # Passing the wrong version 400s with "does not support tool types: computer_…".
-MODEL = os.environ.get("COMPUTER_USE_MODEL", "claude-opus-5")
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "host-app"))
+    from model_catalog import default_slug as _default_slug
+    _DEFAULT_CU_MODEL = _default_slug("claude-bot")
+except Exception:
+    _DEFAULT_CU_MODEL = "claude-opus-5-5"
+MODEL = os.environ.get("COMPUTER_USE_MODEL", _DEFAULT_CU_MODEL)
 
 _TOOL_NEW = ("computer_20251124", "computer-use-2025-11-24")
 _TOOL_OLD = ("computer_20250124", "computer-use-2025-01-24")

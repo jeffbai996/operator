@@ -264,10 +264,10 @@ def test_settings_writer_idempotent_and_merge_safe(store, tmp_path, monkeypatch)
     OA._ensure_steer_hook_settings(str(cwd))     # second call: no churn
     assert sp.read_text() == before
     # merge-safe: user keys survive
-    cfg["model"] = "claude-sonnet-5"
+    cfg["model"] = "claude-sonnet-5-5"
     sp.write_text(json.dumps(cfg))
     OA._ensure_steer_hook_settings(str(cwd))
-    assert json.loads(sp.read_text())["model"] == "claude-sonnet-5"
+    assert json.loads(sp.read_text())["model"] == "claude-sonnet-5-5"
 
 
 def test_settings_writer_repairs_restart_guard_without_erasing_other_hooks(
@@ -420,3 +420,57 @@ def test_demo_default_paths_are_scoped(monkeypatch):
     assert importlib.reload(OSTEER).path().endswith(".demo")
     monkeypatch.delenv("OPERATOR_DEMO", raising=False)
     assert not importlib.reload(OSTEER).path().endswith(".demo")
+
+
+# ── manual-control notes ────────────────────────────────────────────────────
+
+def test_manual_gestures_coalesce_into_one_note(store):
+    """Tapping around on the stage (MAN) never reached the model: it saw the
+    DOM change and nothing else (the owner 2026-10-19). Gestures coalesce into one
+    note per conversation that take_manual() hands the next prompt."""
+    assert store.note_manual({"kind": "click_at", "x": .2, "y": .4}, "conv-a", url="https://shop.test/cart")
+    assert store.note_manual({"kind": "click_at"}, "conv-a")
+    assert store.note_manual({"kind": "scroll", "dy": 300}, "conv-a")
+    assert store.note_manual({"kind": "type", "value": "oxo cold brew"}, "conv-a")
+    assert store.note_manual({"kind": "key", "value": "Enter"}, "conv-a", url="https://shop.test/search")
+    assert store.note_manual({"kind": "stage_size"}, "conv-a") is False   # a beacon, not the user driving
+    text = store.take_manual("conv-a")
+    assert "drove the browser themselves" in text
+    assert "2 clicks" in text and "1 scroll" in text
+    assert '"oxo cold brew"' in text and '"key Enter"' in text
+    assert "https://shop.test/search" in text          # the latest url wins
+    assert "re-read it before acting" in text
+    assert store.take_manual("conv-a") == ""             # consumed
+    assert store.pending_manual("conv-a") is None
+
+
+def test_manual_notes_are_per_conversation_and_clearable(store):
+    store.note_manual({"kind": "click_at"}, "conv-a")
+    store.note_manual({"kind": "drag"}, "conv-b")
+    assert store.pending_manual("conv-a")["counts"] == {"click": 1}
+    store.clear_manual("conv-a")
+    assert store.pending_manual("conv-a") is None
+    assert "1 drag" in store.take_manual("conv-b")
+
+
+def test_manual_note_keeps_the_last_typed_snippets_short(store):
+    for i in range(8):
+        store.note_manual({"kind": "paste", "value": f"snippet {i} " + "x" * 300}, "conv-a")
+    note = store.pending_manual("conv-a")
+    assert len(note["typed"]) == store._TYPED_KEEP
+    assert all(len(t) <= store._TYPED_CHARS for t in note["typed"])
+    assert note["typed"][-1].startswith("snippet 7")
+
+
+def test_the_hook_waits_for_a_tap_burst_to_go_quiet(store, monkeypatch):
+    """Mid-run, a burst of taps reached the model as one note per tool call
+    (12 in one run, 2026-10-19). The hook now leaves a note alone until the
+    gestures have been quiet for MANUAL_QUIET_S; a dispatch takes it at once."""
+    store.note_manual({"kind": "click_at"}, "conv-a")
+    assert store.take_manual("conv-a", quiet=store.MANUAL_QUIET_S) == ""   # still tapping
+    assert store.pending_manual("conv-a") is not None                      # kept, not dropped
+    real = store.time.time
+    monkeypatch.setattr(store.time, "time", lambda: real() + store.MANUAL_QUIET_S + 1)
+    assert "1 click" in store.take_manual("conv-a", quiet=store.MANUAL_QUIET_S)
+    store.note_manual({"kind": "scroll"}, "conv-b")
+    assert "1 scroll" in store.take_manual("conv-b")                        # no quiet: immediate

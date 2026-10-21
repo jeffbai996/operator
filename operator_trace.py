@@ -167,7 +167,8 @@ _CONNECTOR_NAMES = {
     "booking_com": "Booking.com", "canva": "Canva", "dropbox": "Dropbox",
     "figma": "Figma", "github": "GitHub", "github_com": "GitHub",
     "google_drive": "Google Drive", "linear": "Linear", "notion": "Notion",
-    "slack": "Slack", "todoist": "Todoist", "trello": "Trello",
+    "slack": "Slack", "squad_store": "host-app", "host-app": "host-app",
+    "todoist": "Todoist", "trello": "Trello",
     "vecgrep_mcp": "vecgrep MCP", "vecgrep-mcp": "vecgrep MCP",
 }
 
@@ -278,7 +279,7 @@ def action_label(tool: str, args: dict) -> tuple[str, str]:
     if low in ('job_state', 'job_update', 'job_result'):
         return '', ''  # represented in the durable job/result surface
     if low == 'job_approval':
-        return 'Preparing for approval', ''
+        return 'Requesting approval', ''
     if low == 'job_file':
         return {'upload': 'Attaching file', 'publish': 'Saving file'}.get((args or {}).get('action'), 'Reading file'), ''
     if not bare.startswith("browser_"):
@@ -516,6 +517,15 @@ _SCAFFOLD_HEAD_RE = _re.compile(
     r'^\s*[*_]{0,2}(?:Plan|Status|Progress|Current Plan|Updated Plan|Revised Plan)'
     r'[*_]{0,2}\s*[::]')
 _SCAFFOLD_ITEM_RE = _re.compile(r'^\s*(?:\d+[.)]|[-*•])\s+')
+# Gemini 4 Argon (agy) joins a one-line thought summary to its final answer
+# with no separator ("...respond concisely to the owner.Opened the closest...",
+# the owner 2026-10-19). A short first line ending in a sentence stop directly
+# followed by the answer's first character, and talking about the reply
+# itself, is that summary.
+_GLUED_PREAMBLE_RE = _re.compile(r'^([^\n]{8,240}?[.!:])(?=[A-Z*`#\[])')
+_PREAMBLE_META_RE = _re.compile(
+    r'(?i)\b(?:respond|reply|answer|summari[sz]e|report back|the user|the owner|'
+    r'final (?:answer|response)|formatting instructions)\b')
 
 
 def strip_plan_scaffold(text: str, *, reject_running_plan: bool = False) -> str:
@@ -534,6 +544,9 @@ def strip_plan_scaffold(text: str, *, reject_running_plan: bool = False) -> str:
     it in the trace. An ordinary requested plan without progress markers stays."""
     if not isinstance(text, str) or not text.strip():
         return text or ""
+    glued = _GLUED_PREAMBLE_RE.match(text)
+    if glued and _PREAMBLE_META_RE.search(glued.group(1)):
+        text = text[glued.end(1):]
     lines = text.splitlines()
     i, in_block, consumed = 0, False, False
     while i < len(lines):
