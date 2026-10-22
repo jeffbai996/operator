@@ -16,10 +16,12 @@ Example session comparing walks from the [National Park Service trail guide](htt
 <details>
 <summary>Launchpad and mobile views</summary>
 
-<p>
-  <img src="docs/img/operator-launchpad-v1.2.7.png" width="720" alt="Operator launchpad with task categories and example prompts">
-  <img src="docs/img/operator-mobile-v1.2.7.png" width="250" alt="The example session in Operator's mobile conversation panel">
-</p>
+<table>
+  <tr>
+    <td width="74%" valign="top"><img src="docs/img/operator-launchpad-v1.2.7.png" alt="Operator launchpad with task categories and example prompts"></td>
+    <td width="26%" valign="top"><img src="docs/img/operator-mobile-v1.2.7.png" alt="The example session in Operator's mobile conversation panel"></td>
+  </tr>
+</table>
 
 </details>
 
