@@ -9,12 +9,17 @@ Browser / computer-use agent cockpit: give an agent (Claude, GPT or Gemini
 CLI, on subscription sign-in) a task, watch the Chrome it drives, and take over
 at any time. Independent project; not affiliated with OpenAI.
 
-<img src="docs/img/operator-cockpit-v1.2.7.png" alt="Operator desktop cockpit with a trail comparison beside the source page">
+<img src="docs/img/operator-approval-v1.2.7.png" alt="Operator pauses a demo purchase at checkout and shows the merchant, exact total, and Approve, Decline, and Request changes controls">
 
-Example session comparing walks from the [National Park Service trail guide](https://www.nps.gov/yose/planyourvisit/valleyhikes.htm).
+Purchase approval in a [demo checkout](https://www.saucedemo.com/): review the
+destination and exact total, then approve, decline, or request changes.
 
 <details>
-<summary>Launchpad and mobile views</summary>
+<summary>Research, launchpad, and mobile views</summary>
+
+<img src="docs/img/operator-cockpit-v1.2.7.png" alt="Operator desktop cockpit with a trail comparison beside the source page">
+
+Example session using the [National Park Service trail guide](https://www.nps.gov/yose/planyourvisit/valleyhikes.htm).
 
 <table>
   <tr>
