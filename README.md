@@ -9,7 +9,19 @@ Browser / computer-use agent cockpit: give an agent (Claude, GPT or Gemini
 CLI, on subscription sign-in) a task, watch the Chrome it drives, and take over
 at any time. Independent project; not affiliated with OpenAI.
 
-<img src="docs/img/operator-launchpad-v1.2.1.png" alt="Operator launchpad">
+<img src="docs/img/operator-cockpit-v1.2.7.png" alt="Operator desktop cockpit with a trail comparison beside the source page">
+
+Example session comparing walks from the [National Park Service trail guide](https://www.nps.gov/yose/planyourvisit/valleyhikes.htm).
+
+<details>
+<summary>Launchpad and mobile views</summary>
+
+<p>
+  <img src="docs/img/operator-launchpad-v1.2.7.png" width="720" alt="Operator launchpad with task categories and example prompts">
+  <img src="docs/img/operator-mobile-v1.2.7.png" width="250" alt="The example session in Operator's mobile conversation panel">
+</p>
+
+</details>
 
 ## Install
 

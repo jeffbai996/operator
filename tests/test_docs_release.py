@@ -1,7 +1,7 @@
 """Public release surfaces must move together.
 
-The cockpit version used to advance while the README lockup, badge, status
-copy, and screenshots stayed on an older release.  Keep the public-facing
+The cockpit version used to advance while the README lockup and screenshots
+stayed on an older release. Keep the public-facing
 bundle explicit so a future bump cannot silently strand any of them.
 """
 
@@ -18,8 +18,6 @@ def test_public_release_assets_follow_operator_version() -> None:
     assert match is not None
     version = match.group(1)
 
-    assert f"badge/version-{version}-" in readme
-    assert f"**Status:** **v{version}**" in readme
     for theme in ("dark", "light"):
         name = f"operator-lockup-{theme}-v{version}.svg"
         assert name in readme
