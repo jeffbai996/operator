@@ -9,11 +9,6 @@
 
 A cockpit for browser and computer-use agents: watch the live screen, steer mid-run, and approve before anything is bought.
 
-[![Python](https://img.shields.io/badge/Python-3.12-2f363d?style=flat-square&logo=python&logoColor=white)](control/)
-[![JavaScript](https://img.shields.io/badge/JavaScript-cockpit-2f363d?style=flat-square&logo=javascript&logoColor=white)](static/js/)
-[![Chrome DevTools Protocol](https://img.shields.io/badge/CDP-Chrome-2f363d?style=flat-square&logo=googlechrome&logoColor=white)](https://chromedevtools.github.io/devtools-protocol/)
-[![MCP](https://img.shields.io/badge/MCP-server-2f363d?style=flat-square)](https://modelcontextprotocol.io/)
-
 <img src="docs/img/operator-approval-v1.2.7.png" alt="Operator pauses a demo purchase at checkout and shows the merchant, exact total, and Approve, Decline, and Request changes controls">
 
 Operator puts a live browser or desktop next to a headless coding agent (Claude Code, Codex or Antigravity), so a task can be handed off, watched as it happens, steered, or taken over with the mouse. Most of the work went into the ways naive screenshot-and-click loops fail: coordinates that drift on high-DPI screens, clicks that silently miss, error toasts that vanish between screenshots, and checkouts submitted without anyone looking.
